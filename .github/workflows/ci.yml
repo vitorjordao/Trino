@@ -9,40 +9,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2, 3]
+        run: [1, 2]
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p trino-platform-pc --test precompile --no-run
-      - name: each test alone, three times
+      - name: together, six times
         shell: bash
         env:
           RUST_BACKTRACE: "1"
-          WGPU_DEBUG: "0"
         run: |
           set +e
-          for i in 1 2 3; do
-            for t in a_background_warm_up_keeps_frames_coming_and_ends a_frame_waits_for_the_pass_a_worker_is_compiling a_full_warm_up_leaves_nothing_to_compile_in_frames only_the_current_settings_are_warmed_by_current the_pipeline_cache_round_trips_through_its_file; do
-              cargo test -q -p trino-platform-pc --test precompile -- --exact $t --nocapture --test-threads=1 > out.txt 2>&1
-              code=$?
-              echo "RESULT $i $t exit=$code"
-              if [ $code -ne 0 ]; then tail -40 out.txt; fi
-            done
-          done
-          echo "== all together"
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5 6; do
             cargo test -q -p trino-platform-pc --test precompile -- --nocapture > out.txt 2>&1
             code=$?
-            echo "RESULT all $i exit=$code"; tail -30 out.txt
+            echo "RESULT all $i exit=$code"
+            grep -B5 -A25 "panicked" out.txt | head -60
           done
   diag-editor:
     name: diag editor ui (${{ matrix.run }})
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2]
+        run: [1, 2, 3]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

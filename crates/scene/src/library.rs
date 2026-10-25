@@ -29,6 +29,8 @@ pub struct Library {
     /// tools that read the baked `TIMP` blobs (xtask, the asset bake, the
     /// editor); [`Library::load`] leaves it empty.
     pub impostors: BTreeMap<String, [Option<trino_core::Impostor>; 4]>,
+    /// The collision layers (`assets/physics.ron`, issue #66).
+    pub physics: crate::physics::PhysicsSettings,
     /// Files that failed to parse (path: error) — shown, never fatal.
     pub errors: Vec<String>,
 }
@@ -63,6 +65,10 @@ impl Library {
     /// Load every material and prefab under the project root.
     pub fn load(root: &Path) -> Library {
         let mut lib = Library::default();
+        match crate::physics::PhysicsSettings::load(root) {
+            Ok(p) => lib.physics = p,
+            Err(e) => lib.errors.push(e),
+        }
         for (logical, path) in scan(&root.join(MATERIALS_DIR), MATERIAL_EXT, "materials") {
             match MaterialDef::load(&path) {
                 Ok(m) => {

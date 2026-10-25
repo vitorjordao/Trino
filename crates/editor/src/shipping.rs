@@ -17,6 +17,8 @@ use trino_scene::services::{self as svc, AchievementDef, AchievementsDef, Findin
 pub enum Page {
     Achievements,
     Packaging,
+    /// The collision layers and their matrix (`assets/physics.ron`, #66).
+    Physics,
 }
 
 pub struct ShippingState {
@@ -57,6 +59,7 @@ impl ShippingState {
         let mut s = ShippingState {
             page: match std::env::var("TRINO_EDITOR_PROJECT_PAGE").as_deref() {
                 Ok("packaging") => Page::Packaging,
+                Ok("physics") => Page::Physics,
                 _ => Page::Achievements,
             },
             def: AchievementsDef::default(),

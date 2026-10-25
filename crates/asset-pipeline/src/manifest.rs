@@ -259,6 +259,12 @@ pub struct ModelDecl {
     /// 0.001 }`. Less RAM; every frame within the bounds.
     #[serde(default)]
     pub anim_compression: Option<crate::anim_compress::CompressionDecl>,
+    /// Its collision mesh (issue #66): a master path (`models/x_col.glb`, a
+    /// simplified mesh), `"visual"` (the visual mesh itself) or
+    /// `"auto-hull"` (its convex hull). Bakes `collision/<name>` (`TCOL`)
+    /// on every target; a scene collider `Mesh("models/<name>")` uses it.
+    #[serde(default)]
+    pub collision: Option<String>,
     /// Foot IK chains (TMDL `IKCH`, issue #65): `ik = { pelvis = "hips",
     /// left = ["thigh_l", "shin_l", "foot_l"], right = [...] }` by joint
     /// (glTF node) name.

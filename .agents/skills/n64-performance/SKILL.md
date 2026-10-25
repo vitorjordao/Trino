@@ -205,6 +205,22 @@ The model is used by:
 - the `test n64` table: the `model est` column, plus a `note:` line when off by more
   than 25%.
 
+### Collision (issue #66, the self-test's `physics` step)
+
+`TRINO_PHYSICS_COST:` in `cargo xtask test n64` (ares, one build, the Expansion Pak):
+
+| Query | Scan | `StaticWorld` grid |
+|---|---|---|
+| 64 rays over the 500-solid venue | 116 ms | 6.0 ms |
+| 16 controller steps over the venue | 12.0 ms | 2.4 ms |
+| castle64's hub frame (17 solids) | 169 µs | 183 µs |
+
+- **The terms:** `N64_COST.us_per_collision_solid` (9.9 µs: a scanned body's frame per
+  solid) and `us_per_grid_ray` (94 µs).
+- **When to grid:** past a few dozen solids. Below that, the scan is fine.
+- **Mind the RAM:** keep the physics code's instantiations few (meshes as trait
+  objects); the base N64 heap is the binding constraint.
+
 ### Measured fixed costs (micro scenes)
 
 The fit can't separate per-draw from per-vertex cost. The **micro scenes** measure

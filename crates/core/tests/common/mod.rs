@@ -929,6 +929,9 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         f32s(&mut b, &[radius, c.x, c.y, c.z, hx, hz]);
         // Glow (v6, flag bit7 off).
         b.extend_from_slice(&[0; trino_core::scene::TSCN_GLOW_BYTES]);
+        // Physics (v7): the default layer, no character.
+        b.extend_from_slice(&trino_core::physics::LAYER_DEFAULT.to_le_bytes());
+        b.extend_from_slice(&[0; trino_core::scene::TSCN_PHYSICS_BYTES - 2]);
         assert_eq!(b.len() - start, TSCN_NODE_BYTES);
     }
     b.extend_from_slice(&data);

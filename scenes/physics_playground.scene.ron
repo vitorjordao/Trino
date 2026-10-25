@@ -1,0 +1,180 @@
+// Physics 2.0 (issue #66): the character controller's playground — a
+// walkable 30° ramp, a 50° one too steep to climb (a wall, a slide), stairs
+// of 0.25 m steps a 0.3 m step height climbs, a one-way platform to jump up
+// through, a low dome walked over as a triangle-mesh collider (`models/rock`'s
+// `collision = "visual"`) and a trigger zone on the `pickup` layer. The hero
+// has a `character` body: Play here (or `TRINO_SCENE=...`) walks it with
+// `trino_core::physics::CharacterController`. `cargo xtask physics check`
+// and `physics query` read this file; the editor shows its collider gizmos.
+(
+    version: 7,
+    name: "physics_playground",
+    environment: (
+        clear: (132, 178, 226),
+        camera: (
+            eye: (0.0, 11.0, 17.0),
+            target: (0.0, 0.5, 0.0),
+            fov: 55.0,
+        ),
+        light: (
+            dir: (0.35, -0.8, 0.45),
+            color: (255, 244, 225),
+            ambient: 0.45,
+            ambient_color: (170, 185, 220),
+        ),
+    ),
+    entities: [
+(
+    name: "ground",
+    transform: (
+        pos: (0.0, -0.2, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (30.0, 0.2, 30.0),
+    ),
+    model: Some((path: "models/wall", tint: Some((110, 160, 98, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "ramp-30",
+    transform: (
+        pos: (-7.0, 0.0, -5.0),
+        rot: (0.0, 180.0, 0.0),
+        scale: (2.0, 1.7321, 1.0),
+    ),
+    model: Some((path: "models/ramp", tint: Some((175, 215, 120, 255)))),
+    collider: Some((shape: Ramp(size: (2.0, 1.0, 3.0), dir: PosZ), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "deck-30",
+    transform: (
+        pos: (-7.0, 0.0, -8.25),
+        rot: (0.0, 0.0, 0.0),
+        scale: (4.0, 1.7321, 3.5),
+    ),
+    model: Some((path: "models/wall", tint: Some((150, 146, 160, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "ramp-50",
+    transform: (
+        pos: (-1.0, 0.0, -5.0),
+        rot: (0.0, 180.0, 0.0),
+        scale: (2.0, 3.5753, 1.0),
+    ),
+    model: Some((path: "models/ramp", tint: Some((225, 150, 110, 255)))),
+    collider: Some((shape: Ramp(size: (2.0, 1.0, 3.0), dir: PosZ), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "deck-50",
+    transform: (
+        pos: (-1.0, 0.0, -8.25),
+        rot: (0.0, 0.0, 0.0),
+        scale: (4.0, 3.5753, 3.5),
+    ),
+    model: Some((path: "models/wall", tint: Some((150, 146, 160, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "stairs/step-0",
+    transform: (
+        pos: (5.0, 0.0, -1.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 0.25, 0.7),
+    ),
+    model: Some((path: "models/wall", tint: Some((200, 190, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "stairs/step-1",
+    transform: (
+        pos: (5.0, 0.0, -1.7),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 0.5, 0.7),
+    ),
+    model: Some((path: "models/wall", tint: Some((200, 190, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "stairs/step-2",
+    transform: (
+        pos: (5.0, 0.0, -2.4),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 0.75, 0.7),
+    ),
+    model: Some((path: "models/wall", tint: Some((200, 190, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "stairs/step-3",
+    transform: (
+        pos: (5.0, 0.0, -3.1),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 1.0, 0.7),
+    ),
+    model: Some((path: "models/wall", tint: Some((200, 190, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "stairs/step-4",
+    transform: (
+        pos: (5.0, 0.0, -3.8),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 1.25, 0.7),
+    ),
+    model: Some((path: "models/wall", tint: Some((200, 190, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "stairs/landing",
+    transform: (
+        pos: (5.0, 0.0, -5.15),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 1.25, 2.0),
+    ),
+    model: Some((path: "models/wall", tint: Some((200, 190, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "one-way",
+    transform: (
+        pos: (9.5, 1.1, -1.5),
+        rot: (0.0, 0.0, 0.0),
+        scale: (3.0, 0.2, 3.0),
+    ),
+    model: Some((path: "models/wall", tint: Some((90, 220, 235, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0), one_way: true)),
+),
+(
+    name: "dome",
+    transform: (
+        pos: (-6.0, -1.26, 6.5),
+        rot: (0.0, 0.0, 0.0),
+        scale: (7.0, 3.5, 7.0),
+    ),
+    model: Some((path: "models/rock", tint: Some((120, 150, 128, 255)))),
+    collider: Some((shape: Mesh("models/rock"), layer: "world")),
+),
+(
+    name: "goal-zone",
+    transform: (
+        pos: (1.5, 0.0, 9.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/coin-ring", tint: Some((255, 210, 80, 255)))),
+    collider: Some((shape: Box(size: (2.0, 2.0, 2.0)), offset: (0.0, 1.0, 0.0), trigger: true, layer: "pickup")),
+    tags: ["goal"],
+),
+(
+    name: "hero",
+    transform: (
+        pos: (1.5, 0.0, 4.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    model: Some((path: "models/hero-capsule")),
+    tags: ["player"],
+    character: Some((height: 1.7, radius: 0.3, max_slope_deg: 45.0, step_height: 0.3)),
+),
+    ],
+)

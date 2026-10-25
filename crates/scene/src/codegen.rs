@@ -72,7 +72,7 @@ pub fn to_rust_graded(
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId,\n}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -272,11 +272,20 @@ pub fn to_rust_graded(
                         f(radius),
                         f(height)
                     ),
+                    trino_core::Shape::Ramp { half, dir } => format!(
+                        "Shape::Ramp {{ half: {}, dir: RampDir::{dir:?} }}",
+                        v3(half)
+                    ),
+                    trino_core::Shape::Mesh { mesh, half } => {
+                        format!("Shape::Mesh {{ mesh: {mesh:#010x}, half: {} }}", v3(half))
+                    }
                 };
                 format!(
-                    "Some(Collider {{\n            shape: {shape},\n            offset: {},\n            trigger: {},\n        }})",
+                    "Some(Collider {{\n            shape: {shape},\n            offset: {},\n            trigger: {},\n            layer: {},\n            one_way: {},\n        }})",
                     v3(c.offset),
-                    c.trigger
+                    c.trigger,
+                    c.layer,
+                    c.one_way
                 )
             }
             None => "None".into(),
@@ -324,7 +333,7 @@ pub fn to_rust_graded(
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n        character: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -394,6 +403,16 @@ pub fn to_rust_graded(
                     f(g.radius),
                     color(g.color),
                     g.mode
+                ),
+                None => "None".into(),
+            },
+            match item.character {
+                Some(c) => format!(
+                    "Some(Character {{ radius: {}, height: {}, max_slope_deg: {}, step_height: {} }})",
+                    f(c.radius),
+                    f(c.height),
+                    f(c.max_slope_deg),
+                    f(c.step_height)
                 ),
                 None => "None".into(),
             }

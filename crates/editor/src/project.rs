@@ -102,6 +102,9 @@ pub struct Project {
     /// files the consoles' bake grades (`bake_grading` on `[scenes.*]`).
     pub luts: BTreeMap<String, (u32, Vec<u8>)>,
     pub bake_grading: Vec<String>,
+    /// Baked collision meshes (`TCOL`, issue #66) by blob id
+    /// (`collision/<name>`; `Shape::Mesh::mesh`).
+    pub collision: BTreeMap<u32, Vec<u8>>,
     /// Bumped whenever asset content changes (viewports re-upload, caches
     /// invalidate).
     pub generation: u64,
@@ -119,8 +122,26 @@ impl Project {
             tmem: BTreeMap::new(),
             luts: BTreeMap::new(),
             bake_grading: Vec::new(),
+            collision: BTreeMap::new(),
             generation: 0,
         }
+    }
+
+    /// The models whose collision mesh is baked (`Mesh` colliders).
+    pub fn collision_models(&self) -> Vec<String> {
+        self.models
+            .keys()
+            .filter(|m| {
+                let id = trino_core::asset_id(&trino_scene::collision_blob_path(m));
+                self.collision.contains_key(&id)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// A baked collision mesh by its blob id.
+    pub fn collision_mesh(&self, id: u32) -> Option<trino_core::physics::MeshCollider<'_>> {
+        trino_core::physics::MeshCollider::parse(self.collision.get(&id)?).ok()
     }
 
     /// Bind-pose AABB per model logical path (`Auto` scene colliders).
@@ -252,6 +273,9 @@ impl Project {
             if b.bytes.starts_with(&trino_core::post::TLUT_MAGIC) {
                 n += 1;
                 self.luts.insert(b.logical, (b.id, b.bytes));
+            } else if b.bytes.starts_with(trino_core::physics::TCOL_MAGIC) {
+                n += 1;
+                self.collision.insert(b.id, b.bytes);
             }
         }
         if let Some(m) = &manifest {

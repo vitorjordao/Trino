@@ -72,6 +72,13 @@ pub struct CostModel {
     /// the pelvis, [`crate::anim::ik`]): off on the N64 unless a game
     /// forces it (`Caps::anim_ik`).
     pub us_per_ik_draw: f32,
+    /// A character's frame of collision per solid it scans (issue #66):
+    /// one controller step plus the camera ray over a linear list of boxes
+    /// (castle64's way).
+    pub us_per_collision_solid: f32,
+    /// One ray through a [`crate::physics::StaticWorld`] grid on a dense
+    /// level (the 500-solid venue's mean).
+    pub us_per_grid_ray: f32,
 }
 
 /// The N64's RSP work in a frame ([`CostModel::split_us`]): every RSP draw
@@ -138,6 +145,14 @@ pub const N64_COST: CostModel = CostModel {
     // same frame without them, per blob: 109 µs with the Expansion Pak and
     // 113 without on one build, 105 and 103 on the next (code layout).
     us_per_blob: BLOB_US,
+    // ares, 2026-10-25 (issue #66, the self-test's `physics` step,
+    // `TRINO_PHYSICS_COST:`): castle64's hub frame, its camera ray and one
+    // player step scanned over 17 solids, 169 µs; on the 500-solid venue a
+    // gridded ray costs 6024 / 64 µs (a scanned one 1813), a gridded
+    // controller step 153 µs (a scanned 749). Physics is `optimize(size)` on
+    // the consoles (the base N64's RAM).
+    us_per_collision_solid: 9.9,
+    us_per_grid_ray: 94.0,
     // ares, 2026-10-24 (issue #65, the self-test's `foot ik` step,
     // `TRINO_IK_COST:` lines): 16 strider draws, one a frame, with both legs
     // solved less the same draws without, per draw: 525–650 µs over four

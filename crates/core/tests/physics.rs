@@ -51,6 +51,8 @@ fn collider_shapes_become_world_boxes() {
         shape: Shape::Sphere { radius: 0.5 },
         offset: v(0.0, 0.5, 0.0),
         trigger: false,
+        layer: trino_core::physics::LAYER_DEFAULT,
+        one_way: false,
     };
     assert_eq!(
         ball.local_aabb(),
@@ -63,6 +65,8 @@ fn collider_shapes_become_world_boxes() {
         },
         offset: Vec3::ZERO,
         trigger: true,
+        layer: trino_core::physics::LAYER_DEFAULT,
+        one_way: false,
     };
     assert_eq!(tall.local_aabb().half(), v(0.3, 1.0, 0.3));
     // A capsule shorter than its diameter is a sphere.

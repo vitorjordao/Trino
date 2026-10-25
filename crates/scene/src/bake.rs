@@ -126,11 +126,16 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
             Some(Shape::Box { half }) => (1, [half.x, half.y, half.z]),
             Some(Shape::Sphere { radius }) => (2, [radius, 0.0, 0.0]),
             Some(Shape::Capsule { radius, height }) => (3, [radius, height, 0.0]),
+            Some(Shape::Ramp { half, .. }) => (4, [half.x, half.y, half.z]),
+            Some(Shape::Mesh { half, .. }) => (5, [half.x, half.y, half.z]),
             None => (0, [0.0; 3]),
         };
         flags |= shape_bits << 12;
         if item.collider.is_some_and(|c| c.trigger) {
             flags |= 1 << 15;
+        }
+        if item.character.is_some() {
+            flags |= 1 << 16;
         }
         out.extend_from_slice(&flags.to_le_bytes());
         out.extend_from_slice(&item.model.as_ref().map_or(0, |(id, _)| id.0).to_le_bytes());
@@ -222,6 +227,29 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         out.extend_from_slice(&[g.color.r, g.color.g, g.color.b, g.color.a]);
         let mode = (g.mode == trino_core::GlowMode::Always) as u8;
         out.extend_from_slice(&[mode, 0, 0, 0]);
+        // Physics (v7, issue #66): layer, one-way, ramp, mesh, character.
+        let c = item.collider;
+        out.extend_from_slice(
+            &c.map_or(trino_core::physics::LAYER_DEFAULT, |c| c.layer)
+                .to_le_bytes(),
+        );
+        let (dir, mesh) = match c.map(|c| c.shape) {
+            Some(Shape::Ramp { dir, .. }) => (dir.code(), 0),
+            Some(Shape::Mesh { mesh, .. }) => (0, mesh),
+            _ => (0, 0),
+        };
+        out.extend_from_slice(&[c.is_some_and(|c| c.one_way) as u8, dir]);
+        out.extend_from_slice(&mesh.to_le_bytes());
+        let ch = item.character.unwrap_or(trino_core::physics::Character {
+            radius: 0.0,
+            height: 0.0,
+            max_slope_deg: 0.0,
+            step_height: 0.0,
+        });
+        f32s(
+            &mut out,
+            &[ch.radius, ch.height, ch.max_slope_deg, ch.step_height],
+        );
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
     out.extend_from_slice(&strings);
@@ -295,6 +323,7 @@ mod tests {
             },
             offset: [0.0, 0.9, 0.0],
             trigger: false,
+            ..Default::default()
         });
         let mut parent = Entity::new("group");
         parent

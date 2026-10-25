@@ -37,11 +37,26 @@ impl PlaySession {
     /// its variants) and start the scene runtime at the Game view's
     /// internal resolution. The blob is leaked (a few KB per Play
     /// press — the runtime keeps `'static` names and tags, like consoles).
+    #[cfg(test)]
     pub fn start(
         scene: &trino_scene::Scene,
         lib: &trino_scene::Library,
         target: trino_scene::Target,
         screen: (u32, u32),
+    ) -> Result<Self, String> {
+        Self::start_with(scene, lib, target, screen, &Default::default(), false)
+    }
+
+    /// [`Self::start`] with the project's collision meshes (`TCOL` blobs
+    /// by id, for `Mesh` colliders) and, with `simulate`, the hero on the
+    /// engine's character controller even without a `character` body.
+    pub fn start_with(
+        scene: &trino_scene::Scene,
+        lib: &trino_scene::Library,
+        target: trino_scene::Target,
+        screen: (u32, u32),
+        collision: &std::collections::BTreeMap<u32, Vec<u8>>,
+        simulate: bool,
     ) -> Result<Self, String> {
         let (blob, warnings) = trino_scene::bake::to_tscn_for(scene, lib, target);
         if let Some(w) = warnings.first() {
@@ -57,6 +72,15 @@ impl PlaySession {
         game.ao = scene.environment.core_ao();
         game.stereo = scene.environment.core_stereo();
         game.post = scene.environment.core_post();
+        // Mesh colliders: their baked triangles (leaked like the scene).
+        for (&id, bytes) in collision {
+            if game.attach_mesh(id, Box::leak(bytes.clone().into_boxed_slice())) == 0 {
+                continue;
+            }
+        }
+        if simulate {
+            game.use_controller(trino_core::physics::Character::DEFAULT);
+        }
         Ok(PlaySession {
             game,
             last: Instant::now(),

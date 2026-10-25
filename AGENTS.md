@@ -928,6 +928,37 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     `foot ik`; `xtask/tests/anim_showcase.rs`, `anim_cli.rs`, the pipeline's
     `anim_compression`/`foot_ik`/`anim_graph_bake`, the scene crate's `anim_graph`.
 
+- **Physics 2.0 (2026-10-25, ADR 0035, GitHub #66):** `trino_core::physics`, core-only
+  and the same bits on every target.
+  - **Queries:**
+    - `StaticWorld` is an XZ grid in caller `u16` buffers, and `World` adds the dynamic
+      solids;
+    - every query has a layer mask;
+    - `CastShape` sphere/capsule/box casts are exact against boxes;
+    - `TriggerTracker` emits Enter/Stay/Exit;
+    - every grid query equals its scan.
+  - **`CharacterController<S>`:** steps, snap-down, slopes (`Ramp` surfaces and
+    triangle meshes), one-way platforms, moving-platform `carry`, coyote time and jump
+    buffering. With every option off it is `move_aabb` bit for bit.
+    - It is generic over `Scalar`: `f32`, or `Fx` (Q16.16, bit-identical to Solid
+      Eleven's).
+    - Meshes are `&[&dyn MeshQuery]`.
+  - **Mesh colliders:** the manifest's `collision = "file" | "visual" | "auto-hull"`
+    bakes a `TCOL` (triangles + BVH) at `collision/<name>`, placed by `MeshInstance`.
+    `Caps::max_collision_tris` caps a level (N64 4096).
+  - **Authoring:** a scene collider has `layer` (bare name, `assets/physics.ron`),
+    `one_way`, `Ramp`, `Mesh`, and an entity can have `character`; TSCN v7.
+    - `cargo xtask physics check|query|layers [--json]`.
+    - The editor: gizmos per shape, Inspector › Collider/Character, Project › Physics
+      (layer matrix), Play ▸ Simulate controller with a debug overlay
+      (`TRINO_EDITOR_PHYSICS=sim`), the HUD's collision line.
+  - **castle64's player** runs on the controller (goldens and perf counters unchanged).
+  - **The `physics` self-test step** pins both course hashes (`0xba581be1`,
+    `0xffa322c7`) on PC, ares and Azahar.
+  - **Measured on the 500-solid venue** (ares): a ray 1.8 ms → 94 µs, a controller step
+    749 → 153 µs.
+  - **Worked example:** `scenes/physics_playground.scene.ron`.
+
 - **Gamepad families (2026-10-19, #86 item 7, ADR 0028):** `trino_core::pad` —
   `PadFamily { Xbox, PlayStation, Nintendo, EightBitDo, Generic }` detected from USB ids
   then the name (`PadFamily::detect`; the PC's gilrs glue copies them through
@@ -1159,6 +1190,9 @@ cargo xtask scene check   # validate scenes/prefabs/materials (text-first loop)
 cargo xtask scene export [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] <scene.ron> <out.rs>   # scene -> no_std Rust data (that platform's variants)
 cargo xtask scene budget <scene.ron> [--platform pc|n64|3ds|web|n64_expanded|n3ds_new] [--stereo] [--json]   # per-console frame: draws, tris, N64 CPU/RSP, off-RSP reasons, PC GPU split, unseen draws, a tier's RAM/cores; --stereo: the 3DS's two eyes
 cargo xtask model inspect <file> [--json]       # bake a model like the engine; art gate
+cargo xtask physics check [scene.ron ..] [--json]                    # colliders: overlaps, unnamed triggers, layers, mesh collision, per-platform budget
+cargo xtask physics query <scene.ron> --ray x,y,z dx,dy,dz | --drop x,y,z | --overlap c h | --cast sphere:r a b [--json]   # what the engine's queries answer
+cargo xtask physics layers [add|remove <name> | set <a> <b> on|off] [--json]   # assets/physics.ron (the editor's Project › Physics)
 cargo xtask texture inspect <sprites/x> [--platform pc|n64|3ds] [--json]   # format (auto: why), candidates, bytes, PSNR, memory share
 cargo xtask texture report [--platform pc|n64|3ds] [--json]                # every texture, biggest first, totals vs RGBA8
 cargo xtask audio inspect <sounds/x|music/x> [--platform pc|n64|3ds|web] [--json]  # codec (auto: why), bytes vs PCM16, SNR, RAM, decoder, N64 µs/frame
@@ -1352,6 +1386,26 @@ cargo test --workspace
 - **`AnimRef::over` is not an `Option` on purpose:** its floats are always initialized,
   so no N64 path can read a denormal payload (the `RspFog` pitfall). Weight 0 is off.
 
+- **The base N64's self-test heap is at the edge (2026-10-25, #66).** ~86 KB of new
+  physics code (`.text` lives in RDRAM) and ~700 B more `ShowcaseGame` left no 44 KB
+  block for the water perf scene's box: `memory allocation of 44200 bytes failed`, then
+  `display_init` asserts. Only `--expansion-pak off` shows it. Compare `TRINO_MEM:
+  heap_total=` with main's CI log before adding code or game-state bytes. What got it
+  back:
+  - console `optimize(size)` on the physics code;
+  - one compiled controller `step` per scalar (`Scalar::controller_step`), where a
+    generic copy per crate and mesh type had cost 8 KB each;
+  - an insertion sort instead of `sort_unstable` (5.5 KB);
+  - `ShowcaseGame::write_blank` instead of a 44 KB `static` blank the N64 kept for
+    its whole run.
+  Fragmentation (GitHub #110) was the other half: 448 KB free and no 45 KB hole. What
+  fixed it: `N64Renderer::trim_buffers()` between frames, the micro scenes' flat copy
+  cached at the start (`micro::prewarm`), and the perf game boxed once and reused.
+  Diff `mips64-elf-nm -S --size-sort -C target/n64/trino.elf` against a main build to
+  find the growth.
+- **Physics in f32 is cross-target exact only through the core's math.** Never use
+  `f32::sqrt` or `mul_add` in `trino_core::physics` (the course hash in ares and Azahar
+  equals the PC's because there are none).
 - **A packaged game must not use build-tree paths.** `env!("CARGO_MANIFEST_DIR")` is the
   build machine's; `trino-runner-pc` switches to packaged mode when `trino-package.txt`
   sits beside the exe, and every per-player file goes through `RunConfig::save_dir()`.

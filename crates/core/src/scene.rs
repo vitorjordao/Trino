@@ -20,7 +20,7 @@ use crate::audio::{SoundId, SoundSource};
 use crate::impostor::Impostor;
 use crate::math::{Color, Vec3};
 use crate::math3d::Mat34;
-use crate::physics::{Aabb, Collider, Shape};
+use crate::physics::{Aabb, Character, Collider, Shape, Solid};
 use crate::render::{AnimRef, ClipId, Material, ModelId, ModelParams, Renderer, Shading};
 use crate::render3d::{Camera3, Fog, Light};
 use crate::shadow::{ShadowCast, ShadowPlane, ShadowSettings, ShadowTier};
@@ -246,6 +246,9 @@ pub struct SceneNode {
     /// A halo around it ([`crate::post::Glow`], issue #64): the consoles'
     /// bloom, drawn by [`draw_nodes`] where its mode says.
     pub glow: Option<crate::post::Glow>,
+    /// A character's body (spawn point of a player or an NPC, issue #66):
+    /// [`Character::config`] makes its controller.
+    pub character: Option<Character>,
 }
 
 impl SceneNode {
@@ -329,6 +332,11 @@ impl SceneNode {
 ///   half sizes (x, z)
 ///   glow (v6, flag bit7): u32 sprite, f32 radius, color rgba, u8 mode
 ///   (0 baked, 1 always), u8 reserved*3
+///   physics (v7): u16 collider layer, u8 one_way, u8 ramp direction
+///   (`RampDir::code`), u32 mesh blob (shape 5), then the character
+///   (flag bit16): f32 radius, f32 height, f32 max_slope_deg,
+///   f32 step_height; shapes 4 (ramp: a b c = half extents) and 5 (mesh:
+///   a b c = half extents of its local bounds)
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -340,9 +348,11 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// detail layer (8 bytes). v4: then a water surface (28 bytes, ADR 0015).
 /// v5: the environment ends with the shadows (16 bytes) and nodes with
 /// what they cast and the receiver they are (28 bytes, ADR 0025). v6:
-/// nodes end with their glow (16 bytes, issue #64).
+/// nodes end with their glow (16 bytes, issue #64). v7: then their
+/// physics (24 bytes, issue #66): collider layer, one-way, ramps, mesh
+/// colliders and the character component.
 /// Older blobs are refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 6;
+pub const TSCN_VERSION: u16 = 7;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68 + TSCN_ENV_SHADOW_BYTES;
 /// The shadows block at the end of the environment (v5).
@@ -364,15 +374,22 @@ pub const TSCN_NODE_BYTES: usize = 16
     + 8
     + TSCN_WATER_BYTES
     + TSCN_SHADOW_BYTES
-    + TSCN_GLOW_BYTES;
+    + TSCN_GLOW_BYTES
+    + TSCN_PHYSICS_BYTES;
 /// The water block at the end of a node (v4).
 pub const TSCN_WATER_BYTES: usize = 28;
 /// The shadow block near the end of a node (v5).
 pub const TSCN_SHADOW_BYTES: usize = 28;
 /// The glow block at the end of a node (v6).
 pub const TSCN_GLOW_BYTES: usize = 16;
+/// The physics block at the end of a node (v7).
+pub const TSCN_PHYSICS_BYTES: usize = 24;
+/// Where a node's physics block starts.
+const PHYSICS_AT: usize = TSCN_NODE_BYTES - TSCN_PHYSICS_BYTES;
+/// Where a node's glow block starts.
+const GLOW_AT: usize = PHYSICS_AT - TSCN_GLOW_BYTES;
 /// Where a node's shadow block starts.
-const SHADOW_AT: usize = TSCN_NODE_BYTES - TSCN_GLOW_BYTES - TSCN_SHADOW_BYTES;
+const SHADOW_AT: usize = GLOW_AT - TSCN_SHADOW_BYTES;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SceneError {
@@ -622,8 +639,23 @@ impl BakedScene {
                 radius: x,
                 height: y,
             }),
+            4 => Some(Shape::Ramp {
+                half: Vec3::new(x, y, z),
+                dir: crate::physics::RampDir::from_code(d[at + PHYSICS_AT + 3]),
+            }),
+            5 => Some(Shape::Mesh {
+                mesh: rd_u32(d, at + PHYSICS_AT + 4),
+                half: Vec3::new(x, y, z),
+            }),
             _ => None,
         };
+        let ph = at + PHYSICS_AT;
+        let character = (flags & (1 << 16) != 0).then(|| Character {
+            radius: rd_f32(d, ph + 8),
+            height: rd_f32(d, ph + 12),
+            max_slope_deg: rd_f32(d, ph + 16),
+            step_height: rd_f32(d, ph + 20),
+        });
         let lod_at = b + 52;
         let lod = self
             .data(
@@ -647,7 +679,7 @@ impl BakedScene {
             }),
             _ => None,
         };
-        let g = at + TSCN_NODE_BYTES - TSCN_GLOW_BYTES;
+        let g = at + GLOW_AT;
         let glow = (flags & 128 != 0).then(|| crate::post::Glow {
             sprite: crate::render::SpriteId(rd_u32(d, g)),
             radius: rd_f32(d, g + 4),
@@ -674,7 +706,10 @@ impl BakedScene {
                 shape,
                 offset: rd_vec3(d, b + 36),
                 trigger: flags & (1 << 15) != 0,
+                layer: u16::from_le_bytes([d[ph], d[ph + 1]]),
+                one_way: d[ph + 2] != 0,
             }),
+            character,
         }
     }
 
@@ -708,6 +743,44 @@ pub fn solids(nodes: &[SceneNode], out: &mut [Aabb]) -> usize {
             break;
         }
         out[n] = c.world_aabb(&node.matrix);
+        n += 1;
+    }
+    n
+}
+
+/// The level's collision: each solid collider in `nodes` as a [`Solid`]
+/// (boxes, one-way boxes and ramps with their layers; round shapes as
+/// their box), written to `out`; returns how many (stops at `out.len()`).
+/// Feed it to a [`crate::physics::StaticWorld`] or the controller.
+pub fn level_solids(nodes: &[SceneNode], out: &mut [Solid]) -> usize {
+    let mut n = 0;
+    for node in nodes {
+        let Some(s) = node.collider.and_then(|c| c.world_solid(&node.matrix)) else {
+            continue;
+        };
+        if n == out.len() {
+            break;
+        }
+        out[n] = s;
+        n += 1;
+    }
+    n
+}
+
+/// The trigger volumes of `nodes` (their index in `out` is the trigger id
+/// a [`crate::physics::TriggerTracker`] reports); `names` gets the node
+/// index of each. Returns how many.
+pub fn level_triggers(nodes: &[SceneNode], out: &mut [Solid], names: &mut [u16]) -> usize {
+    let mut n = 0;
+    for (i, node) in nodes.iter().enumerate() {
+        let Some(t) = node.collider.and_then(|c| c.world_trigger(&node.matrix)) else {
+            continue;
+        };
+        if n == out.len() || n == names.len() {
+            break;
+        }
+        out[n] = t;
+        names[n] = i as u16;
         n += 1;
     }
     n
@@ -790,6 +863,7 @@ mod tests {
             cell: NO_CELL,
             vis: None,
             glow: None,
+            character: None,
         },
         SceneNode {
             name: "spawn",
@@ -810,6 +884,7 @@ mod tests {
             cell: NO_CELL,
             vis: None,
             glow: None,
+            character: None,
         },
     ];
 
@@ -902,6 +977,9 @@ mod tests {
         f(&mut b, &[0.4, 3.0, 1.0, -2.0, 1.0, 0.5]);
         // Glow (v6, flag bit7 off).
         b.extend_from_slice(&[0; TSCN_GLOW_BYTES]);
+        // Physics (v7): layer 4, not one-way, no character.
+        b.extend_from_slice(&[4, 0, 0, 0]);
+        b.extend_from_slice(&[0; TSCN_PHYSICS_BYTES - 4]);
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
@@ -936,6 +1014,7 @@ mod tests {
             }
         );
         assert_eq!(c.offset, Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!((c.layer, c.one_way, n.character), (4, false, None));
         // LOD: model 7 up close, nothing beyond 30 units.
         assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 0.0)), Some(ModelId(7)));
         assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 40.0)), None);

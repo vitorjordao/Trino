@@ -223,6 +223,28 @@ const MEMO_CULLED: u32 = 0xC011_ED00;
 
 impl N64Renderer {
     /// Start timing every stage and model (see `trino_core::perf`).
+    /// Give the per-batch buffers' memory back to the heap (GitHub #110):
+    /// a big frame grows them for good, and on the base N64 the holes they
+    /// leave fragment the 4 MB heap. Call between frames (the buffers are
+    /// empty then); the next batch grows them again as it needs.
+    pub fn trim_buffers(&mut self) {
+        fn drop_empty<T>(v: &mut Vec<T>) {
+            if v.is_empty() {
+                *v = Vec::new();
+            }
+        }
+        drop_empty(&mut self.pending_tris);
+        drop_empty(&mut self.pending_tex);
+        drop_empty(&mut self.order);
+        drop_empty(&mut self.pending_rsp);
+        drop_empty(&mut self.pending_water);
+        drop_empty(&mut self.pending_water_tex);
+        drop_empty(&mut self.pending_water_rsp);
+        drop_empty(&mut self.pending_ring_rsp);
+        drop_empty(&mut self.pending_blobs);
+        drop_empty(&mut self.pending_shadow);
+    }
+
     pub fn start_profile(&mut self) {
         self.profile = Some(RenderProfile::default());
     }
@@ -744,6 +766,11 @@ impl N64Renderer {
 
     /// Send eligible static draws to the RSP T&L overlay (`rsp_trino.S`)
     /// instead of the CPU's `tessellate`.
+    /// Whether draws may take the RSP path ([`Self::set_rsp`]).
+    pub fn rsp(&self) -> bool {
+        self.rsp_on
+    }
+
     pub fn set_rsp(&mut self, on: bool) {
         self.rsp_on = on;
     }

@@ -1109,6 +1109,9 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().shipping.page = crate::shipping::Page::Packaging;
         h.run_steps(3);
         crate::layout_audit::assert_clean(&h, size, true, &what("Project › Packaging"));
+        h.state_mut().shipping.page = crate::shipping::Page::Physics;
+        h.run_steps(3);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Project › Physics"));
         // The Profiler tab (issue #62): empty, then A and B compared.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Profiler));
         h.run_steps(4);
@@ -3897,5 +3900,146 @@ fn profiler_tab_reads_compares_and_follows_traces() {
             .path
             .ends_with("target/traces/n64-test.json")
     );
+    leave_temp_project(&repo);
+}
+
+/// Physics 2.0 in the editor (issue #66), both ways: the Project ›
+/// Physics page adds a layer and unchecks a pair of the matrix, writing
+/// `assets/physics.ron` (what `cargo xtask physics layers` writes); an
+/// outside edit of the file shows at once; the Inspector shows a ramp's
+/// slope, a mesh collider's model, a collider's layer list and the hero's
+/// Character component; the budget HUD's collision line counts the
+/// playground; and Play here walks the hero on the engine's controller
+/// (its debug overlay's data) up the 30° ramp.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn physics_layers_inspector_and_play_here_controller() {
+    use crate::app::{Cmd, Tab};
+    use egui::accesskit::Role;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    let read = || {
+        trino_scene::physics::PhysicsSettings::from_ron(
+            &std::fs::read_to_string(trino_scene::physics::PHYSICS_FILE).unwrap(),
+        )
+        .unwrap()
+    };
+    // The Project tab's Physics page.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Project));
+    h.state_mut().shipping.page = crate::shipping::Page::Physics;
+    h.run_steps(4);
+    assert_eq!(
+        h.state().lib.physics.layers,
+        ["world", "player", "enemy", "pickup"]
+    );
+    press(&mut h, Role::Button, "Add layer");
+    h.run_steps(2);
+    assert_eq!(read().layers.len(), 5, "a layer added on disk");
+    press(&mut h, Role::CheckBox, "player × pickup");
+    h.run_steps(2);
+    assert!(
+        !read().collide("player", "pickup"),
+        "the pair unchecked on disk"
+    );
+    assert!(!h.state().lib.physics.collide("player", "pickup"));
+    // Edited outside: the page follows.
+    let mut outside = read();
+    outside.layers[4] = "water".into();
+    std::fs::write(trino_scene::physics::PHYSICS_FILE, outside.to_ron()).unwrap();
+    wait_for(&mut h, "the outside physics.ron edit", |a| {
+        a.lib.physics.layers.get(4).is_some_and(|l| l == "water")
+    });
+
+    // The playground in the Inspector.
+    h.state_mut()
+        .cmds
+        .push(Cmd::OpenScene(std::path::PathBuf::from(
+            "scenes/physics_playground.scene.ron",
+        )));
+    h.run_steps(6);
+    let select = |h: &mut Harness<'static, App>, name: &str| {
+        let path = find(&h.state().doc.scene, name);
+        h.state_mut().cmds.push(Cmd::Select(Some(path)));
+        h.run_steps(4);
+    };
+    select(&mut h, "ramp-30");
+    assert!(h.query_by_label_contains("Rises toward").is_some());
+    // The slope with the entity's scale (2 × 1.732 × 1 over a 2 × 1 × 3 box).
+    assert!(h.query_by_label_contains("30.0° slope").is_some());
+    assert!(
+        h.query_by_label_contains("18.4° slope").is_none(),
+        "not the unscaled box's"
+    );
+    assert!(h.query_by_label_contains("Layer").is_some());
+    select(&mut h, "dome");
+    assert!(h.query_by_label_contains("Collision of").is_some());
+    assert!(
+        h.query_by_label_contains("has no `collision` key")
+            .is_none(),
+        "models/rock bakes its collision"
+    );
+    assert!(
+        h.state()
+            .project
+            .collision_models()
+            .contains(&"models/rock".to_string())
+    );
+    select(&mut h, "hero");
+    assert!(h.query_by_label_contains("Step height").is_some());
+    assert!(h.query_by_label_contains("Max slope").is_some());
+    // The budget HUD's collision line.
+    let line = crate::budget::collision_line(
+        &h.state().resolved,
+        &h.state().project,
+        trino_scene::Target::N64,
+    )
+    .unwrap();
+    assert!(
+        line.0.contains("1 one-way")
+            && line.0.contains("2 ramps")
+            && line.0.contains("mesh 28/4096 tris"),
+        "{line:?}"
+    );
+
+    // Play here: the hero walks on the engine's controller.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.state_mut().cmds.push(Cmd::PlayHere);
+    h.run_steps(8);
+    let session = h.state().game_view.play.as_ref().expect("playing here");
+    let (ctl, _) = session
+        .game
+        .controller_debug()
+        .expect("the hero's controller");
+    assert!(
+        (ctl.cfg.step_height - 0.3).abs() < 1e-6,
+        "the scene's character body"
+    );
+    // Put the hero at the foot of the 30° ramp and walk it up (+Z).
+    {
+        let game = &mut h.state_mut().game_view.play.as_mut().unwrap().game;
+        let mut input = trino_core::InputState::default();
+        use trino_core::Game as _;
+        for _ in 0..30 {
+            game.update(&input, &mut crate::play::NullAudio, 1.0 / 60.0);
+        }
+        // The camera looks down -Z: stick up walks away from it, toward -Z,
+        // up the ramp (turned to rise toward -Z).
+        game.teleport_hero(trino_core::Vec3::new(-7.0, 0.0, -2.0));
+        input.stick = trino_core::Vec2::new(0.0, 1.0);
+        let mut top: f32 = 0.0;
+        for _ in 0..240 {
+            game.update(&input, &mut crate::play::NullAudio, 1.0 / 60.0);
+            top = top.max(game.pos.y);
+        }
+        let (ctl, rep) = game.controller_debug().unwrap();
+        assert!(
+            top > 1.73 + 0.85 - 0.05,
+            "climbed the ramp onto the deck: {top}"
+        );
+        assert!(ctl.on_ground && !rep.sliding, "{rep:?}");
+    }
+    h.state_mut().cmds.push(Cmd::StopPlayHere);
+    h.run_steps(2);
     leave_temp_project(&repo);
 }

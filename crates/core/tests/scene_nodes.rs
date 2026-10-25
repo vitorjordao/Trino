@@ -33,6 +33,7 @@ const fn node(name: &'static str, tags: &'static [&'static str], x: f32, z: f32)
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     }
 }
 
@@ -61,6 +62,8 @@ const LEVEL: &[SceneNode] = &[
             shape: Shape::Sphere { radius: 1.0 },
             offset: Vec3::new(0.0, 1.0, 0.0),
             trigger: true,
+            layer: trino_core::physics::LAYER_DEFAULT,
+            one_way: false,
         }),
         ..node("goal", &["goal"], 8.0, 0.0)
     },
@@ -408,8 +411,9 @@ fn baked_scene_rejects_bad_blobs() {
         SceneError::BadMagic
     );
     // v1 (8-byte LOD records), v2 (no surface), v3 (no water), v4 (no
-    // shadows), v5 (no glow) and future versions need a rebake.
-    for v in [1u8, 2, 3, 4, 5, 7] {
+    // shadows), v5 (no glow), v6 (no physics) and future versions need a
+    // rebake.
+    for v in [1u8, 2, 3, 4, 5, 6, 8] {
         let mut other = good.to_vec();
         other[4] = v;
         assert_eq!(

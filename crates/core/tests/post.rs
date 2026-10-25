@@ -39,6 +39,7 @@ fn node(glow: Option<Glow>) -> SceneNode {
         cell: trino_core::NO_CELL,
         vis: None,
         glow,
+        character: None,
     }
 }
 

@@ -173,6 +173,16 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
         ),
         Err(e) => errors.push(e),
     }
+    // Collision meshes and the layer matrix (issue #66), resident: the
+    // game's controller and queries read them while it plays.
+    match crate::collision::blobs(root, manifest, platform) {
+        Ok(blobs) => out.extend(
+            blobs
+                .into_iter()
+                .map(|(logical, bytes)| UiBlob { logical, bytes }),
+        ),
+        Err(e) => errors.push(e),
+    }
     if errors.is_empty() {
         Ok(out)
     } else {

@@ -336,6 +336,27 @@ triangles on the RSP, the rest full CPU T&L. Solid Eleven's worst frame estimate
 9.7 ms of CPU and 12.5 ms of RSP, under the 50 ms ceiling
 (`solid_eleven_render.rs::the_match_passes_strict_mode_on_the_n64_profile`).
 
+## Physics: the engine's fixed-point mode, evaluated (issue #66)
+
+The engine gained a fixed-point mode for its physics ([ADR 0035](adr/0035-physics-2.md)):
+the character controller and its geometry run on `trino_core::physics::Fx`, a Q16.16
+`i32`. Solid Eleven evaluated it against its own `sim::fx::Fx`.
+
+- **Bit-compatible.** The representation, product (`i64`, arithmetic shift), quotient
+  (toward zero, saturating at ±`i32::MAX`), integer square root and float conversion
+  match over 20 000 random operations
+  (`fixed_point_eval::engine_fixed_point::the_engines_fixed_point_matches_bit_for_bit`). The
+  engine's division used to saturate a negative quotient at `i32::MIN`; it now matches
+  the sim's symmetric `-i32::MAX`, which also negates without overflowing.
+- **What the sim keeps.**
+  - Its ball physics stays its own: curl, the posts' and net's bounces, wet roll. The
+    engine has queries and a character controller, not rigid-body dynamics, by design.
+  - Its players stay on its own movement: the pitch has nothing to collide with but the
+    goal frame, so a controller would add cost for nothing.
+- **What it gains.** If a mode ever puts obstacles on the pitch (a training ground, a
+  street match), the players can walk on `CharacterController<Fx>` and the match hash
+  stays bit-exact, since the numbers are the same.
+
 ## Tests
 
 | Test | What it proves |

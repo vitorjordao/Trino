@@ -193,6 +193,24 @@ impl<const N: usize> EntityStore<N> {
         }
     }
 
+    /// [`Self::new`] written into `p` one slot at a time, so a store far
+    /// bigger than the N64's 64 KB stack never sits on it whole.
+    ///
+    /// # Safety
+    /// `p` must be valid for writes and aligned for `Self`.
+    #[inline(never)]
+    pub unsafe fn write_new(p: *mut Self) {
+        // SAFETY: the caller's contract; every field is written below.
+        unsafe {
+            let slots = core::ptr::addr_of_mut!((*p).slots) as *mut Option<Entity>;
+            for i in 0..N {
+                slots.add(i).write(None);
+            }
+            core::ptr::addr_of_mut!((*p).generations).write([0; N]);
+            core::ptr::addr_of_mut!((*p).len).write(0);
+        }
+    }
+
     pub const fn capacity(&self) -> usize {
         N
     }
@@ -335,6 +353,38 @@ impl<const N: usize> EntityStore<N> {
         n
     }
 
+    /// The visible solid colliders as [`crate::physics::Solid`]s (boxes,
+    /// one-way boxes and ramps with their layers; issue #66), owners in
+    /// `ids`; returns how many. Mesh colliders are not boxes: build a
+    /// [`crate::physics::MeshInstance`] from their blob.
+    pub fn level_solids(
+        &self,
+        out: &mut [crate::physics::Solid],
+        mut ids: Option<&mut [EntityId]>,
+    ) -> usize {
+        let mut n = 0;
+        for (id, e) in self.iter() {
+            let Some(s) = e
+                .collider
+                .filter(|_| e.visible)
+                .and_then(|c| c.world_solid(&e.matrix))
+            else {
+                continue;
+            };
+            if n == out.len() {
+                break;
+            }
+            out[n] = s;
+            if let Some(ids) = ids.as_deref_mut()
+                && n < ids.len()
+            {
+                ids[n] = id;
+            }
+            n += 1;
+        }
+        n
+    }
+
     /// Sound sources of visible entities, for [`crate::audio::Ambience::update`]
     /// (keyed by slot index — stable while the entity lives).
     pub fn sound_sources(
@@ -424,6 +474,7 @@ mod tests {
             cell: crate::vis::NO_CELL,
             vis: None,
             glow: None,
+            character: None,
         }
     }
 
@@ -485,6 +536,8 @@ mod tests {
                     shape: Shape::Sphere { radius: 0.5 },
                     offset: Vec3::ZERO,
                     trigger: true,
+                    layer: crate::physics::LAYER_DEFAULT,
+                    one_way: false,
                 }),
                 ..Entity::EMPTY
             })

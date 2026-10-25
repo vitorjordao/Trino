@@ -23,6 +23,8 @@
 // Draw calls and match setups take their context as plain arguments.
 #![allow(clippy::too_many_arguments)]
 
+#[cfg(test)]
+mod fixed_point_eval;
 pub mod game;
 pub mod render;
 pub mod selftest;

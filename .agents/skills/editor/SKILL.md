@@ -73,7 +73,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project\|profiler` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab; `profiler`: the Profiler tab) |
 | `TRINO_EDITOR_TRACE=<file>[@session]` | the Profiler tab opens that trace (relative to the project, e.g. `target/traces/n64-trace.json@n64-hub`) as trace A on that session, and comes to front |
 | `TRINO_EDITOR_TRACE_B=<file>[@session]` | …and that one as trace B (compare); without `@session` B pairs with A's session (`pair_sessions`) |
-| `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements) |
+| `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements); `=physics` on the collision layers and their matrix (issue #66) |
+| `TRINO_EDITOR_PHYSICS=sim` | Play here walks the `player` on the engine's `CharacterController` (Play ▸ Simulate controller) and the Game view draws its debug overlay: body, ground normal, step probe, status line |
 | `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
 | `TRINO_EDITOR_ACCESS=cvd=deuteranopia,text=200,contrast=on` | the Accessibility tab's simulation at start: the Scene, Game and UI views through that color vision, the UI tab at that text size and contrast (`AccessSettings::parse_text` keys) |
 | `TRINO_EDITOR_UI=<screen>[,n64\|3ds\|pc\|4k\|wide\|web[,<lang>\|default[,<node id>]]]` | open the UI tab on `ui/<screen>.ui.ron` for that target and language with that node selected, e.g. `TRINO_EDITOR_UI=pause,3ds,pt-BR,quit` |
@@ -375,6 +376,38 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   960×600. `trino.toml` is watched when it exists.
 - Tests: `project_tab_edits_achievements_and_packaging_as_text`, the layout audit visits
   both pages.
+
+## Physics (issue #66, ADR 0035)
+
+- **Scene view gizmos** (`viewport.rs::colliders`, shown while Colliders is on), each
+  drawn as what `trino_core::physics` collides against:
+  - boxes in green, rings for round shapes;
+  - one-way boxes in cyan with an up arrow;
+  - ramps as their wedge (`wedge`, from `Collider::world_solid`'s turned direction);
+  - mesh colliders as their triangles (from `Project::collision`, the baked `TCOL`
+    blobs);
+  - triggers filled translucent;
+  - character bodies in pink with their step height.
+- **Inspector:**
+  - Collider: Ramp (size, rises toward, the slope in degrees), Mesh (a combo of the
+    models with a baked collision, warned otherwise), Layer (the project's names; the
+    first is the default, written as no `layer`), One-way (boxes);
+  - Add component › Character.
+- **Project › Physics** (`panels/shipping.rs::physics`): the layer list and the matrix
+  checkboxes.
+  - They write `assets/physics.ron` at once.
+  - Each checkbox has an accessible label `a × b`, so kittest can press it.
+  - An outside edit of the file reloads `lib.physics` (the watcher, `app.rs`).
+- **Play here + Simulate controller** (`play.rs::start_with`):
+  - the showcase runtime gets the project's collision blobs (`attach_mesh`) and, with
+    the toggle, `use_controller(Character::DEFAULT)`;
+  - a scene with a `character` body uses the controller without the toggle;
+  - the overlay reads `ShowcaseGame::controller_debug()` through the game's own camera.
+- **Budget HUD:** `budget::collision_line` counts solids, one-way, ramps, triggers and
+  mesh triangles against the console's limit, priced at
+  `N64_COST.us_per_collision_solid`.
+- **Test:** `physics_layers_inspector_and_play_here_controller`, and the layout audit
+  visits Project › Physics.
 
 ## Profiler tab (issue #62, ADR 0030)
 

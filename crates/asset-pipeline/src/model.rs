@@ -718,6 +718,21 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
     data.encode().map_err(|e| err(&e))
 }
 
+/// A master's triangles as the bake reads them (glTF node transforms
+/// applied, fake objects built), before any vertex reordering: the
+/// collision bake's input.
+pub fn load_mesh(path: &Path) -> Result<MeshData, String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    if name.ends_with(".prim.ron") {
+        Ok(crate::primitive::Primitive::load(path)?.build())
+    } else {
+        load_gltf(path, &ModelOptions::default())
+    }
+}
+
 /// What compressing a model's clips within `bounds` gives (whether the
 /// manifest asks for it or not): `model inspect --compressed`.
 pub fn compression_report(

@@ -48,7 +48,10 @@
 use core::fmt::Write as _;
 use trino_core::anim::{AnimGraph, AnimGraphInstance, GraphBlob, StateId};
 use trino_core::math3d::{atan2, cos, sin, sqrt};
-use trino_core::physics::{Aabb, move_aabb};
+use trino_core::physics::{
+    Aabb, Box3, CharacterController, MeshCollider, MeshInstance, Shape, Solid, StepReport, Surface,
+    V3, move_aabb,
+};
 use trino_core::scene::{BakedScene, SceneNode};
 use trino_core::{
     Ambience, AmbientOcclusion, Audio, BlobId, Button, Camera3, Color, Emitter, EntityId,
@@ -278,7 +281,45 @@ pub struct ShowcaseGame {
     /// same pose through the graph.
     robot_graph: GraphBlob,
     robots: [Option<(EntityId, AnimGraphInstance)>; ROBOTS],
+    /// The engine's character controller (issue #66), when the scene gives
+    /// the hero a `character` body (a spawn with the component): the hero
+    /// then walks with its steps, slopes, one-way platforms and mesh
+    /// colliders, and the editor's Play here draws its debug overlay. The
+    /// showcase's own river scene has none and keeps `move_aabb`.
+    controller: Option<CharacterController<f32>>,
+    /// The controller's last step, for the overlay.
+    pub last_step: Option<StepReport<f32>>,
+    /// Mesh colliders (`Shape::Mesh`): their blob id, its bytes and the
+    /// entity they sit on, attached by the host (`attach_mesh`) or fetched
+    /// from the platform; instanced per step (16 bytes a slot, not a
+    /// `MeshInstance`'s 120: the N64 keeps this game in its heap).
+    meshes: [Option<(u32, &'static [u8], EntityId)>; MAX_MESHES],
 }
+
+/// Mesh colliders a scene can hold.
+const MAX_MESHES: usize = 4;
+
+/// A filler for the step's mesh list (never queried: the list is cut to
+/// the placed meshes).
+struct NoMesh;
+
+impl trino_core::physics::MeshQuery<f32> for NoMesh {
+    fn support(
+        &self,
+        _: &Box3<f32>,
+        _: f32,
+        _: f32,
+    ) -> Option<trino_core::physics::MeshSupport<f32>> {
+        None
+    }
+    fn blocks(&self, _: &Box3<f32>, _: f32) -> bool {
+        false
+    }
+}
+
+static NO_MESH: NoMesh = NoMesh;
+/// The fall cap of a controller-driven hero.
+const MAX_FALL: f32 = 30.0;
 
 /// Robots the graph animates (the walker and the greeter).
 const ROBOTS: usize = 2;
@@ -440,6 +481,93 @@ impl ShowcaseGame {
             n64: cfg!(target_os = "none"),
             robot_graph: GraphBlob::from_id(trino_core::BlobId::from_path("anim/robot")),
             robots: [None; ROBOTS],
+            controller: None,
+            last_step: None,
+            meshes: [None; MAX_MESHES],
+        }
+    }
+
+    /// [`Self::blank`] written field by field into `p`: no whole game is
+    /// ever built on the stack or kept as a template. The N64 used to copy
+    /// a `static` blank (44 KB of RDRAM for the whole run) into its box;
+    /// this gives that memory back (issue #66: the base N64 self-test's
+    /// heap).
+    ///
+    /// # Safety
+    /// `p` must be valid for writes and aligned for `ShowcaseGame`; every
+    /// field is initialized afterwards.
+    #[inline(never)]
+    pub unsafe fn write_blank(p: *mut Self) {
+        // SAFETY: the caller's contract; each write initializes one field.
+        unsafe {
+            EntityStore::write_new(core::ptr::addr_of_mut!((*p).world));
+            core::ptr::addr_of_mut!((*p).hero).write(None);
+            core::ptr::addr_of_mut!((*p).pos).write(Vec3::ZERO);
+            core::ptr::addr_of_mut!((*p).vel).write(Vec3::ZERO);
+            core::ptr::addr_of_mut!((*p).on_ground).write(false);
+            core::ptr::addr_of_mut!((*p).coins).write(0);
+            core::ptr::addr_of_mut!((*p).total_coins).write(0);
+            core::ptr::addr_of_mut!((*p).reached_goal).write(false);
+            core::ptr::addr_of_mut!((*p).facing).write(0.0);
+            core::ptr::addr_of_mut!((*p).time).write(0.0);
+            core::ptr::addr_of_mut!((*p).yaw).write(0.0);
+            core::ptr::addr_of_mut!((*p).pitch).write(0.0);
+            core::ptr::addr_of_mut!((*p).dist).write(0.0);
+            core::ptr::addr_of_mut!((*p).prev).write(InputState::IDLE);
+            core::ptr::addr_of_mut!((*p).screen).write(Vec2::ZERO);
+            core::ptr::addr_of_mut!((*p).spawn).write(Vec3::ZERO);
+            core::ptr::addr_of_mut!((*p).camera_fov).write(1.0);
+            core::ptr::addr_of_mut!((*p).light).write(trino_core::DEFAULT_LIGHT);
+            core::ptr::addr_of_mut!((*p).clear).write(Color::BLACK);
+            core::ptr::addr_of_mut!((*p).ao).write(None);
+            core::ptr::addr_of_mut!((*p).stereo).write(None);
+            core::ptr::addr_of_mut!((*p).post).write(None);
+            core::ptr::addr_of_mut!((*p).shadows).write(None);
+            core::ptr::addr_of_mut!((*p).receivers)
+                .write([ShadowPlane::ground(0.0); MAX_RECEIVERS]);
+            core::ptr::addr_of_mut!((*p).n_receivers).write(0);
+            core::ptr::addr_of_mut!((*p).sparks).write(ParticleSystem::new(SPARKS, 0x5EED));
+            core::ptr::addr_of_mut!((*p).splash).write(ParticleSystem::new(SPLASH, 0x5A1A));
+            core::ptr::addr_of_mut!((*p).ripples).write(RippleBuffer::new());
+            core::ptr::addr_of_mut!((*p).splashes).write(0);
+            core::ptr::addr_of_mut!((*p).hero_wade).write(Wader {
+                wet: false,
+                timer: 0.0,
+            });
+            core::ptr::addr_of_mut!((*p).walker).write(None);
+            core::ptr::addr_of_mut!((*p).patrol).write((Vec3::ZERO, Vec3::ZERO));
+            core::ptr::addr_of_mut!((*p).patrol_t).write(0.0);
+            core::ptr::addr_of_mut!((*p).walker_wade).write(Wader {
+                wet: false,
+                timer: 0.0,
+            });
+            core::ptr::addr_of_mut!((*p).pushable).write(None);
+            core::ptr::addr_of_mut!((*p).crate_home).write(Vec3::ZERO);
+            core::ptr::addr_of_mut!((*p).crate_state).write(CrateState::Resting);
+            core::ptr::addr_of_mut!((*p).crate_wade).write(Wader {
+                wet: false,
+                timer: 0.0,
+            });
+            core::ptr::addr_of_mut!((*p).splash_sounds).write((0, Vec3::ZERO));
+            core::ptr::addr_of_mut!((*p).ambience).write(Ambience::new());
+            core::ptr::addr_of_mut!((*p).picked).write((0, Vec3::ZERO));
+            core::ptr::addr_of_mut!((*p).look).write(panel::Look::DEFAULT);
+            core::ptr::addr_of_mut!((*p).frame_dt).write(0.0);
+            core::ptr::addr_of_mut!((*p).dt_since_render).write(0.0);
+            core::ptr::addr_of_mut!((*p).scene_camera).write(Camera3 {
+                eye: Vec3::ZERO,
+                target: Vec3::ZERO,
+                fov_y: 1.0,
+            });
+            core::ptr::addr_of_mut!((*p).scene_yaw).write(0.0);
+            core::ptr::addr_of_mut!((*p).n64).write(cfg!(target_os = "none"));
+            core::ptr::addr_of_mut!((*p).robot_graph).write(GraphBlob::from_id(
+                trino_core::BlobId::from_path("anim/robot"),
+            ));
+            core::ptr::addr_of_mut!((*p).robots).write([None; ROBOTS]);
+            core::ptr::addr_of_mut!((*p).controller).write(None);
+            core::ptr::addr_of_mut!((*p).last_step).write(None);
+            core::ptr::addr_of_mut!((*p).meshes).write([None; MAX_MESHES]);
         }
     }
 
@@ -525,16 +653,42 @@ impl ShowcaseGame {
             // The blob cache stays; the instances start at the next update.
             robot_graph: _,
             robots,
+            controller,
+            last_step,
+            meshes,
         } = self;
         *robots = [None; ROBOTS];
         world.clear();
-        world.spawn_iter(nodes);
+        // The first `character` body (issue #66) is the hero's controller.
+        let mut body = None;
+        for n in nodes {
+            if body.is_none()
+                && let Some(c) = n.character
+            {
+                body = Some((c, n.position()));
+            }
+            if world.spawn(trino_core::Entity::from_node(&n)).is_none() {
+                break;
+            }
+        }
+        let body_at = body.map(|(_, at)| at);
+        *controller = body.map(|(c, at)| {
+            let cfg = c.config(GRAVITY, MAX_FALL);
+            CharacterController::new(cfg, V3::new(at.x, at.y + cfg.half.y, at.z))
+        });
+        *last_step = None;
+        *meshes = [None; MAX_MESHES];
         *hero = world.with_tag("player").next();
-        *spawn = world
-            .find("spawn")
-            .and_then(|id| world.get(id))
-            .map_or(Vec3::ZERO, |e| e.position());
-        *pos = *spawn + Vec3::new(0.0, HERO_HALF.y, 0.0);
+        *spawn = body_at.unwrap_or_else(|| {
+            world
+                .find("spawn")
+                .and_then(|id| world.get(id))
+                .map_or(Vec3::ZERO, |e| e.position())
+        });
+        *pos = match controller {
+            Some(c) => c.pos.into(),
+            None => *spawn + Vec3::new(0.0, HERO_HALF.y, 0.0),
+        };
         *vel = Vec3::ZERO;
         *on_ground = false;
         *coins = 0;
@@ -682,7 +836,129 @@ impl ShowcaseGame {
         self.world.with_tag("coin").count()
     }
 
+    /// The hero's half extents: the controller's body, or the showcase's.
+    fn hero_half(&self) -> Vec3 {
+        self.controller.map_or(HERO_HALF, |c| c.cfg.half.into())
+    }
+
+    /// Walk the hero with the engine's controller and this body even
+    /// without a `character` in the scene (the editor's "Simulate
+    /// controller"); the hero keeps its place.
+    pub fn use_controller(&mut self, c: trino_core::physics::Character) {
+        if self.controller.is_some() {
+            return;
+        }
+        let cfg = c.config(GRAVITY, MAX_FALL);
+        let feet = self.pos - Vec3::new(0.0, HERO_HALF.y, 0.0);
+        self.controller = Some(CharacterController::new(
+            cfg,
+            V3::new(feet.x, feet.y + cfg.half.y, feet.z),
+        ));
+        self.pos = Vec3::new(feet.x, feet.y + cfg.half.y, feet.z);
+    }
+
+    /// Put the hero's feet at `feet`, at rest (tests, the editor's tools).
+    pub fn teleport_hero(&mut self, feet: Vec3) {
+        let half = self.hero_half();
+        let c = Vec3::new(feet.x, feet.y + half.y, feet.z);
+        if let Some(ctl) = self.controller.as_mut() {
+            ctl.teleport(c.into());
+        }
+        self.pos = c;
+        self.vel = Vec3::ZERO;
+    }
+
+    /// The controller and its last step (the editor's debug overlay).
+    pub fn controller_debug(&self) -> Option<(CharacterController<f32>, StepReport<f32>)> {
+        Some((self.controller?, self.last_step?))
+    }
+
+    /// Give the mesh colliders whose blob is `id` (`collision/<model>`)
+    /// their triangles. Returns how many entities use it.
+    pub fn attach_mesh(&mut self, id: u32, blob: &'static [u8]) -> usize {
+        if MeshCollider::parse(blob).is_err() {
+            return 0;
+        }
+        let mut n = 0;
+        for (eid, e) in self.world.iter() {
+            let Some(c) = e.collider.filter(|c| !c.trigger) else {
+                continue;
+            };
+            if let Shape::Mesh { mesh: m, .. } = c.shape
+                && m == id
+                && let Some(slot) = self.meshes.iter_mut().find(|s| s.is_none())
+            {
+                *slot = Some((id, blob, eid));
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// The mesh colliders the scene names but no host attached yet.
+    fn missing_meshes(&self) -> impl Iterator<Item = u32> + '_ {
+        self.world
+            .iter()
+            .filter_map(|(_, e)| match e.collider?.shape {
+                Shape::Mesh { mesh, .. }
+                    if !self.meshes.iter().flatten().any(|(m, _, _)| *m == mesh) =>
+                {
+                    Some(mesh)
+                }
+                _ => None,
+            })
+    }
+
+    /// The hero on the engine's controller: walk, jump, step.
+    fn controller_physics(
+        &mut self,
+        mut ctl: CharacterController<f32>,
+        wish: Vec3,
+        jump: bool,
+        dt: f32,
+    ) {
+        let mut solids = [Solid::new(Aabb::EMPTY, 0); CAPACITY];
+        let n = self.world.level_solids(&mut solids, None);
+        let mut surfaces = [Surface::solid(Box3::new(V3::ZERO, V3::ZERO)); CAPACITY];
+        for (s, out) in solids[..n].iter().zip(surfaces.iter_mut()) {
+            *out = s.into();
+        }
+        ctl.vel.x = wish.x * SPEED;
+        ctl.vel.z = wish.z * SPEED;
+        ctl.jump(jump, JUMP);
+        // The mesh colliders, placed where their entities are now.
+        let mut placed: [Option<MeshInstance<'static>>; MAX_MESHES] = [None; MAX_MESHES];
+        for (out, slot) in placed.iter_mut().zip(&self.meshes) {
+            *out = slot.and_then(|(_, blob, eid)| {
+                let e = self.world.get(eid)?;
+                let layer = e.collider.map_or(1, |c| c.layer);
+                Some(MeshInstance::new(MeshCollider::parse(blob).ok()?, e.matrix).on_layer(layer))
+            });
+        }
+        let mut refs: [&dyn trino_core::physics::MeshQuery<f32>; MAX_MESHES] =
+            [&NO_MESH; MAX_MESHES];
+        let mut n_meshes = 0;
+        for m in placed.iter().flatten() {
+            refs[n_meshes] = m;
+            n_meshes += 1;
+        }
+        let rep = ctl.step(dt, &surfaces[..n], &refs[..n_meshes]);
+        if ctl.pos.y < -10.0 {
+            let half = ctl.cfg.half.y;
+            ctl.teleport(V3::new(self.spawn.x, self.spawn.y + half, self.spawn.z));
+        }
+        self.pos = ctl.pos.into();
+        self.vel = ctl.vel.into();
+        self.on_ground = ctl.on_ground;
+        self.controller = Some(ctl);
+        self.last_step = Some(rep);
+    }
+
     fn physics(&mut self, wish: Vec3, jump: bool, dt: f32) {
+        if let Some(ctl) = self.controller {
+            self.controller_physics(ctl, wish, jump, dt);
+            return;
+        }
         let mut solids = [Aabb::EMPTY; CAPACITY];
         let mut ids = [EntityId::NONE; CAPACITY];
         let n = self.world.solids(&mut solids, Some(&mut ids));
@@ -956,6 +1232,21 @@ impl Game for ShowcaseGame {
         audio: &mut dyn Audio,
         dt: f32,
     ) {
+        // Mesh colliders (issue #66) the host has not attached: their
+        // `collision/<model>` blobs.
+        let mut want = [0u32; MAX_MESHES];
+        let mut n = 0;
+        for id in self.missing_meshes() {
+            if n < want.len() && !want[..n].contains(&id) {
+                want[n] = id;
+                n += 1;
+            }
+        }
+        for &id in &want[..n] {
+            if let Some(blob) = platform.blob(trino_core::BlobId(id)) {
+                self.attach_mesh(id, blob);
+            }
+        }
         let (graph, changed) = self.robot_graph.get(platform);
         if changed {
             self.robots = [None; ROBOTS];
@@ -1057,8 +1348,9 @@ impl Game for ShowcaseGame {
         let listener = Listener::from_camera(&self.camera());
         self.ambience
             .update(audio, &listener, self.world.sound_sources());
+        let half = self.hero_half();
         if let Some(hero) = self.hero.and_then(|h| self.world.get_mut(h)) {
-            let feet = self.pos - Vec3::new(0.0, HERO_HALF.y, 0.0);
+            let feet = self.pos - Vec3::new(0.0, half.y, 0.0);
             // Face the walk direction.
             if len2 > 0.01 {
                 self.facing = atan2(wish.x, wish.z);
@@ -1373,6 +1665,27 @@ trino_game_api::export_game!(ShowcaseGame);
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn write_blank_builds_the_same_game_as_blank() {
+        // The N64's box is filled field by field; it must play like a
+        // `blank()` copy.
+        let mut a = Box::new(ShowcaseGame::blank());
+        let mut b = Box::<ShowcaseGame>::new_uninit();
+        // SAFETY: write_blank initializes every field.
+        let mut b = unsafe {
+            ShowcaseGame::write_blank(b.as_mut_ptr());
+            b.assume_init()
+        };
+        a.reset(Vec2::new(320.0, 240.0));
+        b.reset(Vec2::new(320.0, 240.0));
+        let (ra, rb) = (
+            run_demo(&mut a, |g, i| g.update(i, &mut NullAudio, 1.0 / 60.0)),
+            run_demo(&mut b, |g, i| g.update(i, &mut NullAudio, 1.0 / 60.0)),
+        );
+        assert_eq!(ra, rb);
+        assert_eq!((a.coins, a.pos), (b.coins, b.pos));
+    }
+
     use super::*;
     use trino_core::scene::find;
 

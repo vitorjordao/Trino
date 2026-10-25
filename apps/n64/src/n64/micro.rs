@@ -221,7 +221,23 @@ fn render(r: &mut N64Renderer, set: Set) {
 /// Run every micro scene and print its report. Out of line: its frame is
 /// gone before the caller's next step (64 KB stack).
 #[inline(never)]
-pub fn run(r: &mut N64Renderer, frames: u32) {
+/// Register the micro meshes and draw the flat grid once on the RSP, at
+/// the start of the self-test: its 45 KB flat copy is then cached while
+/// the heap is whole, not allocated after the later steps fragmented the
+/// base N64's 4 MB (GitHub #110, #66). [`run`] keeps what this made.
+#[inline(never)]
+pub fn prewarm(r: &mut N64Renderer) -> bool {
+    if !register_meshes(r) {
+        return false;
+    }
+    let rsp = r.rsp();
+    r.set_rsp(true);
+    render(r, Set::Grid(GRID, Shading::Flat));
+    r.set_rsp(rsp);
+    true
+}
+
+pub fn run(r: &mut N64Renderer, frames: u32, prewarmed: bool) {
     match r.rsp_selftest() {
         Some(c) if c.r > 100 && c.a > 0 => {
             runtime::log(&alloc::format!("TRINO_RSP:test triangle ok {c:?}\n"))
@@ -230,7 +246,7 @@ pub fn run(r: &mut N64Renderer, frames: u32) {
             "TRINO_TEST_FAIL:rsp: the overlay's test triangle did not render ({c:?})\n"
         )),
     }
-    if !register_meshes(r) {
+    if !prewarmed && !register_meshes(r) {
         runtime::log("TRINO_PERF_MICRO: mesh blobs rejected\n");
         return;
     }

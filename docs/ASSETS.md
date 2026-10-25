@@ -345,6 +345,13 @@ data goes into new sections; unknown tags are skipped.
   tracks: the strider's clips 42 → 6 KB), `ik = { pelvis = "hips", left = [hip, knee,
   foot], right = [...] }` (joint names, for foot IK).
 
+- Collision (issue #66, [ADR 0035](adr/0035-physics-2.md)): `collision = "models/x_col.glb"`
+  (a simplified master), `"visual"` (the visual mesh's own triangles) or `"auto-hull"` (its
+  convex hull) bakes the `collision/<name>` blob (`TCOL`: triangles and a BVH) on every
+  target, whatever the model's per-platform variants. A scene collider
+  `Mesh("models/<name>")` uses it; `Caps::max_collision_tris` (N64 4096, 3DS 16 384) bounds
+  a level's total, and `cargo xtask physics check` holds a scene to it.
+
 ## Animation graphs
 
 `assets/anim/<name>.anim.ron` (no manifest entry) bakes to the blob `anim/<name>` on every
@@ -406,6 +413,22 @@ a camera can see, so the CC0 KayKit doorway went from 1068 to 75 triangles.
   [scene-authoring](../.agents/skills/scene-authoring/SKILL.md) skill.
   `cargo xtask scene check` validates them, `scene export` writes one as Rust data,
   `scene budget` reports each console's frame cost.
+- **Collision** (TSCN v7, [ADR 0035](adr/0035-physics-2.md)):
+  - **Colliders.** An entity's `collider: Some((shape: Box(size: (1, 1, 1)), offset: (0,
+    0.5, 0), trigger: false, layer: "world", one_way: false))`.
+    - Shapes: `Auto`, `Box`, `Sphere`, `Capsule`, `Ramp(size: (2, 1, 3), dir: PosZ)` (the
+      top rises toward `dir`) and `Mesh("models/x")`.
+    - `layer` is written bare and names a layer of `assets/physics.ron`; without it the
+      collider is on the default layer.
+    - `one_way` is for boxes only.
+  - **Character.** `character: Some((height: 1.7, radius: 0.3, max_slope_deg: 45.0,
+    step_height: 0.3))` is a player's or an NPC's body for the engine's controller, its
+    origin at the feet.
+  - **Layers.** `assets/physics.ron` is `(version: 1, layers: ["world", "player", ...],
+    ignore: [("enemy", "pickup")])`. It bakes `physics/layers`, and `cargo xtask physics
+    layers` edits it.
+  - **Checking.** `cargo xtask physics check|query` validate and query a scene.
+  - **Example.** `scenes/physics_playground.scene.ron` is the worked example.
 - **Shadows** (scene v7, prefab v5, TSCN v5, [ADR 0025](adr/0025-shadows-per-tier.md)):
   `environment.shadows: Some((tier_max: Map, distance: 40.0, softness: 160, color: (0, 0,
   0, 140), map_size: 0))` (every field defaults, `enabled: false` keeps the tuning) and an

@@ -417,9 +417,17 @@ fn assets_pc_bakes_the_repo_manifest() {
     // Animation graphs (`assets/anim/*.anim.ron`, issue #65): `anim/<name>`.
     let graphs = files("assets/anim", ".anim.ron");
     assert!(graphs >= 2, "the strider's and the robots' graphs");
+    // Collision (issue #66): `collision/<name>` per model with a
+    // `collision` key, and `physics/layers` from `assets/physics.ron`.
+    let manifest = std::fs::read_to_string(root().join("assets/manifest.toml")).unwrap();
+    let collision = manifest
+        .lines()
+        .filter(|l| l.trim_start().starts_with("collision ="))
+        .count()
+        + root().join("assets/physics.ron").exists() as usize;
     assert_eq!(
         count,
-        all + fonts + mix + ui + access + services + graphs,
+        all + fonts + mix + ui + access + services + graphs + collision,
         "every manifest entry is baked"
     );
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
@@ -435,7 +443,12 @@ fn assets_pc_bakes_the_repo_manifest() {
     // are blobs, served like any other blob.
     assert_eq!(
         kind("blob"),
-        declared(&["blobs", "scenes", "particles", "luts"]) + ui + access + services + graphs
+        declared(&["blobs", "scenes", "particles", "luts"])
+            + ui
+            + access
+            + services
+            + graphs
+            + collision
     );
     assert_eq!(
         index.matches("format = \"TLUT\"").count(),

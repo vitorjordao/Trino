@@ -38,6 +38,7 @@ pub mod codegen;
 pub mod i18n;
 pub mod library;
 pub mod material;
+pub mod physics;
 pub mod platform;
 pub mod prefab;
 pub mod resolve;
@@ -779,6 +780,15 @@ impl Environment {
     }
 }
 
+/// The blob a model's collision mesh bakes to: `models/castle` ->
+/// `collision/castle` (`TCOL`, `trino_core::physics::MeshCollider`).
+pub fn collision_blob_path(model: &str) -> String {
+    format!(
+        "collision/{}",
+        model.strip_prefix("models/").unwrap_or(model)
+    )
+}
+
 pub(crate) fn v3(a: [f32; 3]) -> trino_core::Vec3 {
     trino_core::Vec3::new(a[0], a[1], a[2])
 }
@@ -819,6 +829,10 @@ pub struct Entity {
     /// A halo at its position (issue #64): the consoles' bloom.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glow: Option<GlowComponent>,
+    /// A character's body (issue #66): the controller the game builds
+    /// for this spawn point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<CharacterComponent>,
     /// An animation graph that animates its model (issue #65): Play and
     /// the scene player run it with no game code. Not in TSCN or the
     /// exported code yet: a console game drives its graph itself.
@@ -855,6 +869,7 @@ impl Entity {
             vis: None,
             shadow: None,
             glow: None,
+            character: None,
             anim_graph: None,
             platforms: PlatformVariants::default(),
             children: Vec::new(),
@@ -1095,6 +1110,18 @@ pub struct ColliderComponent {
     /// Overlap-only (coins, doors, kill zones) instead of solid.
     #[serde(default, skip_serializing_if = "is_false")]
     pub trigger: bool,
+    /// Its layer, by name (`assets/physics.ron`); the default layer when
+    /// omitted.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::anim::bare",
+        serialize_with = "crate::anim::bare_ser"
+    )]
+    pub layer: Option<String>,
+    /// A platform bodies jump up through and land on (boxes; issue #66).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub one_way: bool,
 }
 
 impl Default for ColliderComponent {
@@ -1103,8 +1130,88 @@ impl Default for ColliderComponent {
             shape: ShapeDef::Auto,
             offset: [0.0; 3],
             trigger: false,
+            layer: None,
+            one_way: false,
         }
     }
+}
+
+/// A character's body (issue #66): a player or NPC spawn the game builds a
+/// `trino_core::physics::CharacterController` for.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CharacterComponent {
+    #[serde(default = "char_height")]
+    pub height: f32,
+    #[serde(default = "char_radius")]
+    pub radius: f32,
+    #[serde(default = "char_slope")]
+    pub max_slope_deg: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub step_height: f32,
+}
+
+fn char_height() -> f32 {
+    trino_core::physics::Character::DEFAULT.height
+}
+
+fn char_radius() -> f32 {
+    trino_core::physics::Character::DEFAULT.radius
+}
+
+fn char_slope() -> f32 {
+    trino_core::physics::Character::DEFAULT.max_slope_deg
+}
+
+impl Default for CharacterComponent {
+    fn default() -> Self {
+        CharacterComponent {
+            height: char_height(),
+            radius: char_radius(),
+            max_slope_deg: char_slope(),
+            step_height: 0.0,
+        }
+    }
+}
+
+impl CharacterComponent {
+    pub fn to_core(&self) -> trino_core::physics::Character {
+        trino_core::physics::Character {
+            radius: self.radius,
+            height: self.height,
+            max_slope_deg: self.max_slope_deg,
+            step_height: self.step_height,
+        }
+    }
+}
+
+/// The side a ramp's top rises toward (local axes).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RampDirDef {
+    #[default]
+    PosX,
+    NegX,
+    PosZ,
+    NegZ,
+}
+
+impl RampDirDef {
+    pub fn to_core(self) -> trino_core::physics::RampDir {
+        use trino_core::physics::RampDir;
+        match self {
+            RampDirDef::PosX => RampDir::PosX,
+            RampDirDef::NegX => RampDir::NegX,
+            RampDirDef::PosZ => RampDir::PosZ,
+            RampDirDef::NegZ => RampDir::NegZ,
+        }
+    }
+
+    pub const ALL: [RampDirDef; 4] = [
+        RampDirDef::PosX,
+        RampDirDef::NegX,
+        RampDirDef::PosZ,
+        RampDirDef::NegZ,
+    ];
 }
 
 fn is_zero3(v: &[f32; 3]) -> bool {
@@ -1164,7 +1271,7 @@ impl SoundComponent {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub enum ShapeDef {
     /// The bounding box of the entity's model (fake objects collide as
     /// their shape's box) — resolved from [`Library::model_bounds`].
@@ -1182,6 +1289,16 @@ pub enum ShapeDef {
         radius: f32,
         height: f32,
     },
+    /// A box (full size) whose top slopes up toward `dir` (issue #66).
+    Ramp {
+        size: [f32; 3],
+        #[serde(default)]
+        dir: RampDirDef,
+    },
+    /// A triangle mesh: the collision of the manifest model at this path
+    /// (`Mesh("models/castle")`; its `collision` key, else its visual
+    /// mesh), baked to the `collision/<name>` blob.
+    Mesh(String),
 }
 
 /// The graph an entity plays (`anim_graph: Some((graph: "anim/strider",

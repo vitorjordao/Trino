@@ -90,7 +90,7 @@ pub fn scene() -> Scene {
             size: [10.0, 1.0, 10.0],
         },
         offset: [0.0, -0.5, 0.0],
-        trigger: false,
+        ..Default::default()
     });
     s.entities.push(ground);
 

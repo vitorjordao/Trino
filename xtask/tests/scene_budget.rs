@@ -556,7 +556,7 @@ fn shadow_casters_are_counted_per_tier_like_the_renderer() {
             size: [20.0, 0.2, 20.0],
         },
         offset: [0.0, -0.1, 0.0],
-        trigger: false,
+        ..Default::default()
     });
     floor.shadow = Some(ShadowComponent {
         cast: ShadowCastDef::None,

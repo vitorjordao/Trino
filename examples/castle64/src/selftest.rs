@@ -121,6 +121,9 @@ pub fn engine_checks(
     particles(renderer, platform)?;
     platform.log("TRINO_STEP:portals\n");
     portals(renderer, platform)?;
+    platform.log("TRINO_STEP:physics\n");
+    let probe = physics(platform)?;
+    log_physics(platform, &probe);
     platform.log("TRINO_STEP:accessibility\n");
     if accessibility(renderer, platform)? {
         platform
@@ -4780,4 +4783,432 @@ mod ui_cost_bench {
             t.elapsed().as_secs_f64() * 1e6 / n as f64
         );
     }
+}
+
+// ---------------------------------------------------------------- physics --
+
+/// The `physics` step's course hashes on the PC (issue #66): every target
+/// must reproduce them bit for bit — the f32 controller (no FMA, the core's
+/// own sqrt) and the fixed-point one.
+pub const PHYSICS_HASH: u32 = 0xba58_1be1;
+pub const PHYSICS_FX_HASH: u32 = 0xffa3_22c7;
+/// Solids in the step's venue (the issue's 500-solid scene).
+pub const VENUE_SOLIDS: usize = 500;
+/// Rays and controller steps the venue times, scanned and gridded.
+pub const VENUE_RAYS: usize = 64;
+pub const VENUE_STEPS: usize = 16;
+
+/// What the `physics` step measured.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PhysicsProbe {
+    pub hash: u32,
+    pub fx_hash: u32,
+    /// The venue: [`VENUE_RAYS`] rays, then [`VENUE_STEPS`] controller
+    /// steps, through a linear scan and through the grid (µs).
+    pub rays_scan_us: u32,
+    pub rays_grid_us: u32,
+    pub steps_scan_us: u32,
+    pub steps_grid_us: u32,
+    /// castle64's hub frame (its camera ray and player step), the same.
+    pub hub_scan_us: u32,
+    pub hub_grid_us: u32,
+    pub hub_solids: u32,
+    /// The `collision/rock` mesh's triangles and where a body dropped on
+    /// it stood (millimetres; 0 without the blob).
+    pub mesh_tris: u32,
+    pub mesh_feet_mm: i32,
+}
+
+fn fnv(h: &mut u32, words: &[u32]) {
+    for w in words {
+        for b in w.to_le_bytes() {
+            *h = (*h ^ b as u32).wrapping_mul(0x0100_0193);
+        }
+    }
+}
+
+/// The course every target drives (no allocation): a 30° ramp to a deck,
+/// a 0.25 m ledge climbed as a step, a one-way deck jumped up through, a
+/// 50° ramp slid off, and a lift carrying the body. Returns the hash of
+/// every position and which of those it did (bits: ramp, step, one-way,
+/// slide, lift).
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn physics_course<S: trino_core::physics::Scalar>() -> (u32, u8) {
+    use trino_core::physics::{Box3, CharacterController, ControllerConfig, RampDir, Surface, V3};
+    let v = |x: f32, y: f32, z: f32| V3::new(S::from_f32(x), S::from_f32(y), S::from_f32(z));
+    let b = |a: V3<S>, c: V3<S>| Box3::new(a, c);
+    let fixed = [
+        Surface::solid(b(v(-20.0, -1.0, -20.0), v(20.0, 0.0, 20.0))),
+        Surface::ramp(b(v(2.0, 0.0, -2.0), v(6.0, 1.5, 2.0)), RampDir::PosX),
+        Surface::solid(b(v(6.0, 0.0, -2.0), v(10.0, 1.5, 2.0))),
+        Surface::solid(b(v(10.0, 1.5, -2.0), v(12.0, 1.75, 2.0))),
+        Surface::one_way(b(v(12.0, 3.0, -2.0), v(16.0, 3.2, 2.0))),
+        Surface::ramp(b(v(-6.0, 0.0, 4.0), v(-3.0, 3.6, 8.0)), RampDir::NegX),
+    ];
+    let cfg = ControllerConfig {
+        step_height: S::from_f32(0.3),
+        snap_down: S::from_f32(0.1),
+        ..ControllerConfig::new(v(0.3, 0.55, 0.3), S::from_int(25), S::from_int(20))
+            .with_max_slope_deg(45.0)
+    };
+    let dt = S::from_f32(1.0 / 60.0);
+    let lift = |f: i32| {
+        // A lift at x -10, rising 0.01 per frame for 100 frames.
+        let y = S::from_f32(0.5) + S::from_int(f.min(100)) * S::from_f32(0.01);
+        let up = V3::new(S::ZERO, y, S::ZERO);
+        b(v(-11.0, 0.0, -1.0) + up, v(-9.0, 0.2, 1.0) + up)
+    };
+    let mut world = [Surface::solid(b(V3::ZERO, V3::ZERO)); 7];
+    world[..6].copy_from_slice(&fixed);
+    let mut h = 0x811c_9dc5u32;
+    let mut did = 0u8;
+    // Five short runs: (start, walk velocity x z, jump frame).
+    type Run = ((f32, f32, f32), (f32, f32), i32);
+    let runs: [Run; 5] = [
+        ((0.0, 0.56, 0.0), (3.0, 0.0), -1),
+        ((8.0, 2.06, 0.0), (3.0, 0.0), -1),
+        ((11.0, 2.31, 0.0), (2.0, 0.0), 5),
+        ((-4.5, 6.0, 6.0), (0.0, 0.0), -1),
+        ((-10.0, 1.26, 0.0), (0.0, 0.0), -1),
+    ];
+    for (k, (at, (vx, vz), jump)) in runs.into_iter().enumerate() {
+        let mut c = CharacterController::new(cfg, v(at.0, at.1, at.2));
+        for f in 0..120i32 {
+            c.vel.x = S::from_f32(vx);
+            c.vel.z = S::from_f32(vz);
+            c.jump(f == jump, S::from_int(9));
+            world[6] = Surface::solid(lift(f));
+            if c.standing_on == Some(6) && (1..=100).contains(&f) {
+                c.carry(V3::new(S::ZERO, S::from_f32(0.01), S::ZERO));
+            }
+            let rep = c.step(dt, &world, &[]);
+            did |= (rep.standing_on == Some(1) && rep.on_ground) as u8
+                | (rep.stepped as u8) << 1
+                | ((rep.standing_on == Some(4)) as u8) << 2
+                | (rep.sliding as u8) << 3
+                | ((rep.standing_on == Some(6) && f > 50) as u8) << 4;
+            let p = c.pos;
+            let bits = |x: S| (x.to_f32()).to_bits();
+            fnv(
+                &mut h,
+                &[
+                    k as u32,
+                    bits(p.x),
+                    bits(p.y),
+                    bits(p.z),
+                    rep.on_ground as u32 | (rep.sliding as u32) << 1 | (rep.stepped as u32) << 2,
+                ],
+            );
+        }
+    }
+    (h, did)
+}
+
+/// A deterministic 500-solid venue (400 × 400 m) on four layers.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn venue(out: &mut [trino_core::physics::Solid; VENUE_SOLIDS]) {
+    use trino_core::Aabb;
+    let mut r = 0x1234_5678u32;
+    let mut next = || {
+        r ^= r << 13;
+        r ^= r >> 17;
+        r ^= r << 5;
+        (r >> 8) as f32 / (1u32 << 24) as f32
+    };
+    for (i, s) in out.iter_mut().enumerate() {
+        let c = Vec3::new(next() * 400.0 - 200.0, next() * 8.0, next() * 400.0 - 200.0);
+        let h = Vec3::new(0.5 + next() * 5.5, 0.5 + next() * 3.5, 0.5 + next() * 5.5);
+        *s = trino_core::physics::Solid::new(Aabb::from_center_half(c, h), 1 << (i % 4));
+    }
+    // A floor under it all, last (so it is not the first hit of a scan).
+    out[VENUE_SOLIDS - 1] = trino_core::physics::Solid::new(
+        Aabb::new(
+            Vec3::new(-210.0, -1.0, -210.0),
+            Vec3::new(210.0, 0.0, 210.0),
+        ),
+        1,
+    );
+}
+
+/// The physics step (issue #66): the controller course on f32 and on fixed
+/// point (hashes pinned to the PC's), the grid answering exactly what a
+/// scan answers on a 500-solid venue (rays and overlaps), the cost of
+/// rays and controller steps there and of castle64's own hub frame, both
+/// ways, triggers, and a body standing on the `collision/rock` mesh.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn physics(platform: &mut dyn Platform) -> Result<PhysicsProbe, &'static str> {
+    use trino_core::physics::{
+        self, CharacterController, LAYER_ALL, MeshCollider, MeshInstance, Solid, StaticWorld,
+        TriggerEvent, TriggerPhase, TriggerTracker, V3, World,
+    };
+    use trino_core::{Aabb, Mat34};
+    let ((hash, did), (fx_hash, fx_did)) =
+        (physics_course::<f32>(), physics_course::<physics::Fx>());
+    let mut p = PhysicsProbe {
+        hash,
+        fx_hash,
+        ..PhysicsProbe::default()
+    };
+    for (d, what) in [(did, "f32"), (fx_did, "fixed-point")] {
+        let _ = what;
+        if d & 1 == 0 {
+            return Err("physics: the course never stood on the 30° ramp");
+        }
+        if d & 2 == 0 {
+            return Err("physics: the course never climbed the step");
+        }
+        if d & 4 == 0 {
+            return Err("physics: the course never landed on the one-way deck");
+        }
+        if d & 8 == 0 {
+            return Err("physics: the course never slid on the 50° ramp");
+        }
+        if d & 16 == 0 {
+            return Err("physics: the course never rode the lift");
+        }
+    }
+    // Say what this target computed before judging it (a mismatch names
+    // the hashes to compare with the PC's).
+    let mut line = TextBuf::<96>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("TRINO_STEP:physics course hash={hash:08x} fx={fx_hash:08x}\n"),
+    );
+    platform.log(line.as_str());
+    if p.hash != PHYSICS_HASH {
+        return Err("physics: the f32 course moved differently from the PC (PHYSICS_HASH)");
+    }
+    if p.fx_hash != PHYSICS_FX_HASH {
+        return Err("physics: the fixed-point course differs from the PC (PHYSICS_FX_HASH)");
+    }
+
+    // The venue: grid == scan, then the cost of each.
+    let mut solids = [Solid::new(Aabb::EMPTY, 0); VENUE_SOLIDS];
+    venue(&mut solids);
+    const CELL: f32 = 24.0;
+    let mut starts = [0u16; 20 * 20];
+    let mut refs = [0u16; 1600];
+    let need = StaticWorld::size(&solids, CELL).ok_or("physics: venue grid size")?;
+    if need.starts > starts.len() || need.refs > refs.len() {
+        return Err("physics: venue grid buffers too small");
+    }
+    let grid = StaticWorld::build(&solids, CELL, &mut starts, &mut refs)
+        .ok_or("physics: venue grid did not build")?;
+    let ray = |i: usize| {
+        let a = i as f32 * 0.37;
+        let o = Vec3::new(sin(a) * 180.0, 2.0 + (i % 5) as f32, cos(a * 1.3) * 180.0);
+        let d = Vec3::new(cos(a * 2.1), -0.05, sin(a * 1.7)).normalized();
+        (o, d)
+    };
+    for i in 0..VENUE_RAYS {
+        let (o, d) = ray(i);
+        let mask = [LAYER_ALL, 1, 6][i % 3];
+        if grid.raycast(o, d, 120.0, mask) != physics::raycast_solids(o, d, 120.0, mask, &solids) {
+            return Err("physics: a grid ray differs from the scan");
+        }
+        let q = Aabb::from_center_half(o, Vec3::new(8.0, 3.0, 8.0));
+        let (mut a, mut b) = ([0u16; 16], [0u16; 16]);
+        let (na, nb) = (
+            grid.overlap_aabb(&q, mask, &mut a),
+            physics::overlap_solids(&q, mask, &solids, &mut b),
+        );
+        if na != nb || a[..na.min(16)] != b[..nb.min(16)] {
+            return Err("physics: a grid overlap differs from the scan");
+        }
+    }
+    let clock = |pl: &dyn Platform| pl.now_micros() as u32;
+    let t0 = clock(platform);
+    let mut sink = 0.0f32;
+    for i in 0..VENUE_RAYS {
+        let (o, d) = ray(i);
+        sink += physics::raycast_solids(o, d, 120.0, LAYER_ALL, &solids).map_or(0.0, |h| h.t);
+    }
+    let t1 = clock(platform);
+    for i in 0..VENUE_RAYS {
+        let (o, d) = ray(i);
+        sink += grid.raycast(o, d, 120.0, LAYER_ALL).map_or(0.0, |h| h.t);
+    }
+    let t2 = clock(platform);
+    p.rays_scan_us = t1.wrapping_sub(t0);
+    p.rays_grid_us = t2.wrapping_sub(t1);
+    // Controller steps: the venue as a scanned list (dynamics) or gridded.
+    let body = physics::ControllerConfig::new(V3::new(0.3, 0.55, 0.3), 25.0, 20.0);
+    let walk = |world: &World, pl: &dyn Platform| {
+        let mut c = CharacterController::new(body, V3::new(3.0, 0.56, 3.0));
+        let t = clock(pl);
+        for k in 0..VENUE_STEPS {
+            c.vel.x = 4.0;
+            c.vel.z = if k % 2 == 0 { 2.0 } else { -2.0 };
+            c.step_world(1.0 / 60.0, world, &[]);
+        }
+        (clock(pl).wrapping_sub(t), c.pos)
+    };
+    let empty: [Solid; 1] = [Solid::new(
+        Aabb::new(Vec3::new(1e4, 1e4, 1e4), Vec3::new(1e4, 1e4, 1e4)),
+        0,
+    )];
+    let (mut es, mut er) = ([0u16; 4], [0u16; 4]);
+    let none = StaticWorld::build(&empty, 64.0, &mut es, &mut er).ok_or("physics: empty grid")?;
+    let (scan_us, scan_pos) = walk(
+        &World {
+            statics: none,
+            dynamics: &solids,
+        },
+        platform,
+    );
+    let (grid_us, grid_pos) = walk(
+        &World {
+            statics: grid,
+            dynamics: &[],
+        },
+        platform,
+    );
+    if scan_pos != grid_pos {
+        return Err("physics: the controller moved differently on the grid");
+    }
+    p.steps_scan_us = scan_us;
+    p.steps_grid_us = grid_us;
+
+    // castle64's hub frame: its ray and its player step, scanned (what the
+    // game does) and with its blocks gridded.
+    let mut game = crate::Castle64Game::new(Vec2::new(320.0, 240.0));
+    game.goto_level(0);
+    let mut hub = [Solid::new(Aabb::EMPTY, 0); 64];
+    let (n_static, n) = game.frame_solids(&mut hub);
+    p.hub_solids = n as u32;
+    let (cfg, pos, target, dir, len) = game.frame_queries();
+    let mut boxes = [Aabb::EMPTY; 64];
+    for (b, s) in boxes.iter_mut().zip(&hub[..n]) {
+        *b = s.aabb;
+    }
+    let (mut hs, mut hr) = ([0u16; 512], [0u16; 1024]);
+    let hub_grid = StaticWorld::build(&hub[..n_static], 8.0, &mut hs, &mut hr)
+        .ok_or("physics: hub grid buffers too small")?;
+    let reps = 32;
+    let t0 = clock(platform);
+    for _ in 0..reps {
+        sink += physics::raycast_distance(target, dir, len, &boxes[..n]);
+        let mut c = CharacterController::new(cfg, pos.into());
+        let mut surf = [physics::Surface::solid(physics::Box3::new(V3::ZERO, V3::ZERO)); 64];
+        for (o, s) in surf.iter_mut().zip(&hub[..n]) {
+            *o = s.into();
+        }
+        c.step(1.0 / 60.0, &surf[..n], &[]);
+        sink += c.pos.y;
+    }
+    let t1 = clock(platform);
+    let hub_world = World {
+        statics: hub_grid,
+        dynamics: &hub[n_static..n],
+    };
+    for _ in 0..reps {
+        sink += hub_world
+            .raycast(target, dir, len, LAYER_ALL)
+            .map_or(len, |h| h.t);
+        let mut c = CharacterController::new(cfg, pos.into());
+        c.step_world(1.0 / 60.0, &hub_world, &[]);
+        sink += c.pos.y;
+    }
+    let t2 = clock(platform);
+    p.hub_scan_us = t1.wrapping_sub(t0) / reps;
+    p.hub_grid_us = t2.wrapping_sub(t1) / reps;
+    if !sink.is_finite() {
+        return Err("physics: the timed queries went wrong");
+    }
+
+    // Triggers: enter, stay, exit, in order.
+    let zones = [Solid::new(
+        Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0)),
+        1,
+    )];
+    let mut tracker = TriggerTracker::<4>::new();
+    let mut ev = [TriggerEvent {
+        body: 0,
+        trigger: 0,
+        phase: TriggerPhase::Stay,
+    }; 4];
+    let mut phases = [TriggerPhase::Stay; 3];
+    for (k, x) in [1.0f32, 1.5, 5.0].iter().enumerate() {
+        tracker.begin_frame();
+        tracker.track(
+            7,
+            &Aabb::from_center_half(Vec3::new(*x, 1.0, 1.0), Vec3::new(0.2, 0.2, 0.2)),
+            &zones,
+            LAYER_ALL,
+        );
+        if tracker.end_frame(&mut ev) != 1 {
+            return Err("physics: a trigger frame reported no event");
+        }
+        phases[k] = ev[0].phase;
+    }
+    if phases != [TriggerPhase::Enter, TriggerPhase::Stay, TriggerPhase::Exit] {
+        return Err("physics: triggers did not enter, stay and exit");
+    }
+
+    // The baked mesh collider (`collision/rock`, every target's bake).
+    if let Some(blob) = platform.blob(BlobId::from_path("collision/rock")) {
+        let mesh =
+            MeshCollider::parse(blob).map_err(|_| "physics: collision/rock does not parse")?;
+        p.mesh_tris = mesh.triangle_count() as u32;
+        let inst = MeshInstance::new(
+            mesh,
+            Mat34::from_rotation_scale_translation(
+                Vec3::ZERO,
+                Vec3::new(5.0, 2.2, 5.0),
+                Vec3::ZERO,
+            ),
+        );
+        let top = inst
+            .raycast(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 20.0)
+            .ok_or("physics: a ray missed the rock")?;
+        let cfg = physics::ControllerConfig::new(V3::new(0.3, 0.55, 0.3), 25.0, 20.0);
+        let mut c = CharacterController::new(cfg, V3::new(0.0, 4.0, 0.0));
+        for _ in 0..120 {
+            c.step(1.0 / 60.0, &[], &[&inst]);
+        }
+        let feet = c.pos.y - 0.55;
+        if !c.on_ground || (feet - (10.0 - top.t)).abs() > 0.05 {
+            return Err("physics: a body did not land on the rock's mesh");
+        }
+        p.mesh_feet_mm = trino_core::math3d::to_i32(feet * 1000.0);
+    } else {
+        return Err("physics: collision/rock blob missing");
+    }
+    Ok(p)
+}
+
+/// `TRINO_STEP:physics …` and the `TRINO_PHYSICS_COST:` line the hosts'
+/// tools read (`cargo xtask test n64` prints it).
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn log_physics(platform: &mut dyn Platform, p: &PhysicsProbe) {
+    let mut line = TextBuf::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:physics hash={:08x} fx={:08x} mesh_tris={} feet_mm={}\n",
+            p.hash, p.fx_hash, p.mesh_tris, p.mesh_feet_mm
+        ),
+    );
+    platform.log(line.as_str());
+    let mut cost = TextBuf::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut cost,
+        format_args!(
+            "TRINO_PHYSICS_COST: solids={} rays={} rays_scan_us={} rays_grid_us={} steps={} \
+             steps_scan_us={} steps_grid_us={} hub_solids={} hub_scan_us={} hub_grid_us={}\n",
+            VENUE_SOLIDS,
+            VENUE_RAYS,
+            p.rays_scan_us,
+            p.rays_grid_us,
+            VENUE_STEPS,
+            p.steps_scan_us,
+            p.steps_grid_us,
+            p.hub_solids,
+            p.hub_scan_us,
+            p.hub_grid_us
+        ),
+    );
+    platform.log(cost.as_str());
 }

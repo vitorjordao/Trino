@@ -1,0 +1,32 @@
+// `cargo xtask physics check` fixture: one of each problem it reports.
+(
+    version: 7,
+    name: "physics_problems",
+    entities: [
+(
+    name: "floor",
+    transform: (pos: (0.0, -0.5, 0.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    collider: Some((shape: Box(size: (10.0, 1.0, 10.0)))),
+),
+(
+    name: "sunk-crate",
+    transform: (pos: (0.0, 0.0, 0.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)))),
+),
+(
+    name: "Entity 3",
+    transform: (pos: (3.0, 1.0, 0.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), trigger: true)),
+),
+(
+    name: "wrong-layer",
+    transform: (pos: (-3.0, 0.5, 0.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), layer: "ghosts")),
+),
+(
+    name: "no-collision-mesh",
+    transform: (pos: (0.0, 0.0, 4.0), rot: (0.0, 0.0, 0.0), scale: (1.0, 1.0, 1.0)),
+    collider: Some((shape: Mesh("models/crate"))),
+),
+    ],
+)

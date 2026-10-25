@@ -164,6 +164,9 @@ texture = "sprites/tex_bricks"
 
 [models.rock]
 file = "models/proxies/rock.prim.ron"
+# Its own triangles as a mesh collider (issue #66: the physics playground's
+# dome): baked to the `collision/rock` blob on every target.
+collision = "visual"
 
 # The river's stepping stones and spring rocks: cheap six-sided slabs.
 [models.stone]

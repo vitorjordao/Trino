@@ -197,6 +197,11 @@ pub struct Caps {
     /// Most 2D draws (fills, sprites, glyphs) one UI screen issues per
     /// frame; strict mode fails a screen past it.
     pub max_ui_draws: u16,
+    /// Most triangles of mesh colliders a level holds (issue #66,
+    /// `trino_core::physics::MeshCollider`): their RAM (about 20 bytes a
+    /// triangle with the BVH) and the walk of a query. `cargo xtask physics
+    /// check` and the editor's budget fail a scene past it.
+    pub max_collision_tris: u32,
 }
 
 /// Why a piece of content does not fit in a target's [`Caps`].
@@ -251,6 +256,7 @@ impl Caps {
         // in ~TBD ms on the console (`TRINO_UI_COST`, the ares self-test).
         max_ui_nodes: 128,
         max_ui_draws: 384,
+        max_collision_tris: 4096,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -299,6 +305,7 @@ impl Caps {
         safe_area: (0, 0),
         max_ui_nodes: 128,
         max_ui_draws: 2048,
+        max_collision_tris: 16_384,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -352,6 +359,7 @@ impl Caps {
         safe_area: (0, 0),
         max_ui_nodes: 512,
         max_ui_draws: 16_384,
+        max_collision_tris: 1_000_000,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -396,6 +404,7 @@ impl Caps {
         safe_area: (0, 0),
         max_ui_nodes: 512,
         max_ui_draws: 16_384,
+        max_collision_tris: 1_000_000,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔

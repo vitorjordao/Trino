@@ -458,6 +458,23 @@ letterbox's bars do not already cover. Touch taps controls like the mouse clicks
 
 Troubleshooting: the [build-web](../.agents/skills/build-web/SKILL.md) skill.
 
+## Physics on each platform (ADR 0035)
+
+Physics is core code: every target runs the same bits.
+
+- **One body shape.** The controller collides as a box everywhere; no tier collides
+  differently.
+- **Proof.** The self-test's `physics` step reproduces the PC's course hashes for `f32`
+  and for fixed point in ares, in Azahar and in the browsers.
+- **Budgets.**
+  - Mesh colliders are bounded by `Caps::max_collision_tris`: 4096 on the N64, 16 384 on
+    the 3DS.
+  - On the N64 a scanned body costs ~9.9 µs per solid per frame (`N64_COST.
+    us_per_collision_solid`).
+  - Past a few dozen solids, put the level in a `StaticWorld` grid: on the 500-solid
+    venue a ray falls from 1.8 ms to 94 µs and a controller step from 749 to 153 µs.
+- **Measuring.** `TRINO_PHYSICS_COST:` in `cargo xtask test n64|3ds` prints both ways.
+
 ## Traces on each platform (ADR 0030)
 
 | Target | Clock | Channel | Record with |

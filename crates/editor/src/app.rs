@@ -295,6 +295,9 @@ pub struct App {
     dock: Option<egui_dock::DockState<Tab>>,
     /// A tab to bring to front on the next frame (Play here -> Game).
     focus_tab: Option<Tab>,
+    /// Play here walks the hero with the engine's character controller and
+    /// draws its debug overlay (issue #66; `TRINO_EDITOR_PHYSICS=sim`).
+    pub simulate_controller: bool,
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
     /// The scene entities' animation graphs (posed in place) and the clock
@@ -725,6 +728,7 @@ impl App {
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
             play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
+            simulate_controller: std::env::var("TRINO_EDITOR_PHYSICS").as_deref() == Ok("sim"),
             graph_play: {
                 let mut g = trino_asset_pipeline::anim_graph::GraphPlayback::new(&root);
                 g.carry = false;
@@ -1123,6 +1127,28 @@ impl App {
                         Level::Ok,
                         format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
                     ),
+                }
+            } else if s == trino_scene::physics::PHYSICS_FILE {
+                // The collision layers (issue #66), edited outside (`cargo
+                // xtask physics layers`, an agent): the Project tab, the
+                // Inspector's layer list and the resolved colliders follow.
+                match text.as_deref().map_or(
+                    Ok(Default::default()),
+                    trino_scene::physics::PhysicsSettings::from_ron,
+                ) {
+                    Ok(settings) => {
+                        if settings != self.lib.physics {
+                            self.lib.physics = settings;
+                            self.mark_lib_changed();
+                            self.log.toast(
+                                Level::Ok,
+                                format!("{} {} reloaded", icon::ARROWS_CLOCKWISE, p.display()),
+                            );
+                        }
+                    }
+                    Err(e) => self
+                        .log
+                        .toast(Level::Error, format!("{}: {e}", p.display())),
                 }
             } else if s.ends_with(".material.ron") || s.ends_with(".prefab.ron") {
                 match self.lib.reload_file(Path::new(""), &p) {
@@ -2284,6 +2310,15 @@ impl App {
                     {
                         self.start_play_here();
                     }
+                    ui.checkbox(
+                        &mut self.simulate_controller,
+                        format!("{}  Simulate controller", icon::PERSON_SIMPLE_WALK),
+                    )
+                    .on_hover_text(
+                        "Play here walks the `player` with the engine's character \
+                         controller (steps, slopes, one-way, mesh colliders) and draws its \
+                         debug overlay: ground normal, step probe, body (TRINO_EDITOR_PHYSICS=sim)",
+                    );
                     if ui
                         .button(format!("{}  Play this scene", icon::CUBE_TRANSPARENT))
                         .clicked()
@@ -2839,7 +2874,14 @@ impl App {
     fn start_play_here(&mut self) {
         let screen = self.game_view.internal_size();
         let target = self.game_view.target();
-        match crate::play::PlaySession::start(&self.doc.scene, &self.lib, target, screen) {
+        match crate::play::PlaySession::start_with(
+            &self.doc.scene,
+            &self.lib,
+            target,
+            screen,
+            &self.project.collision,
+            self.simulate_controller,
+        ) {
             Ok(session) => {
                 self.game_view.play = Some(session);
                 self.focus_tab = Some(Tab::Game);

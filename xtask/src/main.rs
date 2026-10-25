@@ -27,6 +27,7 @@ mod n64;
 mod package;
 mod particles;
 mod perf;
+mod physics;
 mod post;
 mod post_assets;
 mod project;
@@ -566,6 +567,10 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             anim::run(&project.root, &rest)
+        }
+        (Some("physics"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            physics::run(&project.root, &rest)
         }
         (Some("particles"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

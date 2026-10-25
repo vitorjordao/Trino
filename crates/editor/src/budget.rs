@@ -280,6 +280,68 @@ pub fn platform_lines_on(
     out
 }
 
+/// The scene's collision (issue #66) in one HUD line: its solids, one-way
+/// platforms, ramps, triggers and mesh triangles against the console's
+/// `Caps::max_collision_tris`, and the N64 time of a character's frame
+/// (one controller step and the camera ray) scanning them, from the
+/// measured `N64_COST::us_per_collision_solid`. `None` without colliders.
+pub fn collision_line(
+    resolved: &trino_scene::Resolved,
+    project: &crate::project::Project,
+    target: Target,
+) -> Option<(String, Level)> {
+    use trino_core::physics::{Shape, SurfaceKind};
+    let (mut solids, mut one_way, mut ramps, mut triggers, mut tris) = (0, 0, 0, 0, 0usize);
+    for item in &resolved.items {
+        let Some(c) = item.collider else { continue };
+        if c.trigger {
+            triggers += 1;
+        } else if let Shape::Mesh { mesh, .. } = c.shape {
+            tris += project
+                .collision_mesh(mesh)
+                .map_or(0, |m| m.triangle_count());
+        } else if let Some(s) = c.world_solid(&item.matrix) {
+            match s.kind {
+                SurfaceKind::Solid => solids += 1,
+                SurfaceKind::OneWay => one_way += 1,
+                SurfaceKind::Ramp(_) => ramps += 1,
+            }
+        }
+    }
+    if solids + one_way + ramps + triggers + tris == 0 {
+        return None;
+    }
+    let caps = match target.base() {
+        Target::N3ds => Caps::N3DS,
+        Target::Pc => Caps::PC,
+        Target::Web => Caps::WEB,
+        _ => Caps::N64,
+    };
+    let scan_us = (solids + one_way + ramps) as f32 * N64_COST.us_per_collision_solid;
+    let mut line = format!("Collision {solids} solids");
+    if one_way > 0 {
+        line.push_str(&format!(" · {one_way} one-way"));
+    }
+    if ramps > 0 {
+        line.push_str(&format!(" · {ramps} ramps"));
+    }
+    if triggers > 0 {
+        line.push_str(&format!(" · {triggers} triggers"));
+    }
+    if tris > 0 {
+        line.push_str(&format!(" · mesh {tris}/{} tris", caps.max_collision_tris));
+    }
+    line.push_str(&format!(" · N64 ≈{:.2} ms/body", scan_us / 1000.0));
+    let level = if tris as u32 > caps.max_collision_tris {
+        Level::Over
+    } else if scan_us > 2_000.0 {
+        Level::Near
+    } else {
+        Level::Ok
+    };
+    Some((line, level))
+}
+
 /// A console's two hardware tiers side by side (issue #54, ADR 0020): the
 /// Game view's HUD and the Inspector's platform budget show what the scene
 /// costs on the base console and on its expanded tier.

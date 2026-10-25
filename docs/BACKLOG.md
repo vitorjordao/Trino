@@ -287,6 +287,37 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — physics 2.0: a broadphase, shape casts and triggers, the character controller, ramps and mesh colliders, a fixed-point mode (2026-10-25, branch `feat/66-physics`, GitHub #66, ADR 0035)
+
+| Item | Evidence |
+|---|---|
+| Phase 1 — `StaticWorld` grid, `World`, layer masks, `CastShape` casts, `TriggerTracker` | `physics_world.rs` (10: grid = scan on 500 solids for overlaps, rays and casts, short buffers keep the lowest indices; sphere casts against face, edge and corner contacts; capsule and box casts; triggers in order); N64 (ares, both tiers): 64 rays over the 500-solid venue 116 021 → 6 024 µs, 3DS (New and old) 20 375 → 1 089 µs |
+| Phase 2 — `CharacterController<S>`: steps, snap-down, slopes, one-way, moving platforms, coyote time, jump buffering; castle64 on it | `with_options_off_the_controller_is_move_aabb_bit_for_bit` (39 worlds × 900 frames), the slope/step/platform/one-way/coyote tests; castle64's goldens, bot and `perf_budget` unchanged; 16 controller steps on the venue 11 984 → 2 445 µs in ares |
+| Phase 3 — `Ramp` and mesh colliders: `TCOL` + BVH, `MeshInstance`, manifest `collision` (file, `visual`, `auto-hull`), TSCN v7 | `walks_a_mesh_slope_and_stops_at_a_mesh_wall` (a rotated instance), `tcol_blobs_are_validated` (BVH ray = every-triangle ray), the hull and weld tests; the `physics` step stands a body on the baked `collision/rock` in ares and Azahar (feet 1 320 mm, as the PC) |
+| Phase 4 — `Scalar`, `Fx` | `fixed_point_follows_f32_within_tolerance` (≤ 0.1 m within a frame of slack), `fixed_point_is_bit_exact_and_pinned`; the step's hashes `0xba581be1` (f32) and `0xffa322c7` (Fx) in ares (Pak), Azahar (New and old), ares without the Pak and the PC; Solid Eleven's `Fx` matches the engine's bit for bit |
+| Phase 5 — editor gizmos, Project › Physics matrix, Inspector, Simulate controller overlay, the HUD's collision line; `physics check|query|layers`; docs | `physics_layers_inspector_and_play_here_controller`, the layout audit (Project › Physics), `physics_cli.rs` (4); `scenes/physics_playground.scene.ron`; ADR 0035 |
+
+Deviations (ADR 0035): the body collides as a box on every target (capsule → its box); shape casts test
+ramps and one-way boxes as their box and skip meshes; mesh colliders are `f32` only; castle64 keeps its
+own mover carry and every controller option off (steps and slopes are shown in the playground).
+
+Found on the way: the base N64 self-test's heap had ~29 KB of slack over its 128 KB gate, and
+the ~100 KB of new code (`.text` lives in RDRAM) tipped it into GitHub #110's failure: no 45 KB block
+for the micro scenes' flat copy. What fixed it:
+- console `optimize(size)` on the physics code;
+- one compiled `step` per scalar, where a generic had compiled an 8 KB copy per crate and mesh type;
+- an insertion sort instead of `sort_unstable`;
+- `ShowcaseGame::write_blank` and `EntityStore::write_new`, which replace a 44 KB `static` blank
+  the N64 kept all run;
+- and, for #110 itself:
+  - `N64Renderer::trim_buffers` gives the batch buffers back before the micro scenes;
+  - `micro::prewarm` caches their flat copy at the start;
+  - one perf game is boxed first and reused.
+The base self-test now ends with 166 KB free, against main's 157 KB.
+
+Follow-ups: shape casts against meshes; capsule bodies on the PC tier if a game asks; per-cell
+physics for scene streaming (P2 #11); grid buffers in TSCN; real-hardware timings.
+
 ## Done — animation 2.0: graphs, clip events, root motion, compressed clips, foot IK (2026-10-24, branch `feat/65-anim-graph`, GitHub #65, ADR 0034)
 
 | Item | Evidence |

@@ -36,7 +36,7 @@ pub mod selftest;
 use core::fmt::Write as _;
 use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};
 use trino_core::math3d::{atan2, cos, sin};
-use trino_core::physics::{self, Aabb, move_aabb};
+use trino_core::physics::{self, Aabb, Box3, CharacterController, ControllerConfig, Surface, V3};
 use trino_core::shadow::{ShadowCast, ShadowPlane, ShadowSettings};
 use trino_core::{
     AccessBlob, AccessSettings, Audio, BillboardParams, Button, Camera3, CaptionStyle, Captions,
@@ -210,6 +210,11 @@ pub struct Castle64Game {
     coins_taken: [u32; LEVELS.len()],
     enemies: [EnemyState; MAX_ENEMIES],
     standing_mover: Option<usize>,
+    /// The engine's character controller (#66) moves the player: `pos`,
+    /// `vel` and `on_ground` stay the game's (the bot, the HUD and the
+    /// tests read them) and go through it each frame. Every option of it
+    /// is off, so it moves exactly as castle64's own loop did.
+    body: CharacterController<f32>,
     /// Relógio do nível (anima movers/moedas; zera ao trocar de nível).
     level_time: f32,
     /// Fase do ciclo de caminhada (braços/pernas articulados).
@@ -245,6 +250,12 @@ pub const ACH_BOAR_STOMP: AchievementId = AchievementId::new("BOAR_STOMP");
 pub const STAT_COINS: StatId = StatId::new("COINS");
 pub const STAT_STARS: StatId = StatId::new("STARS");
 
+/// The player's body for the engine controller: castle64's box, gravity
+/// and fall cap, 120 substeps a second; no steps, snapping or slopes.
+fn player_body() -> ControllerConfig<f32> {
+    ControllerConfig::new(PLAYER_HALF.into(), GRAVITY, MAX_FALL)
+}
+
 /// Onda triangular 0..1 com período 1.
 fn tri_wave(t: f32) -> f32 {
     let p = t - (t as i32) as f32;
@@ -274,6 +285,7 @@ impl Castle64Game {
             coins_taken: [0; LEVELS.len()],
             enemies: [EnemyState::default(); MAX_ENEMIES],
             standing_mover: None,
+            body: CharacterController::new(player_body(), V3::ZERO),
             level_time: 0.0,
             walk_phase: 0.0,
             screen,
@@ -382,6 +394,37 @@ impl Castle64Game {
         n
     }
 
+    /// This frame's collision as the engine's [`physics::Solid`]s: the
+    /// level's blocks first (static: a game would grid them once per
+    /// level), then the movers and the locked doors (`n_static` returned
+    /// first). The `physics` self-test step times castle64's own queries on
+    /// them, scanned and gridded.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn frame_solids(&self, out: &mut [physics::Solid]) -> (usize, usize) {
+        let mut solids = [EMPTY_SOLID; MAX_SOLIDS];
+        let n = self.build_solids(&mut solids);
+        let blocks = self.cur().blocks.len().min(n);
+        let n = n.min(out.len());
+        for (o, s) in out.iter_mut().zip(&solids[..n]) {
+            *o = physics::Solid::new(s.aabb, physics::LAYER_DEFAULT);
+        }
+        (blocks.min(n), n)
+    }
+
+    /// The player's body and its camera ray this frame (target, direction,
+    /// length): the queries castle64 runs per frame.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn frame_queries(&self) -> (ControllerConfig<f32>, Vec3, Vec3, Vec3, f32) {
+        let target = self.pos + Vec3::new(0.0, 0.9, 0.0);
+        let back = Vec3::new(
+            sin(self.cam_yaw) * CAM_DIST,
+            CAM_HEIGHT,
+            cos(self.cam_yaw) * CAM_DIST,
+        );
+        let want = trino_core::math3d::sqrt(back.dot(back));
+        (player_body(), self.pos, target, back * (1.0 / want), want)
+    }
+
     /// Tell the platform what changed since the last frame: the coin and
     /// star stats (their thresholds unlock `COINS_25` and `ALL_STARS`), the
     /// first coin, star and stomp, the level for presence. Nothing when
@@ -429,6 +472,13 @@ impl Castle64Game {
             font: F_HUD,
             ..OverlayStyle::DEFAULT.with_access(&self.access)
         }
+    }
+
+    /// Hand the game's player state to the controller.
+    fn load_body(&mut self) {
+        self.body.pos = self.pos.into();
+        self.body.vel = self.vel.into();
+        self.body.on_ground = self.on_ground;
     }
 
     fn respawn(&mut self, audio: &mut dyn Audio) {
@@ -576,8 +626,12 @@ impl Game for Castle64Game {
             self.walk_phase += speed * dt * 1.9;
         }
 
-        if self.on_ground && input.just_pressed(&self.prev, Button::A) {
-            self.vel.y = JUMP_VELOCITY;
+        self.load_body();
+        if self
+            .body
+            .jump(input.just_pressed(&self.prev, Button::A), JUMP_VELOCITY)
+        {
+            self.vel = self.body.vel.into();
             self.on_ground = false;
             audio.play_sound(SND_JUMP);
         }
@@ -602,16 +656,16 @@ impl Game for Castle64Game {
         for i in 0..n_solids {
             boxes[i] = solids[i].aabb;
         }
-        let steps = ((dt * 120.0) as i32 + 1).clamp(1, 12);
-        let h = dt / steps as f32;
-        for _ in 0..steps {
-            self.vel.y = (self.vel.y - GRAVITY * h).max(-MAX_FALL);
-            let out = move_aabb(self.pos, PLAYER_HALF, self.vel, h, &boxes[..n_solids]);
-            self.pos = out.pos;
-            self.vel = out.vel;
-            self.on_ground = out.on_ground;
-            self.standing_mover = out.standing_on.and_then(|i| solids[i].mover);
+        let mut surfaces = [Surface::solid(Box3::new(V3::ZERO, V3::ZERO)); MAX_SOLIDS];
+        for i in 0..n_solids {
+            surfaces[i] = Surface::solid(Box3::from_aabb(&boxes[i]));
         }
+        self.load_body();
+        let rep = self.body.step(dt, &surfaces[..n_solids], &[]);
+        self.pos = self.body.pos.into();
+        self.vel = self.body.vel.into();
+        self.on_ground = rep.on_ground;
+        self.standing_mover = rep.standing_on.and_then(|i| solids[i].mover);
 
         // Lava e queda no vazio.
         let feet = Aabb::from_center_half(self.pos, PLAYER_HALF);

@@ -85,6 +85,10 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     });
 
     let impostor_names: Vec<String> = app.lib.impostors.keys().cloned().collect();
+    // Collision (issue #66): the models with a `collision` mesh and the
+    // project's layers.
+    let collision_models: Vec<String> = app.project.collision_models();
+    let layer_names: Vec<String> = app.lib.physics.layers.clone();
     // Animation graphs (issue #65): name, model, states and parameters.
     let graphs: Vec<(String, trino_scene::anim::AnimGraphDef)> =
         trino_scene::anim::graph_files(&app.project.root)
@@ -573,6 +577,7 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
 
     // Collider.
     let mut remove_collider = false;
+    let scale = e.transform.scale;
     if let Some(col) = &mut e.collider {
         let color = if col.trigger { c::TRIGGER } else { c::COLLIDER };
         let has_model = e.model.is_some();
@@ -590,6 +595,8 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         ShapeDef::Box { .. } => "Box",
                         ShapeDef::Sphere { .. } => "Sphere",
                         ShapeDef::Capsule { .. } => "Capsule",
+                        ShapeDef::Ramp { .. } => "Ramp",
+                        ShapeDef::Mesh(_) => "Mesh",
                     };
                     egui::ComboBox::from_id_salt("collider-shape")
                         .selected_text(label)
@@ -609,6 +616,22 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                                         radius: 0.4,
                                         height: 1.8,
                                     },
+                                ),
+                                (
+                                    "Ramp",
+                                    ShapeDef::Ramp {
+                                        size: [2.0, 1.0, 2.0],
+                                        dir: trino_scene::RampDirDef::PosX,
+                                    },
+                                ),
+                                (
+                                    "Mesh",
+                                    ShapeDef::Mesh(
+                                        collision_models
+                                            .first()
+                                            .cloned()
+                                            .unwrap_or_else(|| "models/x".into()),
+                                    ),
                                 ),
                             ];
                             for (name, shape) in options {
@@ -648,6 +671,55 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                             ui.add(egui::DragValue::new(height).speed(0.02).range(0.01..=100.0));
                         });
                     }
+                    ShapeDef::Ramp { size, dir } => {
+                        theme::vec3_row(ui, "Size", size, 0.05, "");
+                        theme::prop(ui, "Rises toward", |ui| {
+                            egui::ComboBox::from_id_salt("ramp-dir")
+                                .selected_text(format!("{dir:?}"))
+                                .show_ui(ui, |ui| {
+                                    for d in trino_scene::RampDirDef::ALL {
+                                        ui.selectable_value(dir, d, format!("{d:?}"));
+                                    }
+                                });
+                        });
+                        // The slope the world sees: the entity's scale too.
+                        let rise = size[1] * scale[1].abs();
+                        let run = match dir {
+                            trino_scene::RampDirDef::PosX | trino_scene::RampDirDef::NegX => {
+                                size[0] * scale[0].abs()
+                            }
+                            _ => size[2] * scale[2].abs(),
+                        };
+                        let deg = rise.atan2(run.max(1e-6)).to_degrees();
+                        ui.label(
+                            RichText::new(format!("{deg:.1}° slope"))
+                                .color(c::TEXT_WEAK)
+                                .small(),
+                        );
+                    }
+                    ShapeDef::Mesh(model) => {
+                        theme::prop(ui, "Collision of", |ui| {
+                            theme::fixed_width(ui, 170.0, |ui| {
+                                egui::ComboBox::from_id_salt("collider-mesh")
+                                    .selected_text(model.as_str())
+                                    .truncate()
+                                    .show_ui(ui, |ui| {
+                                        for m in &collision_models {
+                                            ui.selectable_value(model, m.clone(), m.as_str());
+                                        }
+                                    });
+                            });
+                        });
+                        if !collision_models.contains(model) {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} `{model}` has no `collision` key in the manifest",
+                                    icon::WARNING
+                                ))
+                                .color(c::WARN),
+                            );
+                        }
+                    }
                 }
                 theme::vec3_row(ui, "Offset", &mut col.offset, 0.05, "");
                 theme::prop(ui, "Trigger", |ui| {
@@ -656,6 +728,27 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                                         instead of blocking",
                     );
                 });
+                theme::prop(ui, "Layer", |ui| {
+                    let current = col.layer.clone().unwrap_or_else(|| layer_names[0].clone());
+                    egui::ComboBox::from_id_salt("collider-layer")
+                        .selected_text(current.as_str())
+                        .show_ui(ui, |ui| {
+                            for (i, name) in layer_names.iter().enumerate() {
+                                if ui
+                                    .selectable_label(*name == current, name.as_str())
+                                    .clicked()
+                                {
+                                    col.layer = (i != 0).then(|| name.clone());
+                                }
+                            }
+                        });
+                });
+                if matches!(col.shape, ShapeDef::Box { .. }) {
+                    theme::prop(ui, "One-way", |ui| {
+                        ui.checkbox(&mut col.one_way, "solid from above")
+                            .on_hover_text("Bodies jump up through it and land on it");
+                    });
+                }
                 if ui
                     .small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
                     .clicked()
@@ -667,6 +760,66 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
     }
     if remove_collider {
         e.collider = None;
+    }
+
+    // Character (issue #66): the controller's body for this spawn.
+    let mut remove_character = false;
+    if let Some(ch) = &mut e.character {
+        theme::component(
+            ui,
+            "c-character",
+            icon::PERSON_SIMPLE_WALK,
+            c::CHARACTER,
+            "Character",
+            |ui| {
+                theme::prop(ui, "Height", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut ch.height)
+                            .speed(0.02)
+                            .range(0.1..=10.0),
+                    );
+                });
+                theme::prop(ui, "Radius", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut ch.radius)
+                            .speed(0.01)
+                            .range(0.05..=5.0),
+                    );
+                });
+                theme::prop(ui, "Max slope", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut ch.max_slope_deg)
+                            .speed(0.5)
+                            .range(0.0..=89.0)
+                            .suffix("°"),
+                    );
+                });
+                theme::prop(ui, "Step height", |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut ch.step_height)
+                            .speed(0.01)
+                            .range(0.0..=2.0),
+                    );
+                });
+                ui.label(
+                    RichText::new(
+                        "Collides as a box on every target. Play here walks it with \
+                         the engine controller.",
+                    )
+                    .color(c::TEXT_WEAK)
+                    .small(),
+                );
+                if ui
+                    .small_button(RichText::new(format!("{} Remove", icon::TRASH)).color(c::ERROR))
+                    .clicked()
+                {
+                    remove_character = true;
+                }
+            },
+        );
+    }
+    if remove_character {
+        e.character = None;
     }
 
     // Shadow (ADR 0025).
@@ -924,6 +1077,14 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                         .clicked()
                 {
                     e.collider = Some(trino_scene::ColliderComponent::default());
+                }
+                if e.character.is_none()
+                    && ui
+                        .button(format!("{}  Character", icon::PERSON_SIMPLE_WALK))
+                        .on_hover_text("A player or NPC body for the engine's character controller")
+                        .clicked()
+                {
+                    e.character = Some(trino_scene::CharacterComponent::default());
                 }
                 if e.shadow.is_none()
                     && ui

@@ -150,9 +150,16 @@ platforms: (
         ],
     )),
     // Collision for trino_core::physics. `Some(())` = Auto: the model's box.
-    // Shapes: Box(size: (x, y, z)) (FULL size), Sphere(radius), Capsule(radius, height).
+    // Shapes: Box(size: (x, y, z)) (FULL size), Sphere(radius), Capsule(radius, height),
+    // Ramp(size: (x, y, z), dir: PosX|NegX|PosZ|NegZ) (the top rises toward `dir`),
+    // Mesh("models/x") (that model's `collision` mesh, ADR 0035). `layer: "pickup"`
+    // (written BARE, a name from assets/physics.ron; default layer 0), `one_way: true`
+    // (boxes only: jump up through, land on top).
     collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
 ),
+// A player's or NPC's body for the engine's CharacterController; origin = feet.
+(name: "hero", tags: ["player"],
+ character: Some((height: 1.7, radius: 0.3, max_slope_deg: 45.0, step_height: 0.3))),
 (name: "coin", collider: Some((shape: Sphere(radius: 0.5), trigger: true)), tags: ["coin"]),
 // Shadows (scene v7, prefab v5): cast None|Blob|Mesh|Auto (default Auto: the shape
 // where the tier draws shapes, a `radius` m blob on the N64); `receive: true` makes the
@@ -205,6 +212,23 @@ See `scenes/interior.scene.ron` for a working portal example.
   codegen and TSCN v6 carry it, `draw_nodes` and `EntityStore::draw` draw it.
 - For the consoles: `bake_grading = true` on the scene's manifest entry and `grading` on
   its models; `cargo xtask scene export --platform n64 --bake-grading` for code.
+
+### Collision (issue #66, ADR 0035)
+
+- **The worked example** is `scenes/physics_playground.scene.ron`: a walkable 30° ramp,
+  a 50° one that slides, stairs of 0.25 m steps, a one-way platform, a mesh dome and a
+  trigger on the `pickup` layer.
+- **The prim `ramp`** rises toward +Z, so a `ramp` model wants `Ramp(..., dir: PosZ)`
+  with `offset: (0, 0.5, 0)` (its pivot is the bottom).
+- **Checking without the editor:**
+  - `cargo xtask physics check <scene> [--json]` reports overlapping solids, unnamed
+    triggers (`Entity …`), unknown layers, mesh colliders without a baked `collision`,
+    ramps steeper than any character, and the collision budget per platform;
+  - `cargo xtask physics query <scene> --ray x,y,z dx,dy,dz | --drop x,y,z |
+    --overlap c h | --cast sphere:r from to` asks what the engine answers;
+  - `--drop` settles a character at those feet.
+- **Layers:** `cargo xtask physics layers [add|remove|set a b on|off]` edits
+  `assets/physics.ron`, the same file as the editor's Project › Physics page.
 
 ## Prefab
 

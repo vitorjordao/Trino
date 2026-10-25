@@ -43,6 +43,8 @@ pub struct DrawItem {
     pub receiver: Option<ShadowPlane>,
     /// Its halo (`glow`, issue #64): the consoles' bloom.
     pub glow: Option<trino_core::Glow>,
+    /// Its character body (`character`, issue #66).
+    pub character: Option<trino_core::physics::Character>,
     /// The animation graph it plays (`anim_graph`, issue #65): a player
     /// keeps its instance and sets `params.anim` every frame.
     pub anim_graph: Option<crate::AnimGraphComponent>,
@@ -511,6 +513,7 @@ fn visit(
         vis,
         receiver,
         glow: e.glow.as_ref().map(|g| g.core()),
+        character: e.character.as_ref().map(|c| c.to_core()),
         anim_graph,
         from_prefab,
     });
@@ -575,6 +578,10 @@ fn unscale_collider(ctx: &mut Ctx, name: &str, c: Collider, ratio: Vec3) -> Coll
     let uniform = ratio.x == ratio.y && ratio.y == ratio.z;
     let shape = match c.shape {
         Shape::Box { half } => Shape::Box { half: mul(half) },
+        Shape::Ramp { half, dir } => Shape::Ramp {
+            half: mul(half),
+            dir,
+        },
         Shape::Sphere { radius } if uniform => Shape::Sphere {
             radius: radius * ratio.x,
         },
@@ -615,6 +622,47 @@ fn resolve_collider(
         ),
         crate::ShapeDef::Sphere { radius } => (Shape::Sphere { radius }, offset),
         crate::ShapeDef::Capsule { radius, height } => (Shape::Capsule { radius, height }, offset),
+        crate::ShapeDef::Ramp { size, dir } => (
+            Shape::Ramp {
+                half: Vec3::new(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5),
+                dir: dir.to_core(),
+            },
+            offset,
+        ),
+        crate::ShapeDef::Mesh(ref path) => {
+            let id = trino_core::asset_id(&crate::collision_blob_path(path));
+            match ctx.lib.model_bounds.get(path) {
+                Some((min, max)) => (
+                    Shape::Mesh {
+                        mesh: id,
+                        half: Vec3::new(
+                            (max[0] - min[0]) * 0.5,
+                            (max[1] - min[1]) * 0.5,
+                            (max[2] - min[2]) * 0.5,
+                        ),
+                    },
+                    offset
+                        + Vec3::new(
+                            (max[0] + min[0]) * 0.5,
+                            (max[1] + min[1]) * 0.5,
+                            (max[2] + min[2]) * 0.5,
+                        ),
+                ),
+                None => {
+                    ctx.out.warnings.push(format!(
+                        "{name}: mesh collider `{path}` has no known bounds (is it a \
+                         manifest model?) — its box is 1x1x1 for overlaps"
+                    ));
+                    (
+                        Shape::Mesh {
+                            mesh: id,
+                            half: Vec3::new(0.5, 0.5, 0.5),
+                        },
+                        offset,
+                    )
+                }
+            }
+        }
         crate::ShapeDef::Auto => {
             let bounds = model.and_then(|m| ctx.lib.model_bounds.get(&m.path));
             match bounds {
@@ -648,10 +696,28 @@ fn resolve_collider(
             }
         }
     };
+    let layer = match &c.layer {
+        None => trino_core::physics::LAYER_DEFAULT,
+        Some(l) => ctx.lib.physics.bit(l).unwrap_or_else(|| {
+            ctx.out.warnings.push(format!(
+                "{name}: no collision layer `{l}` in assets/physics.ron (layers: {}) — \
+                 using the default",
+                ctx.lib.physics.layers.join(", ")
+            ));
+            trino_core::physics::LAYER_DEFAULT
+        }),
+    };
+    if c.one_way && !matches!(shape, Shape::Box { .. }) {
+        ctx.out
+            .warnings
+            .push(format!("{name}: only a box collider can be one-way"));
+    }
     Collider {
         shape,
         offset,
         trigger: c.trigger,
+        layer,
+        one_way: c.one_way && matches!(shape, Shape::Box { .. }),
     }
 }
 
@@ -745,6 +811,7 @@ mod tests {
             shape: crate::ShapeDef::Sphere { radius: 0.5 },
             offset: [0.0, 1.0, 0.0],
             trigger: true,
+            ..Default::default()
         });
         let mut c = Entity::new("mystery");
         c.collider = Some(crate::ColliderComponent::default());

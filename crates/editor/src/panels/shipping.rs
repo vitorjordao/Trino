@@ -22,6 +22,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 for (page, name, glyph) in [
                     (Page::Achievements, "Achievements", icon::TROPHY),
                     (Page::Packaging, "Packaging", icon::PACKAGE),
+                    (Page::Physics, "Physics", icon::BOUNDING_BOX),
                 ] {
                     if ui
                         .selectable_label(app.shipping.page == page, format!("{glyph} {name}"))
@@ -35,8 +36,132 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
             match app.shipping.page {
                 Page::Achievements => achievements(app, ui),
                 Page::Packaging => packaging(app, ui),
+                Page::Physics => physics(app, ui),
             }
         });
+}
+
+/// The collision layers (issue #66): names, and the matrix of which pairs
+/// collide — `assets/physics.ron`, written on every change, the same file
+/// `cargo xtask physics layers` prints and sets. The scene's colliders
+/// pick a layer by name in the Inspector.
+fn physics(app: &mut App, ui: &mut egui::Ui) {
+    let root = app.project.root.clone();
+    let mut s = app.lib.physics.clone();
+    let mut changed = false;
+    faint(
+        ui,
+        format!(
+            "{} — up to {} layers; a body collides with the layers checked in its row \
+             (cargo xtask physics layers).",
+            trino_scene::physics::PHYSICS_FILE,
+            trino_scene::physics::MAX_LAYERS
+        ),
+    );
+    ui.add_space(6.0);
+    theme::section_title(ui, icon::STACK, "Layers");
+    let mut remove = None;
+    for (i, name) in s.layers.clone().iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("bit {i}"))
+                    .color(c::TEXT_FAINT)
+                    .monospace(),
+            );
+            let mut edit = name.clone();
+            let r = ui.add(egui::TextEdit::singleline(&mut edit).desired_width(160.0));
+            if r.lost_focus() && edit != *name && !edit.trim().is_empty() {
+                let new = edit.trim().replace(' ', "_");
+                for (a, b) in s.ignore.iter_mut() {
+                    for n in [a, b] {
+                        if n == name {
+                            *n = new.clone();
+                        }
+                    }
+                }
+                s.layers[i] = new;
+                changed = true;
+            }
+            if i == 0 {
+                ui.label(RichText::new("default").color(c::TEXT_FAINT).small());
+            } else if ui
+                .small_button(RichText::new(icon::TRASH).color(c::ERROR))
+                .on_hover_text("Remove the layer (colliders on it fall back to the default)")
+                .clicked()
+            {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        let gone = s.layers.remove(i);
+        s.ignore.retain(|(a, b)| *a != gone && *b != gone);
+        changed = true;
+    }
+    if s.layers.len() < trino_scene::physics::MAX_LAYERS
+        && ui.button(format!("{}  Add layer", icon::PLUS)).clicked()
+    {
+        let mut n = s.layers.len();
+        while s.layers.contains(&format!("layer{n}")) {
+            n += 1;
+        }
+        s.layers.push(format!("layer{n}"));
+        changed = true;
+    }
+    ui.add_space(8.0);
+    theme::section_title(ui, icon::GRID_FOUR, "Matrix");
+    egui::Grid::new("layer-matrix")
+        .striped(true)
+        .spacing(Vec2::new(10.0, 4.0))
+        .show(ui, |ui| {
+            ui.label("");
+            for name in &s.layers {
+                ui.label(RichText::new(name).color(c::TEXT_WEAK).small());
+            }
+            ui.end_row();
+            let layers = s.layers.clone();
+            for (i, a) in layers.iter().enumerate() {
+                ui.label(RichText::new(a).color(c::TEXT_WEAK));
+                for (j, b) in layers.iter().enumerate() {
+                    if j < i {
+                        ui.label("");
+                        continue;
+                    }
+                    let mut on = s.collide(a, b);
+                    let label = format!("{a} × {b}");
+                    let r = ui.add(egui::Checkbox::without_text(&mut on));
+                    r.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &label)
+                    });
+                    if r.on_hover_text(&label).changed() {
+                        s.set_collide(a, b, on);
+                        changed = true;
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    ui.add_space(6.0);
+    let masks = s.masks();
+    faint(
+        ui,
+        s.layers
+            .iter()
+            .zip(&masks)
+            .map(|(l, m)| format!("{l}: mask {m:#06x}"))
+            .collect::<Vec<_>>()
+            .join("   "),
+    );
+    if changed {
+        match s.save(&root) {
+            Ok(()) => {
+                app.lib.physics = s;
+                app.log
+                    .info(format!("wrote {}", trino_scene::physics::PHYSICS_FILE));
+            }
+            Err(e) => app.log.error(e),
+        }
+    }
 }
 
 fn faint(ui: &mut egui::Ui, text: impl Into<String>) {

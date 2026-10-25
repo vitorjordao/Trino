@@ -26,6 +26,7 @@ pub mod anim_graph;
 pub mod ao;
 pub mod audio;
 pub mod bake;
+pub mod collision;
 pub mod font;
 pub mod groups;
 pub mod i18n;

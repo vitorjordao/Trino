@@ -21,6 +21,15 @@
 use crate::math::Vec3;
 use crate::math3d::Mat34;
 
+mod controller;
+mod mesh;
+pub mod scalar;
+mod world;
+pub use controller::*;
+pub use mesh::*;
+pub use scalar::{Box3, Fx, MeshQuery, MeshSupport, Scalar, V3};
+pub use world::*;
+
 /// Axis-aligned box in world space (Y-up).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Aabb {
@@ -117,16 +126,36 @@ pub enum Shape {
         radius: f32,
         height: f32,
     },
+    /// A box (half extents) whose top slopes from its bottom on one side
+    /// to its top toward `dir` (local axes; a turned entity turns it).
+    Ramp {
+        half: Vec3,
+        dir: RampDir,
+    },
+    /// A triangle mesh: the `TCOL` blob `mesh` (`collision/<model>`, from
+    /// the manifest's `collision` key; [`MeshCollider`]) under the
+    /// entity's matrix, whose local bounds are `half` around `offset`.
+    Mesh {
+        mesh: u32,
+        half: Vec3,
+    },
 }
 
 /// A scene entity's collider: solid geometry, or a **trigger** (overlap
-/// queries only — coins, doors, kill zones, level exits).
+/// queries only — coins, doors, kill zones, level exits). `layer` is its
+/// layer bit (`assets/physics.ron` names them); `one_way` makes a box a
+/// platform bodies jump up through.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Collider {
     pub shape: Shape,
     pub offset: Vec3,
     pub trigger: bool,
+    pub layer: u16,
+    pub one_way: bool,
 }
+
+/// The layer every collider is on unless its scene says otherwise.
+pub const LAYER_DEFAULT: u16 = 1;
 
 impl Collider {
     pub const fn solid_box(half: Vec3) -> Self {
@@ -134,13 +163,15 @@ impl Collider {
             shape: Shape::Box { half },
             offset: Vec3::ZERO,
             trigger: false,
+            layer: LAYER_DEFAULT,
+            one_way: false,
         }
     }
 
     /// The shape's local bounding box.
     pub fn local_aabb(&self) -> Aabb {
         let half = match self.shape {
-            Shape::Box { half } => half,
+            Shape::Box { half } | Shape::Ramp { half, .. } | Shape::Mesh { half, .. } => half,
             Shape::Sphere { radius } => Vec3::new(radius, radius, radius),
             Shape::Capsule { radius, height } => {
                 Vec3::new(radius, (height * 0.5).max(radius), radius)
@@ -152,6 +183,56 @@ impl Collider {
     /// World box under the entity's world matrix.
     pub fn world_aabb(&self, world: &Mat34) -> Aabb {
         self.local_aabb().transformed(world)
+    }
+
+    /// The [`Solid`] this collider is in the world (box, one-way box or
+    /// ramp, its slope turned with the entity), or `None` for a mesh (a
+    /// [`MeshInstance`] of its blob) or a trigger.
+    pub fn world_solid(&self, world: &Mat34) -> Option<Solid> {
+        if self.trigger {
+            return None;
+        }
+        let aabb = self.world_aabb(world);
+        let kind = match self.shape {
+            Shape::Mesh { .. } => return None,
+            Shape::Ramp { dir, .. } => SurfaceKind::Ramp(turn_ramp(dir, world)),
+            _ if self.one_way => SurfaceKind::OneWay,
+            _ => SurfaceKind::Solid,
+        };
+        Some(Solid {
+            aabb,
+            layer: self.layer,
+            kind,
+        })
+    }
+
+    /// The trigger volume of a trigger collider.
+    pub fn world_trigger(&self, world: &Mat34) -> Option<Solid> {
+        self.trigger
+            .then(|| Solid::new(self.world_aabb(world), self.layer))
+    }
+}
+
+/// A local ramp direction under `m`: the world axis it ends up nearest
+/// (exact for the quarter turns ramps are placed at).
+pub fn turn_ramp(dir: RampDir, m: &Mat34) -> RampDir {
+    let local = match dir {
+        RampDir::PosX => Vec3::new(1.0, 0.0, 0.0),
+        RampDir::NegX => Vec3::new(-1.0, 0.0, 0.0),
+        RampDir::PosZ => Vec3::new(0.0, 0.0, 1.0),
+        RampDir::NegZ => Vec3::new(0.0, 0.0, -1.0),
+    };
+    let w = m.transform_dir(local);
+    if w.x.abs() >= w.z.abs() {
+        if w.x >= 0.0 {
+            RampDir::PosX
+        } else {
+            RampDir::NegX
+        }
+    } else if w.z >= 0.0 {
+        RampDir::PosZ
+    } else {
+        RampDir::NegZ
     }
 }
 
@@ -279,56 +360,58 @@ pub struct RayHit {
     pub normal: Vec3,
 }
 
+/// Slab test of one box: the entry distance and face normal when the ray
+/// `origin + dir * t` enters `b` within `0 <= t <= limit` (zero normal when
+/// it starts inside).
+pub(crate) fn ray_box(origin: Vec3, dir: Vec3, limit: f32, b: &Aabb) -> Option<(f32, Vec3)> {
+    let mut t_enter = 0.0f32;
+    let mut t_exit = limit;
+    let mut normal = Vec3::ZERO;
+    for axis in 0..3 {
+        let (o, d, min, max) = match axis {
+            0 => (origin.x, dir.x, b.min.x, b.max.x),
+            1 => (origin.y, dir.y, b.min.y, b.max.y),
+            _ => (origin.z, dir.z, b.min.z, b.max.z),
+        };
+        if d.abs() < 1e-6 {
+            if o < min || o > max {
+                return None;
+            }
+            continue;
+        }
+        let (mut t0, mut t1) = ((min - o) / d, (max - o) / d);
+        // Entering through the min face means the normal points -axis.
+        let mut sign = -1.0;
+        if t0 > t1 {
+            core::mem::swap(&mut t0, &mut t1);
+            sign = 1.0;
+        }
+        if t0 > t_enter {
+            t_enter = t0;
+            normal = match axis {
+                0 => Vec3::new(sign, 0.0, 0.0),
+                1 => Vec3::new(0.0, sign, 0.0),
+                _ => Vec3::new(0.0, 0.0, sign),
+            };
+        }
+        t_exit = t_exit.min(t1);
+        if t_enter > t_exit {
+            return None;
+        }
+    }
+    (t_enter <= limit).then_some((t_enter.max(0.0), normal))
+}
+
 /// Nearest hit of `origin + dir * t` (`dir` normalized, `0 <= t <= max_t`)
-/// against `boxes` (slab method).
+/// against `boxes` (slab method). Ties go to the lowest index.
 pub fn raycast(origin: Vec3, dir: Vec3, max_t: f32, boxes: &[Aabb]) -> Option<RayHit> {
     let mut best: Option<RayHit> = None;
     for (index, b) in boxes.iter().enumerate() {
         let limit = best.map_or(max_t, |h| h.t);
-        let mut t_enter = 0.0f32;
-        let mut t_exit = limit;
-        let mut normal = Vec3::ZERO;
-        let mut hit = true;
-        for axis in 0..3 {
-            let (o, d, min, max) = match axis {
-                0 => (origin.x, dir.x, b.min.x, b.max.x),
-                1 => (origin.y, dir.y, b.min.y, b.max.y),
-                _ => (origin.z, dir.z, b.min.z, b.max.z),
-            };
-            if d.abs() < 1e-6 {
-                if o < min || o > max {
-                    hit = false;
-                    break;
-                }
-                continue;
-            }
-            let (mut t0, mut t1) = ((min - o) / d, (max - o) / d);
-            // Entering through the min face means the normal points -axis.
-            let mut sign = -1.0;
-            if t0 > t1 {
-                core::mem::swap(&mut t0, &mut t1);
-                sign = 1.0;
-            }
-            if t0 > t_enter {
-                t_enter = t0;
-                normal = match axis {
-                    0 => Vec3::new(sign, 0.0, 0.0),
-                    1 => Vec3::new(0.0, sign, 0.0),
-                    _ => Vec3::new(0.0, 0.0, sign),
-                };
-            }
-            t_exit = t_exit.min(t1);
-            if t_enter > t_exit {
-                hit = false;
-                break;
-            }
-        }
-        if hit && best.is_none_or(|h| t_enter < h.t) && t_enter <= max_t {
-            best = Some(RayHit {
-                t: t_enter.max(0.0),
-                index,
-                normal,
-            });
+        if let Some((t, normal)) = ray_box(origin, dir, limit, b)
+            && best.is_none_or(|h| t < h.t)
+        {
+            best = Some(RayHit { t, index, normal });
         }
     }
     best
@@ -495,7 +578,7 @@ mod tests {
                 height: 2.0,
             },
             offset: Vec3::new(0.0, 1.0, 0.0),
-            trigger: false,
+            ..Collider::solid_box(Vec3::ONE)
         };
         let m = Mat34::from_rotation_scale_translation(
             Vec3::ZERO,
@@ -519,8 +602,8 @@ mod tests {
         );
         let s = Collider {
             shape: Shape::Sphere { radius: 1.0 },
-            offset: Vec3::ZERO,
             trigger: true,
+            ..Collider::solid_box(Vec3::ONE)
         };
         assert_eq!(s.local_aabb().half(), Vec3::ONE);
     }

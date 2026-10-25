@@ -1,0 +1,8 @@
+// Collision layers (issue #66): bit 0 first; `ignore` lists the pairs
+// that pass through each other. The editor's Project › Physics tab and
+// `cargo xtask physics layers` edit this file.
+(
+    version: 1,
+    layers: ["world", "player", "enemy", "pickup"],
+    ignore: [("enemy", "pickup")],
+)

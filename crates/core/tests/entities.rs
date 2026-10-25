@@ -37,6 +37,7 @@ const fn at(name: &'static str, tags: &'static [&'static str], x: f32) -> SceneN
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     }
 }
 
@@ -54,6 +55,8 @@ const NODES: &[SceneNode] = &[
             },
             offset: Vec3::ZERO,
             trigger: true,
+            layer: trino_core::physics::LAYER_DEFAULT,
+            one_way: false,
         }),
         model: None,
         ..at("level/coin", &["coin"], 3.0)

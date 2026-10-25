@@ -161,18 +161,18 @@ mod n64 {
     // overflow corrupted memory and hung the ROM at random points. Each
     // step still runs out of line; `check_stack` guards the limit.
 
-    /// An empty showcase game, copied from ROM into its box: never on the
-    /// stack (`b.write(ShowcaseGame::with_screen(..))` still built it there
-    /// first, 63.5 KB of the 64). The steps reset it in place.
-    static BLANK_SHOWCASE: showcase::ShowcaseGame = showcase::ShowcaseGame::blank();
-
+    /// An empty showcase game, written field by field into its box: never
+    /// on the stack (`b.write(ShowcaseGame::with_screen(..))` still built it
+    /// there first, 63.5 KB of the 64), and no 44 KB `static` blank to copy
+    /// from (issue #66 gave that RDRAM back to the base N64's heap). The
+    /// steps reset it in place.
     #[inline(never)]
     fn boxed_showcase() -> alloc::boxed::Box<showcase::ShowcaseGame> {
         let mut b = alloc::boxed::Box::<showcase::ShowcaseGame>::new_uninit();
-        // SAFETY: a bitwise copy of a valid value with no `Drop`, into
-        // memory sized and aligned for it.
+        // SAFETY: `write_blank` initializes every field of the box's
+        // memory, sized and aligned for it.
         unsafe {
-            core::ptr::copy_nonoverlapping(&BLANK_SHOWCASE, b.as_mut_ptr(), 1);
+            showcase::ShowcaseGame::write_blank(b.as_mut_ptr());
             b.assume_init()
         }
     }
@@ -394,18 +394,22 @@ mod n64 {
 
     /// The hub perf scene's first frame, dumped for the second golden.
     #[inline(never)]
-    fn castle64_golden(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+    fn castle64_golden(
+        renderer: &mut N64Renderer,
+        audio: &mut N64Audio,
+        g: &mut castle64::Castle64Game,
+    ) {
         // The RSP T&L path against the CPU path on a real frame: the hub
         // drawn both ways, 40x30 samples. Different cells mean the two
         // paths disagree (depth ties, lighting, a dropped mesh).
         let mut maps = alloc::vec![[[0u8; 40]; 30]; 2];
         for (k, rsp) in [false, true].into_iter().enumerate() {
             renderer.set_rsp(rsp);
-            let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
+            *g = castle64::perf::scene_game(
                 &castle64::perf::SCENES[0],
                 Vec2::new(320.0, 240.0),
                 audio,
-            ));
+            );
             g.render(renderer);
             for y in 0..30u32 {
                 for x in 0..40u32 {
@@ -442,11 +446,7 @@ mod n64 {
         }
         renderer.set_rsp(true);
         runtime::log("TRINO_STEP:castle64 golden frame\n");
-        let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
-            &castle64::perf::SCENES[0],
-            Vec2::new(320.0, 240.0),
-            audio,
-        ));
+        *g = castle64::perf::scene_game(&castle64::perf::SCENES[0], Vec2::new(320.0, 240.0), audio);
         g.render(renderer);
         renderer.dump_framebuffer();
     }
@@ -599,6 +599,18 @@ mod n64 {
     ) -> ! {
         const DT: f32 = 1.0 / 60.0;
         runtime::watchdog_start();
+        // The micro scenes' big flat copy, cached first (GitHub #110).
+        let micro_ready = micro::prewarm(renderer);
+        // One castle64 game for every perf scene and golden below, boxed
+        // first, while the heap is whole: a fresh 45 KB box per scene found
+        // no block left on the base N64 once the later steps fragmented
+        // the heap (issue #66). Dropped before the micro scenes, so their
+        // growing batch buffers find that block free.
+        let mut perf_game = alloc::boxed::Box::new(castle64::perf::scene_game(
+            &castle64::perf::SCENES[0],
+            Vec2::new(320.0, 240.0),
+            audio,
+        ));
         // 0) Engine services through the portable traits (text, blobs, save).
         if let Err(e) = castle64::selftest::engine_checks(renderer, platform) {
             runtime::log(&format!("TRINO_TEST_FAIL:engine: {e}\n"));
@@ -640,6 +652,7 @@ mod n64 {
         showcase_baked(&mut showcase, renderer, audio, platform);
         showcase_golden(&mut showcase, renderer);
         drop(showcase);
+
         if !check_stack("the showcase steps") {
             loop {
                 trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
@@ -767,11 +780,9 @@ mod n64 {
                     for (prefix, rsp) in [("", true), ("cpu-", false)] {
                         renderer.set_rsp(rsp);
                         for scene in castle64::perf::SCENES {
-                            let mut g = alloc::boxed::Box::new(castle64::perf::scene_game(
-                                scene,
-                                Vec2::new(320.0, 240.0),
-                                audio,
-                            ));
+                            *perf_game =
+                                castle64::perf::scene_game(scene, Vec2::new(320.0, 240.0), audio);
+                            let g: &mut castle64::Castle64Game = &mut perf_game;
                             let mut times = trino_core::perf::FrameTimes::default();
                             let v0 = runtime::vblanks();
                             trino_core::trace::restart();
@@ -809,11 +820,20 @@ mod n64 {
                     force_render.set(false);
                     // A second emulator golden: castle64's hub through the
                     // RSP T&L path (`tests/golden/n64/castle64_hub.png`).
-                    castle64_golden(renderer, audio);
+                    castle64_golden(renderer, audio, &mut perf_game);
+                    drop(perf_game);
                     // 6) Fixed costs of the T&L (synthetic draw sets,
                     // ungated): after the castle64 scenes, so their camera
                     // and light cannot leak into those.
-                    micro::run(renderer, castle64::perf::MEASURE_FRAMES);
+                    // The perf scenes' frames grew the batch buffers: give
+                    // them back so the micro scenes' flat copies find a
+                    // block (GitHub #110).
+                    renderer.trim_buffers();
+                    let (used, total) = runtime::heap();
+                    runtime::log(&format!(
+                        "TRINO_HEAP:{used}/{total} before the micro scenes\n"
+                    ));
+                    micro::run(renderer, castle64::perf::MEASURE_FRAMES, micro_ready);
                     // 7) Water (ADR 0015): the showcase's river under its
                     // scene camera, the hero wading in (gated like the
                     // castle64 scenes; the river's own line is `models/river`).

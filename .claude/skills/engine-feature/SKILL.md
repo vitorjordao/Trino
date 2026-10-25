@@ -384,3 +384,49 @@ again?* Then write it down:
 
 Each skill states facts verified in this repository, with the command that proves
 them. If a skill turns out wrong, fix it in the same session.
+
+## Physics (#66, ADR 0035)
+
+`trino_core::physics` is core-only, so no backend code is needed. The facts below are
+verified by `crates/core/tests/physics_{world,controller}.rs` and the self-test's
+`physics` step.
+
+- **Every grid query equals its scan reference** (`overlap_solids`, `raycast_solids`,
+  `shape_cast_solids`):
+  - ties go to the lowest index;
+  - a short output buffer keeps the lowest indices;
+  - a new query on `StaticWorld` gets the same equality test on the 500-solid venue.
+- **`CharacterController` with every option off is `move_aabb` bit for bit**
+  (`with_options_off_the_controller_is_move_aabb_bit_for_bit`). That is what moved
+  castle64 onto it with no golden or perf counter moving:
+  - keep the `Solid` arm of `move_body` op-for-op;
+  - put a new behaviour behind an option that is off by default.
+- **Meshes reach the controller as `&[&dyn MeshQuery<S>]`, never as a generic parameter.**
+  A generic `M` compiled one 8 KB `step` per mesh type. Three of those, plus the rest of
+  the physics code (~86 KB of `.text`, which lives in RDRAM), cost the base N64's
+  self-test its last 44 KB block: `memory allocation of 44200 bytes failed` at the
+  water perf scene's `ShowcaseGame` box.
+- **The base N64 heap is at the edge.** Check new game-state fields and new code size
+  against the base tier (`cargo xtask test n64 --expansion-pak off`), not only the
+  default Pak run.
+  - The gate is `check_heap`: 128 KB free after the perf scenes. Main had ~157 KB free
+    on 2026-10-25.
+  - Compare `TRINO_MEM: … heap_total=` with main's CI log (`gh run view --job <n64 job>
+    --log`).
+  - Diff the symbol sizes with a main build: `git worktree add ../main-x origin/main`,
+    `cargo xtask build n64 --selftest`, then `mips64-elf-nm -S --size-sort -C` in the
+    `trino-n64` image.
+  - Levers that worked:
+    - console `#[cfg_attr(any(target_os = "none", target_os = "horizon"),
+      optimize(size))]` on cold code;
+    - concrete trait impls instead of generics shared by several crates;
+    - no `sort_unstable` on small buffers;
+    - no big `static` templates (`ShowcaseGame::write_blank`).
+- **Generic over `Scalar` (`f32` / `Fx`)**: only the instantiations a game uses are
+  compiled, so castle64 pays for `f32` only.
+  - Range: Fx products must fit in ±32 767, so keep fixed-point levels small or scaled.
+  - The course hashes are pinned in `castle64::selftest::{PHYSICS_HASH,
+    PHYSICS_FX_HASH}`, and ares, Azahar (New and old) and the PC reproduce them.
+  - The f32 path is cross-target exact because Rust never contracts to FMA and the
+    core's `sqrt` is bit-defined. Never call `f32::sqrt` or `mul_add` in physics.
+

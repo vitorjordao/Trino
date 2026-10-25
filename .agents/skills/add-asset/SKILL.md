@@ -70,7 +70,16 @@ anim_fps = 20               # optional: clip sampling rate (default 15)
 platforms = ["pc"]          # optional: bake only for these (pc, n64, 3ds); default all
 once = ["wave"]             # optional: clips that play once (default: loop)
 ao = { strength = 0.8, ground = true }   # optional: bake ambient occlusion (below)
+collision = "visual"        # optional: its triangles as a mesh collider (or "auto-hull",
+                            # or a simplified master "models/robot_col.glb"), issue #66
 ```
+
+- **Collision** (`collision`, ADR 0035) bakes the `collision/<name>` blob (`TCOL`: welded
+  triangles and a BVH) on **every** target, whatever `platforms` says, because collision
+  is gameplay. Scenes use it as `collider: Some((shape: Mesh("models/<name>")))`.
+  - Budget: `Caps::max_collision_tris` (N64 4096, 3DS 16 384). `cargo xtask physics
+    check` counts it.
+  - `auto-hull` refuses a flat mesh. Use `"visual"` there.
 
 - **Colors**: by default the color is baked into the vertices, from COLOR_0, else the
   base-color texture sampled at the vertex UV, else the base-color factor.

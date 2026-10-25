@@ -31,6 +31,7 @@ const fn marker(x: f32, y: f32, z: f32) -> SceneNode {
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     }
 }
 

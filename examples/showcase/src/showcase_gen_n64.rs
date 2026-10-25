@@ -9,6 +9,8 @@ use trino_core::{
     StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,
     PostSettings, Tonemap, Bloom, LutId,
 };
+#[allow(unused_imports)]
+use trino_core::physics::{Character, RampDir};
 
 pub const CLEAR: Color = Color::rgb(132, 178, 226);
 pub const CAMERA: Camera3 = Camera3 {
@@ -65,6 +67,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-0-0-4",
@@ -94,6 +97,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-4-0-2",
@@ -123,6 +127,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-6-0-2",
@@ -152,6 +157,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-8-0-2",
@@ -181,6 +187,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-10-0-2",
@@ -210,6 +217,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-0-2",
@@ -239,6 +247,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-14-0-2",
@@ -268,6 +277,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-0-4",
@@ -297,6 +307,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-4-2-2",
@@ -326,6 +337,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-6-2-2",
@@ -355,6 +367,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-8-2-2",
@@ -384,6 +397,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-10-2-1",
@@ -413,6 +427,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-11-2-1",
@@ -442,6 +457,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-2-2",
@@ -471,6 +487,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-14-2-2",
@@ -500,6 +517,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-10-3-1",
@@ -529,6 +547,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-11-3-1",
@@ -558,6 +577,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-0-4-4",
@@ -587,6 +607,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-4-4-4",
@@ -616,6 +637,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-8-4-4",
@@ -645,6 +667,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-4-2",
@@ -674,6 +697,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-14-4-1",
@@ -703,6 +727,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-15-4-1",
@@ -732,6 +757,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-4-2",
@@ -761,6 +787,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-18-4-2",
@@ -790,6 +817,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-14-5-1",
@@ -819,6 +847,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-15-5-1",
@@ -848,6 +877,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-6-2",
@@ -877,6 +907,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-14-6-2",
@@ -906,6 +937,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-6-1",
@@ -935,6 +967,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-17-6-1",
@@ -964,6 +997,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-18-6-2",
@@ -993,6 +1027,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-7-1",
@@ -1022,6 +1057,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-17-7-1",
@@ -1051,6 +1087,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-0-8-4",
@@ -1080,6 +1117,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-4-8-4",
@@ -1109,6 +1147,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-8-8-4",
@@ -1138,6 +1177,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-8-4",
@@ -1167,6 +1207,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-8-2",
@@ -1196,6 +1237,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-18-8-2",
@@ -1225,6 +1267,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-10-2",
@@ -1254,6 +1297,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-18-10-2",
@@ -1283,6 +1327,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-0-12-4",
@@ -1312,6 +1357,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-4-12-4",
@@ -1341,6 +1387,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-8-12-4",
@@ -1370,6 +1417,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-12-4",
@@ -1399,6 +1447,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-12-4",
@@ -1428,6 +1477,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-0-16-4",
@@ -1457,6 +1507,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-4-16-4",
@@ -1486,6 +1537,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-8-16-4",
@@ -1515,6 +1567,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-12-16-4",
@@ -1544,6 +1597,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ground/tile-16-16-4",
@@ -1573,6 +1627,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river",
@@ -1602,6 +1657,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river/piece-0-8",
@@ -1631,6 +1687,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river/piece-8-12",
@@ -1660,6 +1717,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river/piece-12-13",
@@ -1689,6 +1747,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river/piece-13-14",
@@ -1718,6 +1777,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river/piece-14-15",
@@ -1747,6 +1807,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "river/piece-15-16",
@@ -1776,6 +1837,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "bridge",
@@ -1805,6 +1867,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "murmur-west",
@@ -1834,6 +1897,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "murmur-east",
@@ -1863,6 +1927,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "loose-crate",
@@ -1890,12 +1955,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.5, 0.5, 0.5) },
             offset: Vec3::new(0.0, 0.5, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "stepping-stones",
@@ -1925,6 +1993,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "stepping-stones/stone-1",
@@ -1954,6 +2023,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "stepping-stones/stone-2",
@@ -1983,6 +2053,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "stepping-stones/stone-3",
@@ -2012,6 +2083,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "stepping-stones/stone-4",
@@ -2041,6 +2113,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "spring",
@@ -2070,6 +2143,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "spring/spring-rock-1",
@@ -2097,12 +2171,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.6, 0.3, 0.5196153) },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "spring/spring-rock-2",
@@ -2130,12 +2207,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.6, 0.3, 0.5196153) },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "spring/spring-rock-3",
@@ -2163,12 +2243,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.6, 0.3, 0.5196153) },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-1",
@@ -2198,6 +2281,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-1/tree",
@@ -2227,6 +2311,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-1/tree/trunk",
@@ -2254,12 +2339,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.1710872, 0.7, 0.17548704) },
             offset: Vec3::new(0.008912802, 0.7, -1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None, impostor: None }]),
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-1/tree/leaves",
@@ -2289,6 +2377,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-2",
@@ -2318,6 +2407,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-2/tree",
@@ -2347,6 +2437,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-2/tree/trunk",
@@ -2374,12 +2465,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.1710872, 0.7, 0.17548704) },
             offset: Vec3::new(0.008912802, 0.7, -1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None, impostor: None }]),
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-2/tree/leaves",
@@ -2409,6 +2503,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-3",
@@ -2438,6 +2533,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-3/tree",
@@ -2467,6 +2563,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-3/tree/trunk",
@@ -2494,12 +2591,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.1710872, 0.7, 0.17548704) },
             offset: Vec3::new(0.008912802, 0.7, -1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None, impostor: None }]),
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-3/tree/leaves",
@@ -2529,6 +2629,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-4",
@@ -2558,6 +2659,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-4/tree",
@@ -2587,6 +2689,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-4/tree/trunk",
@@ -2614,12 +2717,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.1710872, 0.7, 0.17548704) },
             offset: Vec3::new(0.008912802, 0.7, -1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None, impostor: None }]),
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-4/tree/leaves",
@@ -2649,6 +2755,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-5",
@@ -2678,6 +2785,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-5/tree",
@@ -2707,6 +2815,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-5/tree/trunk",
@@ -2734,12 +2843,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.1710872, 0.7, 0.17548704) },
             offset: Vec3::new(0.008912802, 0.7, -1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::List(&[LodLevel { distance: 30.0, model: None, impostor: None }]),
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "tree-5/tree/leaves",
@@ -2769,6 +2881,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "crates",
@@ -2798,6 +2911,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "crates/crate-a",
@@ -2825,12 +2939,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.5, 0.5, 0.5) },
             offset: Vec3::new(0.0, 0.5, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "crates/crate-b",
@@ -2858,12 +2975,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.5, 0.5, 0.5) },
             offset: Vec3::new(0.0, 0.5, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "crates/crate-c",
@@ -2891,12 +3011,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.5, 0.5, 0.5) },
             offset: Vec3::new(0.0, 0.5, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "pillar-1",
@@ -2924,12 +3047,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.35, 1.5, 0.33286977) },
             offset: Vec3::new(0.0, 1.5, 1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "pillar-2",
@@ -2957,12 +3083,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.35, 1.5, 0.33286977) },
             offset: Vec3::new(0.0, 1.5, 1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "pillar-3",
@@ -2990,12 +3119,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.35, 1.5, 0.33286977) },
             offset: Vec3::new(0.0, 1.5, 1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "pillar-4",
@@ -3023,12 +3155,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.35, 1.5, 0.33286977) },
             offset: Vec3::new(0.0, 1.5, 1.4901161e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "ramp",
@@ -3058,6 +3193,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "rock-1",
@@ -3085,12 +3221,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.49388626, 0.6, 0.5065875) },
             offset: Vec3::new(0.02572903, 0.0, -2.9802322e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "rock-2",
@@ -3118,12 +3257,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.49388626, 0.6, 0.5065875) },
             offset: Vec3::new(0.02572903, 0.0, -2.9802322e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "rock-3",
@@ -3151,12 +3293,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(0.49388626, 0.6, 0.5065875) },
             offset: Vec3::new(0.02572903, 0.0, -2.9802322e-8),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-1",
@@ -3186,6 +3331,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-1/lamp",
@@ -3215,6 +3361,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-1/lamp/post",
@@ -3244,6 +3391,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-1/lamp/bulb",
@@ -3273,6 +3421,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-2",
@@ -3302,6 +3451,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-2/lamp",
@@ -3331,6 +3481,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-2/lamp/post",
@@ -3360,6 +3511,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "lamp-2/lamp/bulb",
@@ -3389,6 +3541,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "robot-walker",
@@ -3418,6 +3571,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "robot-greeter",
@@ -3447,6 +3601,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "windmill",
@@ -3476,6 +3631,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "castle-door",
@@ -3503,12 +3659,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(2.0, 2.0, 0.5) },
             offset: Vec3::new(0.0, 2.0, 0.0),
             trigger: false,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "coin-1",
@@ -3536,12 +3695,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Sphere { radius: 0.5 },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: true,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "coin-2",
@@ -3569,12 +3731,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Sphere { radius: 0.5 },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: true,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "coin-3",
@@ -3602,12 +3767,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Sphere { radius: 0.5 },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: true,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "coin-4",
@@ -3635,12 +3803,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Sphere { radius: 0.5 },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: true,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "coin-5",
@@ -3668,12 +3839,15 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Sphere { radius: 0.5 },
             offset: Vec3::new(0.0, 0.0, 0.0),
             trigger: true,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "gameplay",
@@ -3703,6 +3877,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "gameplay/spawn",
@@ -3732,6 +3907,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "gameplay/hero",
@@ -3761,6 +3937,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "gameplay/patrol-end",
@@ -3790,6 +3967,7 @@ pub static NODES: &[SceneNode] = &[
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
     SceneNode {
         name: "gameplay/goal",
@@ -3817,11 +3995,14 @@ pub static NODES: &[SceneNode] = &[
             shape: Shape::Box { half: Vec3::new(1.0, 1.0, 1.0) },
             offset: Vec3::new(0.0, 1.0, 0.0),
             trigger: true,
+            layer: 1,
+            one_way: false,
         }),
         lod: Lods::NONE,
         sound: None,
         cell: NO_CELL,
         vis: None,
         glow: None,
+        character: None,
     },
 ];

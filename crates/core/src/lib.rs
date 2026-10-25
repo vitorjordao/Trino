@@ -93,7 +93,10 @@ pub use math3d::{Mat34, Quat};
 pub use options::{GraphicsOptions, OptionsEvent, OptionsRow, OptionsStyle};
 pub use pad::{GlyphShape, PadFamily, PadGlyph, PadSlot};
 pub use particles::{Effect, Emitter, ParticleSystem};
-pub use physics::{Aabb, Collider, Shape};
+pub use physics::{
+    Aabb, CastShape, Collider, LAYER_ALL, Shape, ShapeHit, Solid, StaticWorld, TriggerEvent,
+    TriggerPhase, TriggerTracker, World,
+};
 pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
 };

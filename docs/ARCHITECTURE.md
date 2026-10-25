@@ -377,6 +377,33 @@ Profiler tab. The renderers mark their stages (N64, 3DS, wgpu) and the wgpu rend
 GPU pass zones from timestamp queries; the PC can also feed Tracy (`tracy` feature), the
 Web `performance.measure`. The `profiling` skill is the how-to.
 
+## Physics (issue #66, ADR 0035)
+
+`trino_core::physics` is core-only: no backend code, the same bits on every target.
+
+- **Queries:**
+  - `StaticWorld`: a uniform XZ grid over the level's solids, in two `u16` buffers the
+    caller owns;
+  - `World`: the grid plus a scanned dynamic list;
+  - raycasts and overlaps with layer masks, and sphere/capsule/box shape casts, exact
+    against boxes.
+  Every grid query returns what a scan returns.
+- **Triggers:** `TriggerTracker` reports Enter / Stay / Exit in a fixed order.
+- **`CharacterController<S>`**, the body a game walks:
+  - it moves one axis at a time like `move_aabb`, and is `move_aabb` itself with its
+    options off;
+  - the options are steps, snap-down, a slope limit for `Ramp` surfaces and triangle
+    meshes (`MeshInstance` over a baked `TCOL`), one-way platforms, moving platforms
+    (`carry`), coyote time and jump buffering;
+  - it is generic over `Scalar`, `f32` or the Q16.16 `Fx`, for sims and netcode that need
+    integer determinism.
+- **Who uses it:**
+  - castle64's player runs on it;
+  - the showcase's scene runtime switches to it when a scene gives the hero a
+    `character` body;
+  - the editor's Play here draws its debug overlay.
+- **The `physics` self-test step** pins its course hashes to the PC's on every target.
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files

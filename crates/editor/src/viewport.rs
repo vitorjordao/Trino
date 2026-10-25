@@ -1072,6 +1072,13 @@ impl Viewport {
             colliders(&painter, &proj, input);
             vis_volumes(&painter, &proj, input);
         }
+        if self.kind == ViewKind::Game
+            && let Some(session) = &self.play
+            && let Some((ctl, rep)) = session.game.controller_debug()
+        {
+            let game_proj = Proj::new(&session.game.camera(), internal, image_rect);
+            controller_overlay(&painter, &game_proj, &ctl, &rep);
+        }
         if self.kind == ViewKind::Scene && self.shadow_view == ShadowView::Debug && !playing {
             shadow_debug(&painter, &proj, input);
         }
@@ -1188,6 +1195,7 @@ impl Viewport {
                 input.tmem,
                 input.audio,
                 input.memory.map(|m| (m, input.scene)),
+                crate::budget::collision_line(input.resolved, input.project, self.target()),
             );
             if let Some(lines) = lines {
                 let hud = ui
@@ -1260,6 +1268,7 @@ impl Viewport {
     }
 
     /// Console budget panel (top right of the Game view).
+    #[allow(clippy::too_many_arguments)]
     fn budget_overlay(
         &self,
         painter: &egui::Painter,
@@ -1268,6 +1277,7 @@ impl Viewport {
         tmem: Option<&std::collections::BTreeMap<u32, Option<u32>>>,
         audio: Option<&crate::audio::Totals>,
         memory: Option<(&[trino_asset_pipeline::memory::MemoryPlan], &Scene)>,
+        collision: Option<(String, crate::budget::Level)>,
     ) -> Option<Rect> {
         let caps = *self.renderer.caps();
         let mut rows = crate::budget::rows(&self.stats.frame, &caps, &self.stats.lod);
@@ -1385,6 +1395,7 @@ impl Viewport {
                     .map(|b| crate::budget::platform_lines_on(b, &tmem, self.target()))
                     .unwrap_or_default(),
             )
+            .chain(collision.filter(|_| self.play.is_none()))
             .map(|(t, l)| {
                 let color = match l {
                     crate::budget::Level::Ok if t.starts_with("N64") => c::OK,
@@ -2139,24 +2150,339 @@ fn outline(
     }
 }
 
-/// Collider wireframes: the world box each collider resolves to (what
-/// `trino_core::physics` collides against).
+/// Collider gizmos (issue #66), per shape, in what `trino_core::physics`
+/// collides against: solid boxes (and round shapes' boxes, with their
+/// rings), one-way boxes with an up arrow, ramps as their wedge, mesh
+/// colliders as their triangles, triggers filled, character bodies with
+/// their step height.
 fn colliders(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
+    use trino_core::physics::{Shape, SurfaceKind};
     for item in &input.resolved.items {
+        if let Some(ch) = item.character {
+            character_gizmo(painter, proj, gizmo::translation(&item.matrix), &ch);
+        }
         let Some(col) = item.collider else {
             continue;
         };
         let w = col.world_aabb(&item.matrix);
-        let color = if col.trigger { c::TRIGGER } else { c::COLLIDER };
-        let stroke = Stroke::new(1.0, color.gamma_multiply(0.85));
-        for [a, b] in gizmo::box_lines(
-            proj,
-            &trino_core::Mat34::IDENTITY,
-            [w.min.x, w.min.y, w.min.z],
-            [w.max.x, w.max.y, w.max.z],
-        ) {
-            painter.line_segment([a, b], stroke);
+        if col.trigger {
+            filled_box(painter, proj, &w, c::TRIGGER.gamma_multiply(0.16));
+            wire_box(painter, proj, &w, Stroke::new(1.2, c::TRIGGER));
+            continue;
         }
+        let faint = Stroke::new(1.0, c::COLLIDER.gamma_multiply(0.45));
+        match col.shape {
+            Shape::Box { .. } if col.one_way => {
+                let s = Stroke::new(1.4, c::ONE_WAY);
+                wire_box(painter, proj, &w, s);
+                let top = Vec3::new(w.center().x, w.max.y, w.center().z);
+                arrow(painter, proj, top, top + Vec3::new(0.0, 0.6, 0.0), s);
+            }
+            Shape::Box { .. } => {
+                wire_box(
+                    painter,
+                    proj,
+                    &w,
+                    Stroke::new(1.0, c::COLLIDER.gamma_multiply(0.85)),
+                );
+            }
+            Shape::Sphere { .. } | Shape::Capsule { .. } => {
+                wire_box(painter, proj, &w, faint);
+                let r = w.half().x.max(w.half().z);
+                let ctr = w.center();
+                let seg = (w.half().y - r).max(0.0);
+                let s = Stroke::new(1.2, c::COLLIDER);
+                for dy in [-seg, seg] {
+                    let p = ctr + Vec3::new(0.0, dy, 0.0);
+                    ring(
+                        painter,
+                        proj,
+                        p,
+                        Vec3::new(1.0, 0.0, 0.0),
+                        Vec3::new(0.0, 0.0, 1.0),
+                        r,
+                        s,
+                    );
+                }
+                ring(
+                    painter,
+                    proj,
+                    ctr,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    r,
+                    s,
+                );
+                ring(
+                    painter,
+                    proj,
+                    ctr,
+                    Vec3::new(0.0, 0.0, 1.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    r,
+                    s,
+                );
+            }
+            Shape::Ramp { .. } => {
+                if let Some(solid) = col.world_solid(&item.matrix)
+                    && let SurfaceKind::Ramp(dir) = solid.kind
+                {
+                    wedge(painter, proj, &solid.aabb, dir, Stroke::new(1.4, c::RAMP));
+                }
+            }
+            Shape::Mesh { mesh, .. } => match input.project.collision_mesh(mesh) {
+                Some(m) => {
+                    let inst = trino_core::physics::MeshInstance::new(m, item.matrix);
+                    let s = Stroke::new(1.0, c::MESH_COLLIDER.gamma_multiply(0.9));
+                    for t in 0..m.triangle_count().min(4000) {
+                        let [a, b, d] = inst.triangle(t);
+                        line(painter, proj, a, b, s);
+                        line(painter, proj, b, d, s);
+                        line(painter, proj, d, a, s);
+                    }
+                }
+                None => wire_box(painter, proj, &w, Stroke::new(1.0, c::WARN)),
+            },
+        }
+    }
+}
+
+/// A character body: its box from the feet, the step height it climbs.
+fn character_gizmo(
+    painter: &egui::Painter,
+    proj: &Proj,
+    feet: Vec3,
+    ch: &trino_core::physics::Character,
+) {
+    let half = Vec3::new(ch.radius, ch.height * 0.5, ch.radius);
+    let body = trino_core::Aabb::from_center_half(feet + Vec3::new(0.0, half.y, 0.0), half);
+    wire_box(painter, proj, &body, Stroke::new(1.4, c::CHARACTER));
+    if ch.step_height > 0.0 {
+        let step = trino_core::Aabb::new(
+            Vec3::new(body.min.x, feet.y, body.min.z),
+            Vec3::new(body.max.x, feet.y + ch.step_height, body.max.z),
+        );
+        filled_box(painter, proj, &step, c::CHARACTER.gamma_multiply(0.18));
+    }
+    arrow(
+        painter,
+        proj,
+        feet,
+        feet + Vec3::new(0.0, ch.height + 0.3, 0.0),
+        Stroke::new(1.0, c::CHARACTER.gamma_multiply(0.7)),
+    );
+}
+
+/// The controller's debug overlay while Play here walks the hero (issue
+/// #66): its body, the ground normal at its feet, the step probe ahead,
+/// and a status line.
+fn controller_overlay(
+    painter: &egui::Painter,
+    proj: &Proj,
+    ctl: &trino_core::physics::CharacterController<f32>,
+    rep: &trino_core::physics::StepReport<f32>,
+) {
+    let pos: Vec3 = ctl.pos.into();
+    let half: Vec3 = ctl.cfg.half.into();
+    let body = trino_core::Aabb::from_center_half(pos, half);
+    let color = if rep.sliding {
+        c::WARN
+    } else if ctl.on_ground {
+        c::CHARACTER
+    } else {
+        c::TEXT_WEAK
+    };
+    wire_box(painter, proj, &body, Stroke::new(1.6, color));
+    let feet = pos - Vec3::new(0.0, half.y, 0.0);
+    if ctl.on_ground || rep.sliding {
+        let n: Vec3 = ctl.ground_normal.into();
+        arrow(
+            painter,
+            proj,
+            feet,
+            feet + n * 1.2,
+            Stroke::new(2.0, c::AXIS_Y),
+        );
+    }
+    let v: Vec3 = ctl.vel.into();
+    let flat = Vec3::new(v.x, 0.0, v.z);
+    let speed = trino_core::math3d::sqrt(flat.dot(flat));
+    if ctl.cfg.step_height > 0.0 && speed > 0.1 {
+        let ahead = flat * (half.x * 2.0 / speed);
+        let probe = trino_core::Aabb::new(
+            Vec3::new(body.min.x, feet.y, body.min.z) + ahead,
+            Vec3::new(body.max.x, feet.y + ctl.cfg.step_height, body.max.z) + ahead,
+        );
+        let s = if rep.stepped { c::OK } else { c::TRIGGER };
+        wire_box(painter, proj, &probe, Stroke::new(1.2, s));
+    }
+    let status = format!(
+        "{}  {}{}{}  ground {}  normal ({:.2}, {:.2}, {:.2})  vel ({:.1}, {:.1}, {:.1})",
+        icon::PERSON_SIMPLE_WALK,
+        if ctl.on_ground {
+            "grounded"
+        } else {
+            "airborne"
+        },
+        if rep.sliding { " · sliding" } else { "" },
+        if rep.stepped { " · stepped" } else { "" },
+        match (rep.standing_on, rep.mesh_ground) {
+            (Some(i), _) => format!("solid #{i}"),
+            (None, Some((m, t))) => format!("mesh {m} tri {t}"),
+            _ => "none".into(),
+        },
+        ctl.ground_normal.x,
+        ctl.ground_normal.y,
+        ctl.ground_normal.z,
+        v.x,
+        v.y,
+        v.z,
+    );
+    let at = proj.rect.left_bottom() + Vec2::new(8.0, -22.0);
+    painter.rect_filled(
+        Rect::from_min_size(
+            at - Vec2::new(4.0, 2.0),
+            Vec2::new(proj.rect.width().min(560.0), 20.0),
+        ),
+        CornerRadius::same(4),
+        Color32::from_black_alpha(170),
+    );
+    painter.text(
+        at,
+        egui::Align2::LEFT_TOP,
+        status,
+        egui::FontId::proportional(12.0),
+        c::TEXT,
+    );
+}
+
+fn line(painter: &egui::Painter, proj: &Proj, a: Vec3, b: Vec3, s: Stroke) {
+    if let (Some(p), Some(q)) = (proj.project(a), proj.project(b)) {
+        painter.line_segment([p, q], s);
+    }
+}
+
+fn arrow(painter: &egui::Painter, proj: &Proj, a: Vec3, b: Vec3, s: Stroke) {
+    if let (Some(p), Some(q)) = (proj.project(a), proj.project(b)) {
+        painter.arrow(p, q - p, s);
+    }
+}
+
+fn wire_box(painter: &egui::Painter, proj: &Proj, b: &trino_core::Aabb, s: Stroke) {
+    for [p, q] in gizmo::box_lines(
+        proj,
+        &trino_core::Mat34::IDENTITY,
+        [b.min.x, b.min.y, b.min.z],
+        [b.max.x, b.max.y, b.max.z],
+    ) {
+        painter.line_segment([p, q], s);
+    }
+}
+
+/// A box's six faces, translucent (trigger volumes).
+fn filled_box(painter: &egui::Painter, proj: &Proj, b: &trino_core::Aabb, fill: Color32) {
+    let p = |x: bool, y: bool, z: bool| {
+        Vec3::new(
+            if x { b.max.x } else { b.min.x },
+            if y { b.max.y } else { b.min.y },
+            if z { b.max.z } else { b.min.z },
+        )
+    };
+    let faces = [
+        [
+            p(false, false, false),
+            p(true, false, false),
+            p(true, true, false),
+            p(false, true, false),
+        ],
+        [
+            p(false, false, true),
+            p(true, false, true),
+            p(true, true, true),
+            p(false, true, true),
+        ],
+        [
+            p(false, false, false),
+            p(false, true, false),
+            p(false, true, true),
+            p(false, false, true),
+        ],
+        [
+            p(true, false, false),
+            p(true, true, false),
+            p(true, true, true),
+            p(true, false, true),
+        ],
+        [
+            p(false, true, false),
+            p(true, true, false),
+            p(true, true, true),
+            p(false, true, true),
+        ],
+        [
+            p(false, false, false),
+            p(true, false, false),
+            p(true, false, true),
+            p(false, false, true),
+        ],
+    ];
+    for f in faces {
+        let pts: Option<Vec<Pos2>> = f.iter().map(|&v| proj.project(v)).collect();
+        if let Some(pts) = pts {
+            painter.add(egui::Shape::convex_polygon(pts, fill, Stroke::NONE));
+        }
+    }
+}
+
+fn ring(painter: &egui::Painter, proj: &Proj, c0: Vec3, u: Vec3, v: Vec3, r: f32, s: Stroke) {
+    const N: usize = 24;
+    let at = |i: usize| {
+        let a = i as f32 / N as f32 * core::f32::consts::TAU;
+        c0 + u * (a.cos() * r) + v * (a.sin() * r)
+    };
+    for i in 0..N {
+        line(painter, proj, at(i), at(i + 1), s);
+    }
+}
+
+/// A ramp's wedge: the bottom, the high side and the slope.
+fn wedge(
+    painter: &egui::Painter,
+    proj: &Proj,
+    b: &trino_core::Aabb,
+    dir: trino_core::physics::RampDir,
+    s: Stroke,
+) {
+    use trino_core::physics::RampDir;
+    let (lo, hi) = (b.min, b.max);
+    // Bottom corners, then the high edge's two top corners.
+    let bottom = [
+        Vec3::new(lo.x, lo.y, lo.z),
+        Vec3::new(hi.x, lo.y, lo.z),
+        Vec3::new(hi.x, lo.y, hi.z),
+        Vec3::new(lo.x, lo.y, hi.z),
+    ];
+    let (t0, t1) = match dir {
+        RampDir::PosX => (Vec3::new(hi.x, hi.y, lo.z), Vec3::new(hi.x, hi.y, hi.z)),
+        RampDir::NegX => (Vec3::new(lo.x, hi.y, lo.z), Vec3::new(lo.x, hi.y, hi.z)),
+        RampDir::PosZ => (Vec3::new(lo.x, hi.y, hi.z), Vec3::new(hi.x, hi.y, hi.z)),
+        RampDir::NegZ => (Vec3::new(lo.x, hi.y, lo.z), Vec3::new(hi.x, hi.y, lo.z)),
+    };
+    for i in 0..4 {
+        line(painter, proj, bottom[i], bottom[(i + 1) % 4], s);
+    }
+    line(painter, proj, t0, t1, s);
+    for t in [t0, t1] {
+        // Down to the bottom corner under it, and across to the low edge.
+        let under = Vec3::new(t.x, lo.y, t.z);
+        line(painter, proj, t, under, s);
+        let low = match dir {
+            RampDir::PosX => Vec3::new(lo.x, lo.y, t.z),
+            RampDir::NegX => Vec3::new(hi.x, lo.y, t.z),
+            RampDir::PosZ => Vec3::new(t.x, lo.y, lo.z),
+            RampDir::NegZ => Vec3::new(t.x, lo.y, hi.z),
+        };
+        line(painter, proj, t, low, s);
     }
 }
 

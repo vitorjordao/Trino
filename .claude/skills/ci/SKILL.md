@@ -112,6 +112,15 @@ not in the repo. Rebuild them from the job definitions when needed.
   plus normalization (see `xtask/src/standalone.rs`).
 - **Flaky tests:** look for tests that mutate the cwd or the environment, running
   in parallel (`engine-feature` › Tests).
+- **A test binary that exits with an odd code on Windows** (`exit code: 2173`, no
+  test named): a panic outside a test's own thread, usually in a drop. Find it with a
+  throwaway draft PR whose `ci.yml` is cut to one job looping the binary with
+  `--nocapture` and `RUST_BACKTRACE=1` (PR #113 did: each test alone passed, all five
+  together failed 3 runs in 6). There it was wgpu-core's queue drop timing out on WARP.
+- **The editor launcher test's "the demo's assets baked"** was a rebake from the
+  previous test's watcher, on relative paths, landing in the new project after the
+  cwd moved (a corrupt `.3ds.sprite`, so nothing loaded). The assertion now prints the
+  editor log; read it first.
 
 ## Status to keep current
 

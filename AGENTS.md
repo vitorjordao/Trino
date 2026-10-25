@@ -1395,6 +1395,17 @@ cargo test --workspace
   branch's `trino_core` rlib and the branch then fails with "no `access` in
   `trino_core`" until its sources are touched. Give a comparison worktree its own target
   (on a real disk), or touch `crates/*/src/lib.rs` afterwards.
+- **A `PcRenderer` drop waits for the GPU** (`device.poll(wait_indefinitely)`):
+  wgpu-core's queue gives the last submission about 6 s at drop, then panics ("We
+  timed out while waiting on the last successful submission"). Windows CI's WARP,
+  still rendering a test's burst of frames, passed it in 3 of 6 runs of `precompile`
+  (exit code 2173). A test that builds its own `wgpu::Device` polls it before the drop
+  too.
+- **Background threads must not use cwd-relative paths.** The asset watcher rebaked
+  `assets` → `target/assets/pc` on its own thread: after the editor's launcher moved
+  the cwd to a new project, the last test's late rebake raced the new project's bake
+  and wrote a corrupt sprite (CI-only, 1 run in 6). `watch` now resolves its paths
+  with `std::path::absolute` at start; do the same in any new worker.
 - **Headless renderers give the driver no debug names** (GitHub #94). On RADV,
   `vkSetDebugUtilsObjectNameEXT` from one test thread while another created its device
   crashed whole test binaries inside `libvulkan` (9 runs in 12 of `engine_checks`; 0 in

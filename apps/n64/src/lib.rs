@@ -822,13 +822,15 @@ mod n64 {
                     // a blob costs (ungated, the `N64_COST` blob term).
                     shadows_golden(renderer);
                     shadow_cost(renderer);
-                    // 9) Animation (issue #65): last, its group loaded and
-                    // unloaded where nothing big allocates after it.
-                    anim_steps(renderer, audio, platform);
-                    // High-water marks of the whole run (bot, perf scenes).
+                    // High-water marks of the game's run (bot, perf scenes),
+                    // before the test-only strider below raises the peak.
                     if check_stack("the bot and the perf scenes")
                         && check_heap("the bot and the perf scenes", platform, heap_peak.get())
                     {
+                        // 9) Animation (issue #65): last, its own group
+                        // (test-only content) loaded and unloaded where
+                        // nothing big allocates after it.
+                        anim_steps(renderer, audio, platform);
                         runtime::log("TRINO_TEST_PASS\n");
                     }
                 }

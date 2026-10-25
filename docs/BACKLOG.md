@@ -307,7 +307,7 @@ PC too, ~40 KB of the base N64's RAM) through a runtime branch; an asset group l
 in the middle of the self-test fragmented the base N64's heap past the perf scenes' 45 KB
 copies; a batch of 16 striders grew the N64 renderer's batch buffers by 24 KB for good.
 
-Follow-ups: `anim_graph` in TSCN at its next bump; layers / per-joint masks (a backend change);
+Follow-ups: `anim_graph` in TSCN at its next bump; layers, per-joint masks, 2D blend spaces (#112);
 Solid Eleven's clip tables to a graph; foot slope alignment; measure IK and `ANMC` decode on a
 real N64.
 

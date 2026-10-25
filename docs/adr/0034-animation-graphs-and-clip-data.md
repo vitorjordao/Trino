@@ -180,5 +180,5 @@ and the PC's N64 profile show what the console shows.
 - Character logic is data an agent writes and checks headless; the editor shows it live.
 - A new per-clip datum goes in the model bake and is copied into `TANG`; the runtime never
   needs the mesh.
-- A future TSCN bump can carry `anim_graph`; a future backend change could lift the
+- A future TSCN bump can carry `anim_graph`; #112 (layers, masks, 2D blend spaces) lifts the
   three-clip limit (layers).

@@ -87,6 +87,14 @@ so a PC run or the editor's Game view shows what the console shows. Blob and pla
 shadows land only on the receivers the game sets (`set_shadow_receivers`); the map
 ignores them.
 
+### Foot IK
+
+`Caps::anim_ik` (issue #65, [ADR 0034](adr/0034-animation-graphs-and-clip-data.md)) is on
+for the PC, the Web and the 3DS and off for the N64: `FootIk::pose` gives the N64 no IK
+unless a game forces it for one character (~0.5 ms of CPU per draw in ares,
+`N64_COST.us_per_ik_draw`). The PC's N64 profile and the editor's N64 look follow the
+console.
+
 ### Post-processing
 
 [ADR 0033](adr/0033-post-processing-stack.md). The native profile and the Web run the

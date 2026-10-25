@@ -1,6 +1,7 @@
 //! `TRINO_SCENE=scenes/x.scene.ron` — play an editor scene directly (the
 //! editor's *Play scene*): resolves the RON scene + prefabs + materials at
-//! runtime, orbits a camera around it, plays animation clips, and reloads
+//! runtime, orbits a camera around it, plays animation clips and the
+//! entities' animation graphs (`anim_graph`, issue #65), and reloads
 //! live whenever any of those files change on disk (edit in the editor, a
 //! text editor or an AI agent — the running game follows).
 //!
@@ -29,6 +30,11 @@ pub struct ScenePlayer {
     fov: f32,
     stamp: u128,
     last_check: Instant,
+    /// The entities' animation graphs, and the time they have yet to play.
+    graphs: trino_asset_pipeline::anim_graph::GraphPlayback,
+    pending: f32,
+    /// Graph errors already printed (once each, not every frame).
+    reported: Vec<String>,
 }
 
 /// Sum of modification times of everything a scene depends on.
@@ -41,7 +47,7 @@ fn fingerprint(scene: &Path) -> u128 {
             .map_or(0, |d| d.as_nanos())
     };
     let mut sum = mtime(scene);
-    for dir in ["prefabs", "assets/materials"] {
+    for dir in ["prefabs", "assets/materials", "assets/anim"] {
         let mut stack = vec![PathBuf::from(dir)];
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
@@ -99,6 +105,9 @@ impl ScenePlayer {
             .with_tier(trino_runner_pc::tier_from_env()),
             time: 0.0,
             last_check: Instant::now(),
+            graphs: trino_asset_pipeline::anim_graph::GraphPlayback::new(Path::new(".")),
+            pending: 0.0,
+            reported: Vec::new(),
         };
         player.report();
         Ok(player)
@@ -128,6 +137,8 @@ impl ScenePlayer {
             Ok(scene) => {
                 self.scene = scene;
                 self.lib = load_library();
+                self.graphs.clear();
+                self.reported.clear();
                 println!("scene reloaded ({})", self.path.display());
                 self.report();
             }
@@ -138,6 +149,7 @@ impl ScenePlayer {
     pub fn update(&mut self, input: &InputState, dt: f32) {
         self.maybe_reload();
         self.time += dt;
+        self.pending += dt;
         let mut d = input.stick;
         for (b, v) in [
             (Button::DpadLeft, Vec2::new(-1.0, 0.0)),
@@ -177,7 +189,15 @@ impl ScenePlayer {
         r.set_camera(&camera);
         r.set_light(&env.core_light());
         r.set_ambient_occlusion(env.core_ao().as_ref());
-        let resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
+        let mut resolved = resolve_for(&self.scene, &self.lib, self.time, self.platform);
+        // Graph-animated entities: their pose, carried by their root motion.
+        let dt = std::mem::take(&mut self.pending);
+        for e in self.graphs.step(&mut resolved.items, dt) {
+            if !self.reported.contains(&e) {
+                eprintln!("anim graph: {e}");
+                self.reported.push(e);
+            }
+        }
         // Post-processing (issue #64): the PC runs the stack, the console
         // profiles draw their bake's grading and the glows.
         r.set_post(resolved.post.as_ref());

@@ -1572,6 +1572,134 @@ fn animation_tab_previews_measures_and_exports() {
     }
 }
 
+/// The Animation tab's Graph mode on the strider (issue #65): it opens
+/// `anim/strider`, the parameters drive the live instance (the blend
+/// space's weights, a trigger into the hop and back), a state added in the
+/// panel lands in the file, an outside edit to the file reloads in the
+/// panel; then the layout audit at both window sizes.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn animation_graph_mode_drives_writes_and_reloads() {
+    use crate::app::{Cmd, Tab};
+    for size in [egui::vec2(1600.0, 1000.0), egui::vec2(960.0, 600.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        h.state_mut().anim.model = Some("models/strider".into());
+        h.state_mut().anim.mode = crate::anim_panel::AnimMode::Graph;
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Animation));
+        h.run_steps(6);
+        let g = h
+            .state()
+            .anim
+            .graph
+            .as_ref()
+            .expect("the strider's graph opens");
+        assert_eq!(g.name, "strider");
+        assert!(g.inst.is_some(), "baked against the model: {:?}", g.issues);
+        assert!(g.issues.is_empty(), "{:?}", g.issues);
+        // Run halfway between walk and run: the pose blends the two.
+        h.state_mut()
+            .anim
+            .graph
+            .as_mut()
+            .unwrap()
+            .set_param("speed", 1.4);
+        h.run_steps(3);
+        let pose = h.state().anim.anim_ref().unwrap();
+        let b = pose.blend.expect("a blend space mixes two clips");
+        assert_eq!(pose.clip, trino_core::ClipId::from_name("walk"));
+        assert!((b.weight - 0.5).abs() < 1e-3, "{b:?}");
+        // The trigger takes the hop (grounded), the panel shows it live.
+        click(&mut h, "Fire hop");
+        h.run_steps(3);
+        let hop = 1;
+        assert_eq!(
+            h.state().anim.graph.as_ref().unwrap().live_state(),
+            Some(hop)
+        );
+        crate::layout_audit::assert_clean(
+            &h,
+            size,
+            true,
+            &format!("Animation graph at {}x{}", size.x, size.y),
+        );
+        if size.x < 1000.0 {
+            leave_temp_project(&repo);
+            continue;
+        }
+        // A state added in the panel is in the file.
+        h.state_mut().anim.graph.as_mut().unwrap().new_name = "dance".into();
+        click(&mut h, "Add a clip state");
+        h.run_steps(2);
+        let file = std::path::Path::new("assets/anim/strider.anim.ron");
+        let text = std::fs::read_to_string(file).unwrap();
+        let def = trino_scene::anim::AnimGraphDef::from_ron(&text).unwrap();
+        assert!(def.state("dance").is_some(), "{text}");
+        // An agent's edit to the file reloads in the panel.
+        let mut edited = def.clone();
+        edited.transitions.push(trino_scene::anim::TransitionDef {
+            from: trino_scene::anim::From::State("dance".into()),
+            to: "locomotion".into(),
+            when: trino_scene::anim::CondDef::Finished,
+            blend: 0.3,
+        });
+        edited.save(file).unwrap();
+        let start = std::time::Instant::now();
+        while h.state().anim.graph.as_ref().unwrap().def.transitions.len()
+            != edited.transitions.len()
+            && start.elapsed().as_secs() < 5
+        {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert_eq!(h.state().anim.graph.as_ref().unwrap().def, edited);
+        leave_temp_project(&repo);
+    }
+}
+
+/// The Animation tab's clip metadata (issue #65): an event added at the
+/// playhead and root motion switched on land in the manifest as the lines
+/// `cargo xtask model inspect` and the bake read; the rebake brings them
+/// back into the measurements.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn animation_clip_events_and_root_motion_write_the_manifest() {
+    use crate::app::{Cmd, Tab};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    h.state_mut().anim.model = Some("models/robot".into());
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Animation));
+    h.run_steps(4);
+    click(&mut h, " walk");
+    click(&mut h, "Pause");
+    h.state_mut().anim.time = 0.25;
+    h.state_mut().anim.new_event = "sfx:jump".into();
+    h.run_steps(2);
+    click(&mut h, "Add at");
+    h.run_steps(2);
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(
+        text.contains("events.walk = [{ at = 0.25, name = \"sfx:jump\" }]"),
+        "{}",
+        text.lines()
+            .filter(|l| l.contains("events"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    click(&mut h, "Extract at bake");
+    h.run_steps(2);
+    let m =
+        trino_asset_pipeline::Manifest::load(std::path::Path::new("assets/manifest.toml")).unwrap();
+    assert_eq!(m.models["robot"].root_motion, ["walk"]);
+    // The panel shows the manifest at once.
+    let asset = &h.state().project.models["models/robot"];
+    assert_eq!(asset.root_motion, ["walk"]);
+    assert_eq!(asset.events["walk"], [(0.25, "sfx:jump".to_string())]);
+    leave_temp_project(&repo);
+}
+
 /// Particle effects in the editor, both ways: "+" writes the same file and
 /// manifest entry `cargo xtask particles new` writes; the inspector's
 /// preview bursts up to the previewed platform's cap; an edit lands in the
@@ -1982,9 +2110,10 @@ fn launcher_lists_recent_projects_opens_and_creates() {
     let made = tmp.path().join("new-game");
     match &h.state().screen {
         Screen::Editor(app) => {
+            let log: Vec<&str> = app.log.entries.iter().map(|e| e.text.as_str()).collect();
             assert!(
                 app.project.models.contains_key("models/robot"),
-                "the demo's assets baked"
+                "the demo's assets baked: {log:#?}"
             );
             assert!(!app.doc.scene.entities.is_empty(), "the demo scene opened");
         }

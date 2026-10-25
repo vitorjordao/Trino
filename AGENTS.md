@@ -27,6 +27,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | Skill | Use it for |
 |---|---|
 | `add-asset` | sprites, sounds, music, models, fake objects, materials → manifest, bake, verify |
+| `animation` | animation graphs (`assets/anim/*.anim.ron`: states, blend spaces, transitions), clip events and root motion, keyframe compression (`ANMC`), foot IK by tier; `anim check/simulate`, the Animation tab's Graph mode |
 | `blender-asset` | modeling / coloring / rigging / animating a model in Blender for Trino's real limits; export + `model inspect` gate |
 | `scene-authoring` | writing scenes, prefabs, materials as text; `scene check`; exporting scenes to console code |
 | `accessibility` | color vision through semantic palettes (`assets/palettes.ron`) and icons, captions, text scale and high contrast, motion/flash/hold helpers; `access check/shot`, the editor's Accessibility tab |
@@ -903,6 +904,30 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     (`TRINO_SE_HASH`), and the template is checked against a frame budget and
     goldens in CI. `TRINO_GAME=solid-eleven cargo run -p trino-app-pc` plays it.
 
+- **Animation 2.0 (2026-10-24, ADR 0034, GitHub #65, the `animation` skill):** character
+  logic as data, every target, no backend code (a graph's pose is an `AnimRef`).
+  - **Clip metadata (manifest):** `events.<clip>` (TMDL `AEVT`; `sfx:x` carries
+    `sounds/x`), `root_motion = [..]` (the root's ground motion out of the clip into a
+    `ROOT` track), `anim_compression` (`ANMC`: per-joint keyed tracks, every frame within
+    0.5° / 2 mm; strider clips 42 → 6 KB), `ik` (`IKCH` chains).
+  - **Graphs (`trino_core::anim`):** `assets/anim/<name>.anim.ron` → `anim/<name>` (`TANG`)
+    on every platform; `AnimGraph`/`AnimGraphInstance` (Clip and `Blend1D` states,
+    conditions, triggers for one update, events from the heavier clip, root motion summed,
+    three-clip poses via `AnimRef::over`, feet tracks, `digest`), `GraphBlob`.
+  - **Foot IK:** `AnimRef::ik` (`IkPose`), a two-bone solve in `Mesh::pose` (out of line),
+    `FootIk::pose` by `Caps::anim_ik` (PC/Web/3DS on, N64 off unless forced).
+  - **Authoring:** `trino_scene::anim` (RON, `check`, `to_tang`, `simulate`); `cargo xtask
+    anim list|check|simulate|new`, `model inspect --anim --compressed`; the editor's
+    Animation tab › Graph mode, the clip events lane, root motion and foot IK preview;
+    scene entities' `anim_graph` (the scene player and the editor's views play it,
+    `GraphPlayback`); Inspector › Animation graph.
+  - **Reference content:** the generated `models/strider` (surging root-motion walk, run,
+    hop, idle; IK legs) and `assets/anim/strider.anim.ron`; `scenes/striders.scene.ron`;
+    the showcase robots play `assets/anim/robot.anim.ron` (their goldens unchanged).
+  - **Tests:** self-test steps `anim graph` (pose hash equal on PC, ares, Azahar) and
+    `foot ik`; `xtask/tests/anim_showcase.rs`, `anim_cli.rs`, the pipeline's
+    `anim_compression`/`foot_ik`/`anim_graph_bake`, the scene crate's `anim_graph`.
+
 - **Gamepad families (2026-10-19, #86 item 7, ADR 0028):** `trino_core::pad` —
   `PadFamily { Xbox, PlayStation, Nintendo, EightBitDo, Generic }` detected from USB ids
   then the name (`PadFamily::detect`; the PC's gilrs glue copies them through
@@ -1145,6 +1170,10 @@ cargo xtask assets check [--json]                                           # sc
 cargo xtask assets group <sprites/x|models/x|..> <group[,group..]|boot>    # set an asset's groups in the manifest (declares new ones)
 cargo xtask model inspect <file> --anim [--json]                                   # + per-clip stride, slide, floor, bounds
 cargo xtask model pose <models/x> [--clip C --time S] --name <new>                 # a pose as a static model (consoles)
+cargo xtask anim list|check [name] [--platform p] [--json]          # animation graphs: names, kinds, clips, events, reachability (issue #65)
+cargo xtask anim simulate <name> --script s.ron [--out trace.json] [--json]   # a script of parameter changes through the runtime: states, events, root motion
+cargo xtask anim new <name> --model models/x                       # a starter graph, one state per clip
+cargo xtask model inspect models/x --anim --compressed [--json]    # + root motion, events, ANMC bytes and errors per clip
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
 cargo xtask impostor bake <name>|--all | check | list [--json]                     # re-render / stale check / list
@@ -1261,6 +1290,12 @@ cargo test --workspace
   3DS against the built-in `armv6k-nintendo-3ds` — never change pins or the
   target spec casually; they are verified combinations.
 - Linux: the PC crates need `pkg-config` + ALSA headers (`libasound2-dev`).
+- **Machines with ≤ 16 GB of RAM: cap the parallelism** before any big build or the
+  workspace tests: `export CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4` (roughly one job per
+  3–4 GB). Cargo's default is one job per core; on a 16-core, 14 GB laptop the workspace
+  test build plus its GPU tests ran the 11 GB swap dry and the kernel's OOM killer took the
+  desktop down (2026-10-24, visible in `journalctl -b -1 | grep -i oom`). Don't put the cap
+  in `.cargo/config.toml`: bigger machines want their cores.
 - Console code is `cfg`-gated on the host, so `cargo check` there proves nothing —
   type-check for real with nightly + `-Zbuild-std` (commands in the `test-all` skill).
 - Windows: N64 builds need Docker reachable from WSL2 (Docker Desktop optional —
@@ -1300,6 +1335,23 @@ cargo test --workspace
 - **Never key state on `wgpu::Device` equality.** It compares only an id, which repeats
   across `wgpu::Instance`s: two live renderers (tests, the editor beside a game) collide.
   Per-renderer state rides the renderer or a `pipes::Scope`.
+- **A graph's clip state keeps the game's own seconds, unwrapped** (issue #65): it lets an
+  instance updated with the same `dt` as an old `self.time += dt` pose bit-identically, so
+  the showcase robots moved to a graph with every golden unchanged. Don't wrap or clamp it
+  (the pose wraps and clamps itself); only blend spaces keep a normalized cycle.
+- **An optional RON field written bare needs `serialize_with` too:** with only
+  `deserialize_with = "bare"`, `to_ron` writes `Some(x)` and the next load fails. Round-trip
+  a value with every optional field set (`anim_graph.rs::the_text_round_trips_and_keeps_its_order`).
+- **An RSP-drawn model has `stats().tris == 0` on the N64.** A self-test that checks a
+  draw happened adds `tnl.rsp_tris`, `gpu_tris` and `pc_gpu_tris` (exclusive counters).
+- **The base N64's self-test has ~130 KB of heap to spare, and fragmentation bites first**
+  (issue #65): a group loaded and unloaded mid-run left no hole for the perf scenes' 45 KB
+  copies though 137 KB were free. New test-only content goes in its own asset group, loaded
+  by a step every host runs last (`castle64::selftest::anim_steps`); compare `mips64-elf-size`
+  with main's ELF and run `test n64 --expansion-pak off` before pushing.
+- **`AnimRef::over` is not an `Option` on purpose:** its floats are always initialized,
+  so no N64 path can read a denormal payload (the `RspFog` pitfall). Weight 0 is off.
+
 - **A packaged game must not use build-tree paths.** `env!("CARGO_MANIFEST_DIR")` is the
   build machine's; `trino-runner-pc` switches to packaged mode when `trino-package.txt`
   sits beside the exe, and every per-player file goes through `RunConfig::save_dir()`.
@@ -1343,6 +1395,17 @@ cargo test --workspace
   branch's `trino_core` rlib and the branch then fails with "no `access` in
   `trino_core`" until its sources are touched. Give a comparison worktree its own target
   (on a real disk), or touch `crates/*/src/lib.rs` afterwards.
+- **A `PcRenderer` drop waits for the GPU** (`device.poll(wait_indefinitely)`):
+  wgpu-core's queue gives the last submission about 6 s at drop, then panics ("We
+  timed out while waiting on the last successful submission"). Windows CI's WARP,
+  still rendering a test's burst of frames, passed it in 3 of 6 runs of `precompile`
+  (exit code 2173). A test that builds its own `wgpu::Device` polls it before the drop
+  too.
+- **Background threads must not use cwd-relative paths.** The asset watcher rebaked
+  `assets` → `target/assets/pc` on its own thread: after the editor's launcher moved
+  the cwd to a new project, the last test's late rebake raced the new project's bake
+  and wrote a corrupt sprite (CI-only, 1 run in 6). `watch` now resolves its paths
+  with `std::path::absolute` at start; do the same in any new worker.
 - **Headless renderers give the driver no debug names** (GitHub #94). On RADV,
   `vkSetDebugUtilsObjectNameEXT` from one test thread while another created its device
   crashed whole test binaries inside `libvulkan` (9 runs in 12 of `engine_checks`; 0 in

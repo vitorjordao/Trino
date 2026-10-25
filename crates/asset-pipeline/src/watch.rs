@@ -24,6 +24,11 @@ pub fn watch(
     out_dir: PathBuf,
     on_change: impl Fn(Vec<u32>) + Send + 'static,
 ) -> Result<impl Sized, String> {
+    // Rebakes run later on the watcher thread: resolve relative paths now,
+    // or a rebake after the process changes directory (the editor's
+    // launcher opening another project) bakes the wrong project.
+    let assets_root = std::path::absolute(&assets_root).unwrap_or(assets_root);
+    let out_dir = std::path::absolute(&out_dir).unwrap_or(out_dir);
     let watched_root = assets_root.clone();
     // Event paths arrive absolute: compare against the absolute directory.
     let abs_root = std::fs::canonicalize(&assets_root).unwrap_or_else(|_| assets_root.clone());

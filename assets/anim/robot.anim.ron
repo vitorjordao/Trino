@@ -1,0 +1,23 @@
+// The showcase robots' graph (issue #65): the walker patrols in `walk`,
+// the greeter waves once and idles. Clip states play their clip at the
+// game's own clock, so the showcase draws what it drew before the graph.
+AnimGraph(
+    model: "models/robot",
+    params: {
+        "moving": Bool(false),
+        "wave": Trigger,
+        "rest": Trigger,
+    },
+    states: {
+        "idle": Clip(clip: "idle"),
+        "walk": Clip(clip: "walk"),
+        "wave": Clip(clip: "wave"),
+    },
+    transitions: [
+        (from: "*", to: "wave", when: Trigger("wave"), blend: 0.15),
+        (from: "idle", to: "walk", when: Param("moving"), blend: 0.2),
+        (from: "walk", to: "idle", when: Not(Param("moving")), blend: 0.2),
+        // The greeter holds the end of its wave until the game sends it back.
+        (from: "wave", to: "idle", when: Trigger("rest"), blend: 0.3),
+    ],
+)

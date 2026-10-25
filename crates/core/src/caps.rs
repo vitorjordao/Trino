@@ -164,6 +164,11 @@ pub struct Caps {
     /// the N64, the PC and the Web (the PC's 3DS profile previews it), and
     /// on an old 2DS or a New 2DS XL (the 3DS backend clears it at boot).
     pub stereo: bool,
+    /// Foot IK runs by default ([`crate::anim::FootIk`], issue #65): the
+    /// PC, the Web and the 3DS. Off on the N64 (two chains cost CPU T&L
+    /// time per draw, `perf::N64_COST.us_per_ik_draw`): a game turns it on
+    /// for one character with `FootIk::force`.
+    pub anim_ik: bool,
     /// How the finished 3D is post-processed ([`crate::post`], issue #64):
     /// the whole stack (HDR, tonemap, bloom, LUT, vignette, grain) on the PC
     /// and the Web, grading baked into colors and glow billboards on the
@@ -233,6 +238,7 @@ impl Caps {
         load_budget_us: 4_000,
         shadow_tier: crate::shadow::ShadowTier::Blob,
         stereo: false,
+        anim_ik: false,
         post_tier: crate::post::PostTier::Baked,
         max_planar_shadows: 2,
         // The RDP's z: 18 bits, stored compressed (3-bit exponent, 11-bit
@@ -283,6 +289,7 @@ impl Caps {
         load_budget_us: 6_000,
         shadow_tier: crate::shadow::ShadowTier::Planar,
         stereo: true,
+        anim_ik: true,
         post_tier: crate::post::PostTier::Baked,
         max_planar_shadows: 255,
         // DEPTH24_STENCIL8, the 3D in its band (35%) of citro2d's range.
@@ -334,6 +341,7 @@ impl Caps {
         load_budget_us: 8_000,
         shadow_tier: crate::shadow::ShadowTier::Map,
         stereo: false,
+        anim_ik: true,
         post_tier: crate::post::PostTier::Full,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
@@ -377,6 +385,7 @@ impl Caps {
         load_budget_us: 8_000,
         shadow_tier: crate::shadow::ShadowTier::Map,
         stereo: false,
+        anim_ik: true,
         post_tier: crate::post::PostTier::Full,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's

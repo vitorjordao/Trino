@@ -287,6 +287,30 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — animation 2.0: graphs, clip events, root motion, compressed clips, foot IK (2026-10-24, branch `feat/65-anim-graph`, GitHub #65, ADR 0034)
+
+| Item | Evidence |
+|---|---|
+| Clip events and root motion (manifest `events.<clip>`, `root_motion`; TMDL `AEVT`, `ROOT`; `anim::EventTrack`/`RootTrack`/`ClipMeta`; metrics carried by the track) | `clip.rs` unit tests (fire once per crossing, every wrap, hitches; deltas across wraps and turns); `animation_metrics.rs::root_motion_removes_the_foot_slide_of_a_surging_walk` (3 cm → 0 at a constant speed vs carried, the constant-speed control slides at neither); the strider's walk 2.9 → 0.0 cm, run 4.3 → 0.0 (`model inspect --anim`) |
+| Graph runtime (`TANG` v1, `AnimGraph`, `AnimGraphInstance`, `GraphBlob`, `AnimRef::over`), authoring (`trino_scene::anim`: RON, `check`, `to_tang`, `simulate`), bake riding `ui::bake` | `anim_graph.rs` (9: triggers once, weights sum to 1 through the pose, events from the heavier clip, root motion, a clip state = the game's clock, digests, every byte flipped refused or played), `anim_graph_bake.rs`, `anim_cli.rs` (4); the `anim graph` step's pose hash `0x5dd683cb` on the PC, ares (both tiers), Azahar (New and old) and Chromium WebGPU |
+| Reference migration: the showcase robots through `assets/anim/robot.anim.ron` | `anim_showcase.rs` (600 frames, every pose equal to the old path's, a 0.1 % faster graph caught); the N64 `showcase.png` golden pixel-exact |
+| Editor: Graph mode, the clip events lane, root motion, foot IK preview, Inspector › Animation graph; scene `anim_graph` (scene player, editor views, `scene check`) | kittests `animation_graph_mode_drives_writes_and_reloads` (layout audit at both sizes), `animation_clip_events_and_root_motion_write_the_manifest`; `a_graph_entity_plays_and_walks_with_no_game_code`; `scenes/striders.scene.ron` |
+| `ANMC` keyframe compression (opt-in `anim_compression`; the strider, the robot and the windmill) | `anim_compression.rs` (4: every frame within 0.5° / 2 mm, vertices within 1 cm, corrupt sections refused, `ANIM` still loads); clips: strider 42 304 → 5 672 B, robot 20 928 → 1 930, windmill 3 696 → 184; base N64 boot assets 570 784 → 548 280 B; the N64 `showcase_river.png` golden re-blessed (4 edge pixels of a robot) |
+| Foot IK (`IKCH`, `IkPose`, `FootIk`, `Caps::anim_ik`, the graph's feet tracks) | `ik.rs` unit tests, `foot_ik.rs` (3: feet within 4 mm of their ground, the pelvis drop, `NONE` bit-identical); the `foot ik` step (tier off on the N64 and forced on, on in Azahar and the browser); `TRINO_IK_COST:` in ares |
+
+Deviations (ADR 0034): the reference migration is the showcase's robots, not castle64's
+code-posed player; poses mix at most three clips (no layers, no 2D blend spaces); `anim_graph`
+is not in TSCN or the exported code; IK keeps the foot's clip orientation.
+
+Found on the way: the showcase's N64 build linked both exported scene tables (`NODES` for the
+PC too, ~40 KB of the base N64's RAM) through a runtime branch; an asset group load and unload
+in the middle of the self-test fragmented the base N64's heap past the perf scenes' 45 KB
+copies; a batch of 16 striders grew the N64 renderer's batch buffers by 24 KB for good.
+
+Follow-ups: `anim_graph` in TSCN at its next bump; layers, per-joint masks, 2D blend spaces (#112);
+Solid Eleven's clip tables to a graph; foot slope alignment; measure IK and `ANMC` decode on a
+real N64.
+
 ## Done — post-processing per tier and the daltonization filter (2026-10-24, branch `feat/64-post-stack`, GitHub #64, ADR 0033)
 
 | Item | Evidence |

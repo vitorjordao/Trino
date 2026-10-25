@@ -219,14 +219,14 @@ fn soak_frame(s: &mut GroupSoak, host: &mut WebHost) -> Result<bool, String> {
 /// decoded, pump; then unload them and run the consoles' check on the
 /// downloaded bundles (`Ok(true)` once it passed).
 fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
-    use castle64::selftest::{LEVEL, LEVEL2};
+    use castle64::selftest::{LEVEL, LEVEL2, STRIDER_GROUP};
     use trino_core::LoadState;
     host.pump_groups();
-    let states = [LEVEL, LEVEL2].map(|g| host.platform.group_state(g));
+    let states = [LEVEL, LEVEL2, STRIDER_GROUP].map(|g| host.platform.group_state(g));
     if states.contains(&LoadState::Failed) {
         return Err("asset groups: a bundle failed to download or decode".into());
     }
-    if states != [LoadState::Ready; 2] {
+    if states != [LoadState::Ready; 3] {
         if frames > GROUP_WAIT_FRAMES {
             return Err(format!(
                 "asset groups: the bundles were not in after {frames} frames ({states:?})"
@@ -239,11 +239,14 @@ fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
     ));
     host.platform.unload_group(LEVEL);
     host.platform.unload_group(LEVEL2);
+    host.platform.unload_group(STRIDER_GROUP);
     host.pump_groups();
     let t0 = host.platform.now_micros();
     // The soak runs over animation frames next (`soak_frame`).
     let r = castle64::selftest::asset_groups(&mut GroupHost(host), 0)?;
     castle64::selftest::log_groups(&mut host.platform, &r);
+    // The animation steps (issue #65) on the strider's downloaded bundle.
+    castle64::selftest::anim_steps(&mut GroupHost(host))?;
     js::log(&format!(
         "TRINO_STEP:asset groups took {}ms",
         (host.platform.now_micros() - t0) / 1000
@@ -319,9 +322,15 @@ impl Run {
                     return Flow::Continue;
                 }
                 host.platform.log("TRINO_STEP:asset groups\n");
-                let (a, b) = (castle64::selftest::LEVEL, castle64::selftest::LEVEL2);
-                host.platform.load_group(a);
-                host.platform.load_group(b);
+                // The animation steps' strider too (they run at the end of
+                // the consoles' check, on the downloaded bundles).
+                for g in [
+                    castle64::selftest::LEVEL,
+                    castle64::selftest::LEVEL2,
+                    castle64::selftest::STRIDER_GROUP,
+                ] {
+                    host.platform.load_group(g);
+                }
                 self.stage = Stage::Groups(0);
             }
             Stage::Groups(frames) => {

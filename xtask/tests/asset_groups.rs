@@ -99,6 +99,8 @@ fn asset_groups_load_draw_and_unload_on_pc() {
             r.cycles > 0 && r.level_bytes > 0,
             "{profile:?} {tier:?}: {r:?}"
         );
+        // The animation steps (issue #65), as the hosts run them last.
+        selftest::anim_steps(&mut host).unwrap_or_else(|e| panic!("{profile:?} {tier:?}: {e}"));
         assert!(r.heap_baseline > 0, "the counting allocator reports a heap");
         // The bar animates: a load takes at least the frame it was asked in.
         let m = host.platform.memory();

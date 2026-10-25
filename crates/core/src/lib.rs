@@ -19,6 +19,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod access;
+pub mod anim;
 pub mod ao;
 pub mod asset;
 pub mod audio;
@@ -66,6 +67,7 @@ pub use access::{
     AccessBlob, AccessData, AccessSettings, CameraFx, CaptionMode, CaptionPlace, CaptionStyle,
     Captions, CvdMode, FlashMonitor, HoldToggle, HostedAccess, Outline, ScreenFlash,
 };
+pub use anim::{AnimEvent, AnimGraph, AnimGraphInstance, EventBuf, EventId, GraphBlob, RootDelta};
 pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
 

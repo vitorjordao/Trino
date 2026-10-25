@@ -21,6 +21,8 @@
 
 pub mod access;
 pub mod anim;
+pub mod anim_compress;
+pub mod anim_graph;
 pub mod ao;
 pub mod audio;
 pub mod bake;
@@ -59,7 +61,7 @@ pub use loader::{
 pub use manifest::{Manifest, Platform};
 pub use model::{
     MeshData, ModelOptions, bake_model, bake_model_tmdl, bake_scene, bake_scene_for, clip_names,
-    manifest_model_bounds,
+    compression_report, manifest_model_bounds,
 };
 pub use primitive::{Pivot, Primitive, Shape};
 pub use resolve::resolve_source;

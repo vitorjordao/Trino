@@ -195,6 +195,23 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   stand-in, `Glow`) checked by the same self-test step on every target, with mutations
   for each tier's half (no LUT, an ungraded mesh, no halo sprite).
 
+- **A feature whose output is a value the backends already consume needs no backend
+  code** (issue #65, ADR 0034): an animation graph hands them an `AnimRef`, foot IK rides
+  inside it and is solved in `Mesh::pose`. Grow the value (`AnimRef::over`, `::ik`) with
+  always-initialized fields (no `Option` of floats on the N64) and prove the default is
+  bit-identical (`IkPose::NONE`).
+- **Code is RAM on the N64, and the base console (no Pak) is where it runs out.** #65's
+  animation code (68 KB before its trims, 18 KB after) plus a 17 KB model at boot left the
+  self-test's late `Box<ShowcaseGame>` (43 KB) without a hole: `memory allocation of 43040
+  bytes failed`, then `display_init` asserts. Also look for dead data a runtime branch keeps
+  linked (the showcase's PC scene table, 40 KB, until `nodes()` named only `NODES_N64` on
+  the N64), and use `#[cfg_attr(any(target_os = "none", target_os = "horizon"),
+  optimize(size))]` on big cold functions (stable on the consoles' nightly). Run `cargo xtask test n64 --expansion-pak both`, compare
+  `mips64-elf-size` and `nm -S` with the main branch's ELF (a sibling worktree's
+  `target/n64/trino.elf`), put new test-only models in their own asset group (the strider:
+  `[groups.strider]`, loaded inside `selftest::asset_groups`), and read validated blobs
+  with panic-free readers (`get(..).map_or(0, ..)`: no bounds-check panic site per read).
+
 ## 2. Backends, in matched pairs
 
 - The FFI goes through the shims only: `crates/platform-n64/shim/trino_shim.c` with

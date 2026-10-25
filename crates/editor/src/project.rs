@@ -63,6 +63,10 @@ pub struct ModelAsset {
     /// console profiles draw.
     pub grading: Option<String>,
     pub graded: Option<Vec<u8>>,
+    /// Clips whose root motion the bake extracts and each clip's timeline
+    /// events (the manifest's `root_motion` and `events.<clip>`, issue #65).
+    pub root_motion: Vec<String>,
+    pub events: std::collections::BTreeMap<String, Vec<(f32, String)>>,
     pub thumb: Option<egui::TextureHandle>,
 }
 
@@ -187,7 +191,8 @@ impl Project {
             let name = m.logical.trim_start_matches("models/").to_string();
             let decl = manifest.as_ref().and_then(|man| man.models.get(&name));
             let source = decl.map(|d| d.file.clone()).unwrap_or_default();
-            let ao = decl.and_then(|d| d.options().ao);
+            let opts = decl.map(|d| d.options()).unwrap_or_default();
+            let ao = opts.ao.clone();
             let grading = decl.and_then(|d| d.grading.clone());
             let src_path = self.resolve_source(&source);
             let proxy = if source.ends_with(".prim.ron") {
@@ -232,6 +237,8 @@ impl Project {
                 ao,
                 grading,
                 graded: m.graded,
+                root_motion: opts.root_motion,
+                events: opts.events,
                 thumb: None,
                 tmdl: m.tmdl,
             };
@@ -425,6 +432,24 @@ impl Project {
         let value = ao.map(|a| a.to_toml());
         let new = edit::set_model_ao(&text, name, value.as_deref())?;
         std::fs::write(&manifest, new).map_err(|e| e.to_string())
+    }
+
+    /// A clip's timeline events (Animation tab): its manifest
+    /// `events.<clip>` line. Live: the watcher rebakes the model.
+    pub fn set_clip_events(
+        &self,
+        model: &str,
+        clip: &str,
+        events: &[(f32, String)],
+    ) -> Result<(), String> {
+        let name = model.trim_start_matches("models/");
+        self.edit_manifest(|t| edit::set_model_events(t, name, clip, events))
+    }
+
+    /// The clips whose root motion the bake extracts (`root_motion`).
+    pub fn set_root_motion(&self, model: &str, clips: &[String]) -> Result<(), String> {
+        let name = model.trim_start_matches("models/");
+        self.edit_manifest(|t| edit::set_model_root_motion(t, name, clips))
     }
 
     /// Set (`Some`, `"auto"` included) or remove (`None`: the platform's

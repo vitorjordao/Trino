@@ -6,6 +6,13 @@
 //! skin, the color-slot palette and the PC / N64 / 3DS looks; and a
 //! "console pose": the current pose baked into a static model.
 //!
+//! Issue #65 adds a **Graph** mode (`anim_graph_panel`: state machines and
+//! blend spaces, `assets/anim/<name>.anim.ron`) and the clip's **events** (a lane under the scrubber, added
+//! at the playhead, renamed, moved, removed) and **root motion** (extract
+//! it at bake, carry the preview by the track, the foot slide carried by
+//! it beside the constant-speed one). Both are manifest lines
+//! (`events.<clip>`, `root_motion`): the watcher rebakes the model.
+//!
 //! The measurements and the pose export are `trino_asset_pipeline::anim`,
 //! the same code `cargo xtask model inspect --anim` and `model pose` run.
 //! What the tab changes ends in a file: the entity's clip and speed (Use on
@@ -21,12 +28,33 @@ use trino_core::{
 };
 use trino_platform_pc::SimProfile;
 
+use trino_core::anim::RootPose;
+
+use crate::anim_graph_panel::{self as gp, GraphEdit};
 use crate::app::{App, Cmd};
 use crate::preview::Preview;
 use crate::theme::{self, c, icon};
 
+/// Clips (one clip, measured) or Graph (an animation graph, played).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AnimMode {
+    #[default]
+    Clips,
+    Graph,
+}
+
+/// `TRINO_EDITOR_ANIM_GRAPH`: (graph, parameters, selection).
+pub type GraphHook = (String, Vec<(String, f32)>, Option<String>);
+
 /// The tab's state (what is previewed and how).
 pub struct AnimPanel {
+    pub mode: AnimMode,
+    /// The graph open in Graph mode.
+    pub graph: Option<crate::anim_graph_panel::GraphEdit>,
+    pub graph_error: Option<String>,
+    /// `TRINO_EDITOR_ANIM_GRAPH=<name>[:param=v,..]` and
+    /// `TRINO_EDITOR_ANIM_SELECT`, applied once the graph is open.
+    pub graph_hook: Option<GraphHook>,
     /// Logical path of the previewed model (`models/robot`).
     pub model: Option<String>,
     pub clip: Option<String>,
@@ -46,6 +74,19 @@ pub struct AnimPanel {
     pub pose_name: String,
     /// Measurements of the model's clips (cached per model and bake).
     pub metrics: Vec<ClipMetrics>,
+    /// Move the preview by the clip's root track (root motion).
+    pub follow_root: bool,
+    /// Name of the event "Add at playhead" adds.
+    pub new_event: String,
+    /// Foot IK preview (issue #65): the ground under the model — a slope
+    /// (degrees, rising forward) and a step under its left foot (m) — and
+    /// whether IK runs where the previewed platform has it off (the N64).
+    pub ik_ground: bool,
+    pub ik_slope: f32,
+    pub ik_step: f32,
+    pub ik_force: bool,
+    /// The IK pose the preview drew last (tests read it).
+    pub ik_drawn: trino_core::anim::IkPose,
     metrics_key: Option<(String, u64)>,
     preview: Option<crate::preview::Preview>,
     last: Instant,
@@ -54,6 +95,10 @@ pub struct AnimPanel {
 impl Default for AnimPanel {
     fn default() -> Self {
         AnimPanel {
+            mode: AnimMode::Clips,
+            graph: None,
+            graph_error: None,
+            graph_hook: None,
             model: None,
             clip: None,
             playing: true,
@@ -66,6 +111,13 @@ impl Default for AnimPanel {
             profile: SimProfile::Native,
             pose_name: String::new(),
             metrics: Vec::new(),
+            follow_root: true,
+            new_event: "foot_l".into(),
+            ik_ground: false,
+            ik_slope: 12.0,
+            ik_step: 0.0,
+            ik_force: false,
+            ik_drawn: trino_core::anim::IkPose::NONE,
             metrics_key: None,
             preview: None,
             last: Instant::now(),
@@ -81,7 +133,28 @@ impl AnimPanel {
         if let Ok(v) = std::env::var("TRINO_EDITOR_ANIM_VIEW") {
             p.apply_view(&v);
         }
+        if let Ok(v) = std::env::var("TRINO_EDITOR_ANIM_GRAPH") {
+            p.graph_hook = Some(Self::graph_spec(
+                &v,
+                std::env::var("TRINO_EDITOR_ANIM_SELECT").ok(),
+            ));
+            p.mode = AnimMode::Graph;
+        }
         p
+    }
+
+    /// `<graph>[:param=v,param=v]` → (graph, params, selection).
+    pub fn graph_spec(
+        v: &str,
+        select: Option<String>,
+    ) -> (String, Vec<(String, f32)>, Option<String>) {
+        let (name, rest) = v.split_once(':').unwrap_or((v, ""));
+        let params = rest
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .filter_map(|(k, v)| Some((k.trim().to_string(), v.trim().parse().ok()?)))
+            .collect();
+        (name.to_string(), params, select)
     }
 
     /// Dev hook `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette`.
@@ -92,6 +165,14 @@ impl AnimPanel {
                 Some(("blend", b)) => {
                     let (clip, w) = b.split_once(':').unwrap_or((b, "0.5"));
                     self.blend = Some((clip.to_string(), w.parse().unwrap_or(0.5)));
+                }
+                Some(("ik", v)) => {
+                    // ik=<slope deg>[:<step m>][:force]
+                    let mut it = v.split(':');
+                    self.ik_ground = true;
+                    self.ik_slope = it.next().and_then(|x| x.parse().ok()).unwrap_or(12.0);
+                    self.ik_step = it.next().and_then(|x| x.parse().ok()).unwrap_or(0.0);
+                    self.ik_force = it.next() == Some("force");
                 }
                 Some(("look", l)) => {
                     self.profile = match l {
@@ -131,8 +212,12 @@ impl AnimPanel {
         p
     }
 
-    /// The pose drawn: the clip at `time`, crossfaded when set.
+    /// The pose drawn: the graph's in Graph mode, else the clip at `time`,
+    /// crossfaded when set.
     pub fn anim_ref(&self) -> Option<AnimRef> {
+        if self.mode == AnimMode::Graph {
+            return self.graph.as_ref().and_then(|g| g.pose());
+        }
         let clip = ClipId::from_name(self.clip.as_deref()?);
         let a = AnimRef::new(clip, self.time);
         Some(match &self.blend {
@@ -214,6 +299,8 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         return;
     };
     let clips = asset.clips.clone();
+    let clip_events = asset.events.clone();
+    let root_motion = asset.root_motion.clone();
     let (tris, verts) = (asset.tris, asset.verts);
     let tmdl = asset.tmdl.clone();
     let (center, radius) = (asset.center, asset.radius);
@@ -249,7 +336,38 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         ui.ctx().request_repaint();
     }
 
-    // ---- top: model, clips, transport ---------------------------------
+    // ---- top: mode, model, clips, transport ----------------------------
+    ui.horizontal(|ui| {
+        for (m, label, glyph) in [
+            (AnimMode::Clips, "Clips", icon::FILM_STRIP),
+            (AnimMode::Graph, "Graph", icon::TREE_STRUCTURE),
+        ] {
+            if ui
+                .selectable_label(a.mode == m, format!("{glyph} {label}"))
+                .clicked()
+            {
+                a.mode = m;
+            }
+        }
+    });
+    if a.mode == AnimMode::Graph {
+        let project_root = app.project.root.clone();
+        let sounds = app.project.sounds.clone();
+        graph_mode(
+            app,
+            ui,
+            &model,
+            &clips,
+            &tmdl,
+            &project_root,
+            &sounds,
+            generation,
+            dt,
+            center,
+            radius,
+        );
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
         let w = 180.0f32.min(ui.available_width() - 8.0);
         theme::fixed_width(ui, w, |ui| {
@@ -313,6 +431,17 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         );
     });
 
+    let events_now = a
+        .clip
+        .as_ref()
+        .and_then(|c| clip_events.get(c))
+        .cloned()
+        .unwrap_or_default();
+    if let Some(t) = event_lane(ui, a.time, duration, &events_now) {
+        a.time = t;
+        a.playing = false;
+    }
+
     // ---- body: preview + controls -------------------------------------
     let avail = ui.available_rect_before_wrap();
     let wide = avail.width() >= 760.0;
@@ -342,6 +471,7 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
         .show(&mut child, |ui| {
             ui.set_max_width(ui.available_width() - 10.0);
             controls(app, ui, &model, &clips, tris, verts);
+            clip_meta(app, ui, &model, &clip_events, &root_motion);
         });
     ui.allocate_rect(avail, Sense::hover());
 }
@@ -363,6 +493,39 @@ fn preview(
         .current_metrics()
         .map_or(0.1, |m| m.duration / m.frames.max(1) as f32);
     let (ghosts, grid, profile, time) = (a.ghosts, a.grid, a.profile, a.time);
+    // Root motion: the pose stands where its track has carried it.
+    // Graph mode: no onion skin (an instance has no past), the root the
+    // graph's motion carried. Clips mode: the clip's track at each ghost.
+    let graph_mode = a.mode == AnimMode::Graph;
+    let ghosts = if graph_mode { 0 } else { ghosts };
+    let carry: Option<(RootPose, Vec<RootPose>)> = if graph_mode {
+        a.graph.as_ref().map(|g| (g.carried, vec![g.carried]))
+    } else if a.follow_root {
+        let clip = a.clip.as_deref().map(ClipId::from_name);
+        app.project.models.get(model).and_then(|m| {
+            let meta = trino_core::anim::ClipMeta::from_tmdl(&m.tmdl)?;
+            let g = meta.roots.root_of(clip?)?;
+            let past = (0..=ghosts as i32)
+                .map(|k| g.at((time - k as f32 * step * 2.0).max(0.0)))
+                .collect();
+            Some((g.at(time), past))
+        })
+    } else {
+        None
+    };
+    let at = |k: usize| -> Transform3 {
+        match &carry {
+            Some((now, past)) => {
+                let g = if k == 0 { *now } else { past[k] };
+                Transform3 {
+                    position: trino_core::Vec3::new(g.x, 0.0, g.z),
+                    rotation: trino_core::Vec3::new(0.0, g.yaw, 0.0),
+                    scale: trino_core::Vec3::ONE,
+                }
+            }
+            None => Transform3::default(),
+        }
+    };
     let palette = a.palette.map(|p| p.map(|c| Color::rgb(c[0], c[1], c[2])));
     let p = Preview::ensure(&mut a.preview, &render_state, profile);
     let generation = app.project.generation;
@@ -373,18 +536,78 @@ fn preview(
         p.uploaded = Some((model.to_string(), generation));
     }
     let id = ModelId(trino_core::asset_id(model));
+    // Foot IK onto the preview's ground, by the previewed platform's tier.
+    let ik = (a.ik_ground, a.ik_slope, a.ik_step, a.ik_force);
+    let tmdl = app.project.models.get(model).map(|m| m.tmdl.clone());
+    let ground = move |q: trino_core::Vec3| {
+        // The model's left is +X: the step is under its left foot.
+        q.z * ik.1.to_radians().tan() + if q.x > 0.0 { ik.2 } else { 0.0 }
+    };
+    let mut drawn = trino_core::anim::IkPose::NONE;
     p.show(
         ui,
         rect,
         grid,
         |r: &mut trino_platform_pc::PcRenderer, _| {
+            let anim = match (
+                anim,
+                ik.0,
+                tmdl.as_deref().and_then(|t| Mesh::from_tmdl(t).ok()),
+            ) {
+                (Some(a0), true, Some(mesh)) if mesh.ik_chains().is_some() => {
+                    let chains = mesh.ik_chains().unwrap();
+                    let mut w = [trino_core::Mat34::IDENTITY; trino_core::MAX_JOINTS];
+                    mesh.pose_world(Some(a0), &mut w);
+                    let foot = |l: usize| {
+                        let m = w[chains.chain[l.min(chains.legs as usize - 1)][2] as usize];
+                        trino_core::Vec3::new(m.m[0][3], m.m[1][3], m.m[2][3])
+                    };
+                    let t = at(0);
+                    let mm = trino_core::Mat34::from_rotation_scale_translation(
+                        t.rotation, t.scale, t.position,
+                    );
+                    let caps = *r.caps();
+                    let pose = trino_core::anim::FootIk {
+                        force: ik.3,
+                        ..Default::default()
+                    }
+                    .pose(&caps, &mm, [foot(0), foot(1)], |q| Some(ground(q)));
+                    drawn = pose;
+                    // The ground it stands on: a slab along the slope, the
+                    // step's under the left foot.
+                    let slab = |r: &mut trino_platform_pc::PcRenderer,
+                                x: f32,
+                                w: f32,
+                                h: f32,
+                                c: Color| {
+                        r.draw_model(
+                            ModelId(trino_core::asset_id("models/wall")),
+                            &Transform3 {
+                                position: trino_core::Vec3::new(
+                                    x + t.position.x,
+                                    h - 0.01,
+                                    t.position.z,
+                                ),
+                                rotation: trino_core::Vec3::new(-ik.1.to_radians(), 0.0, 0.0),
+                                scale: trino_core::Vec3::new(w, 0.02, 3.0),
+                            },
+                            Material::VertexLit,
+                            &ModelParams::tinted(c),
+                        );
+                    };
+                    slab(r, -0.75, 1.5, 0.0, Color::rgb(110, 150, 100));
+                    slab(r, 0.75, 1.5, ik.2, Color::rgb(150, 130, 100));
+                    Some(a0.with_ik(pose))
+                }
+                (a0, ..) => a0,
+            };
             // Onion skin: earlier frames, fainter the older.
             for k in (1..=ghosts as i32).rev() {
                 let t = (time - k as f32 * step * 2.0).max(0.0);
                 let alpha = (110.0 * (1.0 - k as f32 / (ghosts as f32 + 1.0))) as u8;
                 r.draw_model(
                     id,
-                    &Transform3::default(),
+                    &at(k as usize),
                     Material::VertexLit,
                     &ModelParams {
                         tint: Color::rgba(160, 190, 255, alpha.max(20)),
@@ -396,7 +619,7 @@ fn preview(
             }
             r.draw_model(
                 id,
-                &Transform3::default(),
+                &at(0),
                 Material::VertexLit,
                 &ModelParams {
                     anim,
@@ -406,8 +629,44 @@ fn preview(
             );
         },
     );
+    app.anim.ik_drawn = drawn;
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(250));
+}
+
+/// The Foot IK preview's ground and tier (both modes).
+fn ik_ui(ui: &mut egui::Ui, a: &mut AnimPanel, has_chains: bool) {
+    theme::component(ui, "anim-ik", icon::FOOTPRINTS, c::MODEL, "Foot IK", |ui| {
+        if !has_chains {
+            ui.label(
+                RichText::new("No IK chains: the manifest's ik = { left = [hip, knee, foot], .. }")
+                    .size(11.0)
+                    .color(c::TEXT_FAINT),
+            );
+            return;
+        }
+        ui.checkbox(&mut a.ik_ground, "Stand on uneven ground");
+        theme::prop(ui, "Slope", |ui| {
+            ui.add(egui::Slider::new(&mut a.ik_slope, -30.0..=30.0).suffix("°"));
+        });
+        theme::prop(ui, "Step", |ui| {
+            ui.add(egui::Slider::new(&mut a.ik_step, -0.3..=0.3).suffix(" m"))
+                .on_hover_text("Under the left foot");
+        });
+        ui.checkbox(&mut a.ik_force, "Force on the N64")
+            .on_hover_text("Caps::anim_ik is off on the N64 (FootIk::force turns it on, at N64_COST.us_per_ik_draw)");
+        let p = a.ik_drawn;
+        let tier = if a.profile == SimProfile::N64 && !a.ik_force {
+            "N64 look: IK off (the console's tier)".to_string()
+        } else {
+            format!(
+                "feet {:+.3} / {:+.3} m",
+                p.left as f32 / 1000.0,
+                p.right as f32 / 1000.0
+            )
+        };
+        ui.label(RichText::new(tier).monospace().color(c::TEXT_WEAK));
+    });
 }
 
 fn controls(
@@ -503,6 +762,15 @@ fn controls(
                 ("Foot slide", format!("{:.1} cm", m.foot_slide * 100.0)),
                 ("Lowest point", format!("{:.3} m", m.lowest)),
             ];
+            let rows: Vec<(&str, String)> = rows
+                .into_iter()
+                .chain(m.root_foot_slide.map(|s| {
+                    (
+                        "Root motion",
+                        format!("{:.2} m/cycle · slide {:.1} cm", m.root_distance, s * 100.0),
+                    )
+                }))
+                .collect();
             for (k, v) in rows {
                 theme::prop(ui, k, |ui| {
                     ui.add(egui::Label::new(RichText::new(v).monospace()).truncate());
@@ -532,18 +800,29 @@ fn controls(
             for w in &m.warnings {
                 ui.label(RichText::new(format!("{} {w}", icon::WARNING)).color(c::WARN));
             }
-            ui.label(
-                RichText::new(format!(
+            let advice = if m.root_motion {
+                "Root motion: move the character by the clip's track (AnimGraphInstance::root_motion) \
+                 and its planted feet stay put. Same numbers: cargo xtask model inspect <model> --anim"
+                    .to_string()
+            } else {
+                format!(
                     "Move the character at {:.2} m/s so its planted feet stay put. \
                  Same numbers: cargo xtask model inspect <file> --anim",
                     m.speed
-                ))
-                .size(11.0)
-                .color(c::TEXT_FAINT),
-            );
+                )
+            };
+            ui.label(RichText::new(advice).size(11.0).color(c::TEXT_FAINT));
         },
     );
 
+    let chains = app
+        .project
+        .models
+        .get(model)
+        .and_then(|m| Mesh::from_tmdl(&m.tmdl).ok())
+        .is_some_and(|m| m.ik_chains().is_some());
+    let a = &mut app.anim;
+    ik_ui(ui, a, chains);
     theme::component(ui, "anim-view", icon::EYE, c::TEXT, "View", |ui| {
         ui.checkbox(&mut a.grid, "Ground grid");
         theme::prop(ui, "Onion skin", |ui| {
@@ -638,6 +917,412 @@ fn controls(
     );
 }
 
+/// Graph mode: the graph picker, the canvas over the preview, the
+/// parameters and the selection beside them.
+#[allow(clippy::too_many_arguments)]
+fn graph_mode(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    model: &str,
+    clips: &[String],
+    tmdl: &[u8],
+    root: &std::path::Path,
+    sounds: &[String],
+    generation: u64,
+    dt: f32,
+    center: [f32; 3],
+    radius: f32,
+) {
+    let graphs = gp::graphs_for(root, model);
+    let a = &mut app.anim;
+    let open = |a: &mut AnimPanel, name: &str| match GraphEdit::open(root, name) {
+        Ok(g) => {
+            a.graph = Some(g);
+            a.graph_error = None;
+        }
+        Err(e) => a.graph_error = Some(e),
+    };
+    if let Some((name, ..)) = a.graph_hook.clone()
+        && a.graph.as_ref().is_none_or(|g| g.name != name)
+    {
+        open(a, &name);
+    }
+    if a.graph
+        .as_ref()
+        .is_some_and(|g| g.def.model_path() != model)
+    {
+        a.graph = None;
+    }
+    if a.graph.is_none()
+        && a.graph_error.is_none()
+        && let Some(first) = graphs.first()
+    {
+        open(a, first);
+    }
+    ui.horizontal(|ui| {
+        let current = a
+            .graph
+            .as_ref()
+            .map_or("none".to_string(), |g| format!("anim/{}", g.name));
+        let w = 180.0f32.min(ui.available_width() - 8.0);
+        let mut pick = None;
+        theme::fixed_width(ui, w, |ui| {
+            egui::ComboBox::from_id_salt("anim-graph")
+                .selected_text(&current)
+                .width(w)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    for n in &graphs {
+                        if ui
+                            .selectable_label(current == format!("anim/{n}"), format!("anim/{n}"))
+                            .clicked()
+                        {
+                            pick = Some(n.clone());
+                        }
+                    }
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Animation graph")
+                });
+        });
+        if let Some(n) = pick {
+            open(a, &n);
+        }
+        if ui
+            .button(format!("{} New graph", icon::PLUS))
+            .on_hover_text(format!(
+                "Same as: cargo xtask anim new <name> --model {model}"
+            ))
+            .clicked()
+        {
+            let base = model.trim_start_matches("models/").replace('_', "-");
+            let mut name = base.clone();
+            let mut k = 2;
+            while trino_scene::anim::graph_file(root, &name).exists() {
+                name = format!("{base}-{k}");
+                k += 1;
+            }
+            let def = trino_scene::anim::AnimGraphDef::starter(model, clips);
+            match def.save(&trino_scene::anim::graph_file(root, &name)) {
+                Ok(()) => open(a, &name),
+                Err(e) => a.graph_error = Some(e),
+            }
+        }
+        let (glyph, tip) = if a.playing {
+            (icon::PAUSE, "Pause")
+        } else {
+            (icon::PLAY, "Play")
+        };
+        if theme::named_icon_button(ui, glyph, tip).clicked() {
+            a.playing = !a.playing;
+        }
+        if let Some(g) = &a.graph
+            && let Some(inst) = &g.inst
+        {
+            let state = g.def.states.get(inst.state()).map_or("?", |s| s.0.as_str());
+            let fade = inst
+                .transition()
+                .map(|(f, k)| {
+                    format!(
+                        " ← {} {:.0}%",
+                        g.def.states.get(f).map_or("?", |s| s.0.as_str()),
+                        k * 100.0
+                    )
+                })
+                .unwrap_or_default();
+            ui.label(
+                RichText::new(format!("{state}{fade} · {:.2}", inst.clock()))
+                    .monospace()
+                    .color(c::TEXT_WEAK),
+            );
+        }
+    });
+    if let Some(e) = &a.graph_error {
+        ui.label(RichText::new(format!("{} {e}", icon::WARNING)).color(c::WARN));
+    }
+    let Some(g) = a.graph.as_mut() else {
+        theme::empty_state(
+            ui,
+            icon::TREE_STRUCTURE,
+            "No graph for this model",
+            "New graph writes assets/anim/<name>.anim.ron: one state per clip",
+        );
+        return;
+    };
+    let facts = trino_scene::anim::clip_facts(tmdl).ok();
+    g.poll_file();
+    g.rebake(facts.as_deref(), sounds, generation);
+    if let Some((name, params, select)) = a.graph_hook.clone()
+        && g.name == name
+        && g.inst.is_some()
+    {
+        for (k, v) in &params {
+            g.set_param(k, *v);
+        }
+        if let Some(s) = &select {
+            gp::select_spec(g, s);
+        }
+        a.graph_hook = None;
+    }
+    if a.playing {
+        g.tick(dt * a.speed);
+        ui.ctx().request_repaint();
+    }
+
+    let avail = ui.available_rect_before_wrap();
+    let wide = avail.width() >= 760.0;
+    let side = 330.0f32.min(avail.width());
+    let (view_rect, controls_rect) = if wide {
+        (
+            Rect::from_min_max(avail.min, Pos2::new(avail.max.x - side - 8.0, avail.max.y)),
+            Rect::from_min_max(Pos2::new(avail.max.x - side, avail.min.y), avail.max),
+        )
+    } else {
+        let h = (avail.height() * 0.5).max(160.0);
+        (
+            Rect::from_min_size(avail.min, Vec2::new(avail.width(), h)),
+            Rect::from_min_max(Pos2::new(avail.min.x, avail.min.y + h + 8.0), avail.max),
+        )
+    };
+    let split = view_rect.min.y + view_rect.height() * 0.5;
+    let canvas_rect = Rect::from_min_max(view_rect.min, Pos2::new(view_rect.max.x, split - 4.0));
+    let preview_rect = Rect::from_min_max(Pos2::new(view_rect.min.x, split + 4.0), view_rect.max);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(canvas_rect));
+    if gp::canvas(&mut child, canvas_rect, g)
+        && let Err(e) = gp::layout_moved(g)
+    {
+        app.log.toast(crate::log::Level::Error, e);
+    }
+    let render_state = app.render_state.clone();
+    preview(app, ui, preview_rect, render_state, model, center, radius);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(controls_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    let mut changed = false;
+    egui::ScrollArea::vertical()
+        .id_salt("graph-controls")
+        .auto_shrink([false, false])
+        .show(&mut child, |ui| {
+            ui.set_max_width(ui.available_width() - 10.0);
+            if let Some(g) = app.anim.graph.as_mut() {
+                changed = gp::controls(ui, g, clips);
+            }
+            let chains = app
+                .project
+                .models
+                .get(model)
+                .and_then(|m| Mesh::from_tmdl(&m.tmdl).ok())
+                .is_some_and(|m| m.ik_chains().is_some());
+            let a = &mut app.anim;
+            ik_ui(ui, a, chains);
+            theme::component(ui, "graph-play", icon::TIMER, c::TEXT, "Playback", |ui| {
+                ui.horizontal(|ui| {
+                    for (p, label) in [
+                        (SimProfile::Native, "PC look"),
+                        (SimProfile::N64, "N64 look"),
+                        (SimProfile::N3ds, "3DS look"),
+                    ] {
+                        if ui.selectable_label(a.profile == p, label).clicked() {
+                            a.profile = p;
+                        }
+                    }
+                });
+                theme::prop(ui, "Speed", |ui| {
+                    ui.add(egui::Slider::new(&mut a.speed, 0.0..=3.0).suffix("×"));
+                });
+                if ui.button(format!("{} Restart", icon::ARROW_COUNTER_CLOCKWISE)).clicked()
+                    && let Some(g) = a.graph.as_mut()
+                {
+                    g.inst = None;
+                    g.carried = RootPose::IDENTITY;
+                    g.rebake(None, &[], u64::MAX);
+                }
+                ui.label(
+                    RichText::new("Play a script without the editor: cargo xtask anim simulate <graph> --script s.ron")
+                        .size(11.0)
+                        .color(c::TEXT_FAINT),
+                );
+            });
+        });
+    if changed
+        && let Some(g) = app.anim.graph.as_mut()
+        && let Err(e) = g.save()
+    {
+        app.log.toast(crate::log::Level::Error, e);
+    }
+    ui.allocate_rect(avail, Sense::hover());
+}
+
+/// The current clip's events on a lane as wide as the scrubber: a tick per
+/// event, the playhead, a click on an event jumps there. Returns the time
+/// clicked.
+fn event_lane(
+    ui: &mut egui::Ui,
+    time: f32,
+    duration: f32,
+    events: &[(f32, String)],
+) -> Option<f32> {
+    let w = ui.available_width().max(40.0);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 16.0), Sense::click());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 3.0, c::BG0);
+    let x_of = |t: f32| {
+        rect.min.x + 6.0 + (rect.width() - 12.0) * (t / duration.max(1e-3)).clamp(0.0, 1.0)
+    };
+    for (t, name) in events {
+        let x = x_of(*t);
+        let col = if name.starts_with("sfx:") {
+            c::PLAY
+        } else {
+            c::ACCENT
+        };
+        p.line_segment(
+            [
+                Pos2::new(x, rect.min.y + 2.0),
+                Pos2::new(x, rect.max.y - 2.0),
+            ],
+            (3.0, col),
+        );
+    }
+    let x = x_of(time);
+    p.line_segment(
+        [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)],
+        (1.0, c::TEXT),
+    );
+    let mut picked = None;
+    if let Some(pos) = resp.hover_pos()
+        && let Some((t, name)) = events.iter().find(|(t, _)| (x_of(*t) - pos.x).abs() < 5.0)
+    {
+        resp.clone().on_hover_text(format!("{name} at {t:.2} s"));
+        if resp.clicked() {
+            picked = Some(*t);
+        }
+    }
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Other,
+            true,
+            format!("{} events", events.len()),
+        )
+    });
+    picked
+}
+
+/// The clip's metadata: its events (added at the playhead, moved,
+/// renamed, removed) and root motion (extracted at bake; the preview
+/// carried by the track). Each change writes the manifest.
+fn clip_meta(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    model: &str,
+    events: &std::collections::BTreeMap<String, Vec<(f32, String)>>,
+    root_motion: &[String],
+) {
+    let a = &mut app.anim;
+    let Some(clip) = a.clip.clone() else {
+        return;
+    };
+    let duration = a.current_metrics().map_or(0.0, |m| m.duration);
+    let mut list = events.get(&clip).cloned().unwrap_or_default();
+    let mut changed = false;
+    theme::component(ui, "anim-events", icon::FLAG, c::ACCENT, "Events", |ui| {
+        let mut remove = None;
+        for (i, (t, name)) in list.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(t)
+                            .range(0.0..=duration)
+                            .speed(0.01)
+                            .suffix(" s"),
+                    )
+                    .on_hover_text("Seconds into the clip")
+                    .changed();
+                let w = (ui.available_width() - 30.0).max(40.0);
+                changed |= ui
+                    .add(egui::TextEdit::singleline(name).desired_width(w))
+                    .on_hover_text("Event name; sfx:<sound> plays sounds/<sound>")
+                    .lost_focus();
+                if theme::named_icon_button(ui, icon::TRASH, "Remove event").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            list.remove(i);
+            changed = true;
+        }
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - 120.0).max(40.0);
+            ui.add(egui::TextEdit::singleline(&mut a.new_event).desired_width(w));
+            if ui
+                .button(format!("{} Add at {:.2} s", icon::PLUS, a.time))
+                .on_hover_text("A timeline event at the playhead (the manifest's events.<clip>)")
+                .clicked()
+                && !a.new_event.trim().is_empty()
+            {
+                list.push((a.time, a.new_event.trim().to_string()));
+                changed = true;
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Events fire through the animation graph (AnimGraphInstance::events). \
+                 sfx:<name> carries sounds/<name>.",
+            )
+            .size(11.0)
+            .color(c::TEXT_FAINT),
+        );
+    });
+    if changed {
+        list.sort_by(|x, y| x.0.total_cmp(&y.0));
+        app.cmds.push(Cmd::SetClipEvents {
+            model: model.to_string(),
+            clip: clip.clone(),
+            events: list,
+        });
+    }
+    let a = &mut app.anim;
+    let mut extracted = root_motion.contains(&clip);
+    let mut toggled = false;
+    theme::component(
+        ui,
+        "anim-root",
+        icon::FOOTPRINTS,
+        c::OK,
+        "Root motion",
+        |ui| {
+            toggled = ui
+                .checkbox(&mut extracted, "Extract at bake")
+                .on_hover_text(
+                    "The root's ground motion leaves the clip for a track (manifest root_motion)",
+                )
+                .changed();
+            ui.add_enabled(
+                extracted,
+                egui::Checkbox::new(&mut a.follow_root, "Carry the preview by the track"),
+            );
+        },
+    );
+    if toggled {
+        let mut clips: Vec<String> = root_motion
+            .iter()
+            .filter(|c| **c != clip)
+            .cloned()
+            .collect();
+        if extracted {
+            clips.push(clip);
+        }
+        app.cmds.push(Cmd::SetRootMotion {
+            model: model.to_string(),
+            clips,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,6 +1342,10 @@ mod tests {
             foot_slide: 0.0,
             lowest: 0.0,
             feet: vec![1, 2],
+            root_motion: false,
+            root_distance: 0.0,
+            root_foot_slide: None,
+            events: Vec::new(),
             bounds: Vec::new(),
             warnings: Vec::new(),
         }];

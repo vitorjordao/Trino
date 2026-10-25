@@ -235,6 +235,19 @@ grades the colors of the assets that name a LUT (`grading`) and a scene's enviro
 daltonization filter (`AccessSettings::cvd_filter`). Details in
 [ADR 0033](adr/0033-post-processing-stack.md).
 
+### Animation: graphs, events, root motion, compression, foot IK (issue #65)
+
+`trino_core::anim` turns character logic into data. A graph (`TANG`, baked from
+`assets/anim/*.anim.ron`) is played by an `AnimGraphInstance`: parameters in, the first
+transition whose condition holds, events on the clips' timelines, root motion summed, and
+a pose out as an `AnimRef` of up to three clips (`blend`, `over`) — which every backend
+already draws, so no backend code. Clips can be compressed (`ANMC`: error-bounded keyed
+tracks decoded in `Mesh::pose`), and a pose can carry foot IK (`AnimRef::ik`, solved in
+`Mesh::pose_world` out of line, by `Caps::anim_ik`: off on the N64 unless forced).
+Everything is `no_std`, fixed size and deterministic: the self-test's pose hash is the same
+on the PC, in ares and in Azahar. Details in
+[ADR 0034](adr/0034-animation-graphs-and-clip-data.md).
+
 ### 2D in the same pipeline
 
 2D is not a separate engine path. The same `Renderer` draws it in the same frame as the

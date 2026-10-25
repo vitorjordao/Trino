@@ -67,6 +67,14 @@ Coverage: `TRINO_REQUIRE_GPU=1 cargo llvm-cov --workspace --summary-only
 --ignore-filename-regex '(crates/platform-(n64|3ds)|apps/(n64|3ds))/|crates/editor/src/main\.rs'`
 (details and the editor's ignored flows in `docs/TESTING.md`).
 
+
+**Low-memory machines (≤ 16 GB RAM):** run every command below with
+`CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4` (one job per 3–4 GB). The defaults (one job per
+core, tests on every core, GPU tests included) exhausted 14 GB + 11 GB of swap on a 16-core
+laptop and the OOM killer froze the machine; `journalctl -b -1 | grep -i oom` shows it after
+the reboot. Check `free -h` and `nproc` first. After such a crash, incremental artifacts can
+be half-written: a link failing with `undefined hidden symbol: anon.…` is that, fixed by
+`cargo clean -p <crate>` (the editor's was).
 ## Also worth running
 
 - The runner's opt-in features (issue #61), as the `lint` job does:

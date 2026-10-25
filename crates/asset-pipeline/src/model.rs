@@ -277,12 +277,29 @@ pub struct JointData {
 }
 
 /// A clip sampled at a fixed rate: `frames[f][joint]` local transforms.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ClipData {
     pub name: String,
     pub fps: f32,
     pub looping: bool,
     pub frames: Vec<Vec<Trs>>,
+    /// Timeline events, sorted: (seconds, name). Baked into `AEVT`.
+    pub events: Vec<(f32, String)>,
+    /// Root motion the bake took out of the root joint: per frame the
+    /// root's ground pose `[x, z, yaw]` from frame 0. Baked into `ROOT`.
+    pub root: Option<Vec<[f32; 3]>>,
+}
+
+impl ClipData {
+    /// Seconds from the first to the last frame (the runtime's
+    /// `ClipInfo::duration`).
+    pub fn duration(&self) -> f32 {
+        if self.frames.len() > 1 && self.fps > 0.0 {
+            (self.frames.len() - 1) as f32 / self.fps
+        } else {
+            0.0
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -296,6 +313,14 @@ pub struct SkeletonData {
 /// and the procedural primitives produce.
 #[derive(Clone, Debug, Default)]
 pub struct MeshData {
+    /// Write the clips as `ANMC` within these bounds (issue #65); `None`
+    /// keeps `ANIM`. A clip that can't compress falls back to `ANIM` whole.
+    pub anim_compression: Option<crate::anim_compress::Bounds>,
+    /// The skeleton's joint names (glTF node names; tools and `ik`).
+    pub joint_names: Vec<String>,
+    /// Foot IK chains (`IKCH`): the pelvis joint (or none) and up to two
+    /// legs of `[hip, knee, foot]` joints.
+    pub ik: Option<(Option<u8>, Vec<[u8; 3]>)>,
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub colors: Vec<[u8; 4]>,
@@ -425,6 +450,13 @@ impl MeshData {
                 put_trs(&mut body, &j.rest);
             }
             section(&mut blob, b"SKEL", &body);
+            if let Some((pelvis, legs)) = &self.ik {
+                let mut body = vec![legs.len() as u8, pelvis.unwrap_or(0xFF)];
+                for l in legs {
+                    body.extend_from_slice(l);
+                }
+                section(&mut blob, b"IKCH", &body);
+            }
             if self.blend.iter().any(|b| b[1] != 0) {
                 if self.blend.len() != self.positions.len() {
                     return Err("smooth skin: one blend pair per vertex expected".into());
@@ -432,7 +464,24 @@ impl MeshData {
                 let body: Vec<u8> = self.blend.iter().flatten().copied().collect();
                 section(&mut blob, b"SKW2", &body);
             }
-            if !skel.clips.is_empty() {
+            let compressed = match (&self.anim_compression, skel.clips.is_empty()) {
+                (Some(b), false) => crate::anim_compress::encode(skel, b)
+                    .ok()
+                    .filter(|(body, _)| {
+                        // Only when it saves RAM.
+                        let raw: usize = skel
+                            .clips
+                            .iter()
+                            .map(|c| 16 + c.frames.len() * skel.joints.len() * 40)
+                            .sum();
+                        body.len() < raw + 4
+                    })
+                    .map(|(body, _)| body),
+                _ => None,
+            };
+            if let Some(body) = compressed {
+                section(&mut blob, b"ANMC", &body);
+            } else if !skel.clips.is_empty() {
                 let mut body = Vec::new();
                 body.extend_from_slice(&(skel.clips.len() as u32).to_le_bytes());
                 for c in &skel.clips {
@@ -447,6 +496,37 @@ impl MeshData {
                     }
                 }
                 section(&mut blob, b"ANIM", &body);
+            }
+            let roots: Vec<&ClipData> = skel.clips.iter().filter(|c| c.root.is_some()).collect();
+            if !roots.is_empty() {
+                let mut body = (roots.len() as u32).to_le_bytes().to_vec();
+                for c in roots {
+                    let track = c.root.as_ref().unwrap();
+                    body.extend_from_slice(&ClipId::from_name(&c.name).0.to_le_bytes());
+                    put_f32s(&mut body, &[c.fps]);
+                    body.extend_from_slice(&(track.len() as u32).to_le_bytes());
+                    for f in track {
+                        put_f32s(&mut body, f);
+                    }
+                }
+                section(&mut blob, b"ROOT", &body);
+            }
+            let evented: Vec<&ClipData> =
+                skel.clips.iter().filter(|c| !c.events.is_empty()).collect();
+            if !evented.is_empty() {
+                let mut body = (evented.len() as u32).to_le_bytes().to_vec();
+                for c in evented {
+                    body.extend_from_slice(&ClipId::from_name(&c.name).0.to_le_bytes());
+                    body.extend_from_slice(&(c.events.len() as u32).to_le_bytes());
+                    for (t, name) in &c.events {
+                        put_f32s(&mut body, &[*t]);
+                        body.extend_from_slice(
+                            &trino_core::anim::EventId::from_name(name).0.to_le_bytes(),
+                        );
+                        body.extend_from_slice(&event_sound(name).to_le_bytes());
+                    }
+                }
+                section(&mut blob, b"AEVT", &body);
             }
         }
 
@@ -557,6 +637,16 @@ pub struct ModelOptions {
     pub smooth: bool,
     /// Bake ambient occlusion into the vertex colors ([`crate::ao`]).
     pub ao: Option<crate::ao::AoBake>,
+    /// Clips whose root motion the bake extracts (`ROOT`): the root joint's
+    /// ground translation and turn leave the clip, which then plays in place
+    /// while the game moves the entity by the track (issue #65).
+    pub root_motion: Vec<String>,
+    /// Timeline events per clip name: (seconds, event name) (`AEVT`).
+    pub events: std::collections::BTreeMap<String, Vec<(f32, String)>>,
+    /// Compress the clips (`ANMC`) within these bounds.
+    pub anim_compression: Option<crate::anim_compress::Bounds>,
+    /// Foot IK chains by joint name (`IKCH`).
+    pub ik: Option<IkDecl>,
     /// Grade the vertex colors through this `TLUT` blob (the consoles'
     /// color grading, [`crate::lut`]), after the AO.
     pub grading: Option<Vec<u8>>,
@@ -571,8 +661,25 @@ impl Default for ModelOptions {
             smooth: false,
             ao: None,
             grading: None,
+            root_motion: Vec::new(),
+            events: Default::default(),
+            anim_compression: None,
+            ik: None,
         }
     }
+}
+
+/// The manifest's `ik`: legs of joint names `[hip, knee, foot]` (`left`,
+/// `right`) and the joint that drops for the lower foot (`pelvis`).
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IkDecl {
+    #[serde(default)]
+    pub pelvis: Option<String>,
+    #[serde(default)]
+    pub left: Option<[String; 3]>,
+    #[serde(default)]
+    pub right: Option<[String; 3]>,
 }
 
 /// Convert a model master into a TMDL blob with default options.
@@ -595,6 +702,7 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
         data.optimize_vertex_order();
         data
     };
+    apply_clip_meta(&mut data, opts).map_err(|e| err(&e))?;
     if let Some(ao) = &opts.ao {
         crate::ao::bake_vertex_ao(&mut data, ao);
     }
@@ -606,7 +714,170 @@ pub fn bake_model(path: &Path, opts: &ModelOptions) -> Result<Vec<u8>, String> {
     if data.texture.is_none() {
         data.uvs.clear();
     }
+    data.anim_compression = opts.anim_compression;
     data.encode().map_err(|e| err(&e))
+}
+
+/// What compressing a model's clips within `bounds` gives (whether the
+/// manifest asks for it or not): `model inspect --compressed`.
+pub fn compression_report(
+    path: &Path,
+    opts: &ModelOptions,
+    bounds: &crate::anim_compress::Bounds,
+) -> Result<Vec<crate::anim_compress::ClipReport>, String> {
+    let err = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    if path.to_string_lossy().ends_with(".prim.ron") {
+        return Ok(Vec::new()); // fake objects have no clips
+    }
+    let mut data = load_gltf(path, opts)?;
+    apply_clip_meta(&mut data, opts).map_err(|e| err(&e))?;
+    let Some(skel) = &data.skeleton else {
+        return Ok(Vec::new());
+    };
+    crate::anim_compress::encode(skel, bounds)
+        .map(|(_, r)| r)
+        .map_err(|e| err(&e))
+}
+
+/// The sound an event carries: `sfx:<name>` plays `sounds/<name>` (0 =
+/// none).
+pub fn event_sound(name: &str) -> u32 {
+    name.strip_prefix("sfx:")
+        .map_or(0, |s| trino_core::asset_id(&format!("sounds/{s}")))
+}
+
+/// Attach the manifest's clip metadata: events on their clips, and root
+/// motion out of the root joint of the clips that ask for it.
+pub fn apply_clip_meta(data: &mut MeshData, opts: &ModelOptions) -> Result<(), String> {
+    if let Some(ik) = &opts.ik {
+        if data.skeleton.is_none() {
+            return Err("ik needs a skeleton".into());
+        }
+        let names = &data.joint_names;
+        let find = |n: &str| {
+            names
+                .iter()
+                .position(|x| x == n)
+                .map(|i| i as u8)
+                .ok_or_else(|| format!("ik: no joint `{n}` (joints: {})", names.join(", ")))
+        };
+        let mut legs = Vec::new();
+        for leg in [&ik.left, &ik.right].into_iter().flatten() {
+            legs.push([find(&leg[0])?, find(&leg[1])?, find(&leg[2])?]);
+        }
+        if legs.is_empty() {
+            return Err("ik: name a `left` or a `right` leg".into());
+        }
+        let pelvis = ik.pelvis.as_deref().map(find).transpose()?;
+        // The runtime's own validation (each leg descends hip -> knee -> foot).
+        let skel = data.skeleton.as_ref().unwrap();
+        let parent = |j: usize| {
+            let p = skel.joints.get(j)?.parent;
+            (p >= 0).then_some(p as usize)
+        };
+        let mut body = vec![legs.len() as u8, pelvis.unwrap_or(0xFF)];
+        for l in &legs {
+            body.extend_from_slice(l);
+        }
+        if trino_core::anim::ik::Chains::parse(&body, skel.joints.len(), &parent).is_none() {
+            return Err("ik: each leg must go down the hierarchy hip -> knee -> foot".into());
+        }
+        data.ik = Some((pelvis, legs));
+    }
+    if opts.root_motion.is_empty() && opts.events.is_empty() {
+        return Ok(());
+    }
+    let Some(skel) = data.skeleton.as_mut() else {
+        return Err("root_motion/events need an animated model (it has no skeleton)".into());
+    };
+    let names: Vec<String> = skel.clips.iter().map(|c| c.name.clone()).collect();
+    let missing = |n: &String| {
+        format!(
+            "clip `{n}` is not in this model (clips: {})",
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
+        )
+    };
+    for n in opts.root_motion.iter().chain(opts.events.keys()) {
+        if !names.contains(n) {
+            return Err(missing(n));
+        }
+    }
+    let root = skel
+        .joints
+        .iter()
+        .position(|j| j.parent < 0)
+        .ok_or("the skeleton has no root joint")?;
+    for clip in &mut skel.clips {
+        if let Some(list) = opts.events.get(&clip.name) {
+            let dur = clip.duration();
+            let mut events = Vec::new();
+            for (t, name) in list {
+                if !(*t >= 0.0 && *t <= dur + 1e-4) {
+                    return Err(format!(
+                        "event `{name}` at {t} s is past the end of clip `{}` ({dur:.3} s)",
+                        clip.name
+                    ));
+                }
+                // A loop's end is its start again: one time, fired once.
+                let t = if clip.looping && *t >= dur - 1e-4 {
+                    0.0
+                } else {
+                    t.min(dur)
+                };
+                events.push((t, name.clone()));
+            }
+            events.sort_by(|a, b| a.0.total_cmp(&b.0));
+            clip.events = events;
+        }
+        if opts.root_motion.contains(&clip.name) {
+            clip.root = Some(extract_root_motion(&mut clip.frames, root));
+        }
+    }
+    Ok(())
+}
+
+/// Take the root's ground motion (x, z and the turn about +Y, from frame 0)
+/// out of `frames`, leaving the root where frame 0 had it: the track.
+pub fn extract_root_motion(frames: &mut [Vec<Trs>], root: usize) -> Vec<[f32; 3]> {
+    let yaw_of = |r: [f32; 4]| {
+        // The rotated +Z axis's heading.
+        let [x, y, z, w] = r;
+        let fx = 2.0 * (x * z + w * y);
+        let fz = 1.0 - 2.0 * (x * x + y * y);
+        fx.atan2(fz)
+    };
+    let Some(first) = frames.first().map(|f| f[root]) else {
+        return Vec::new();
+    };
+    let yaw0 = yaw_of(first.r);
+    let mut last = 0.0f32;
+    let mut track = Vec::with_capacity(frames.len());
+    for frame in frames.iter_mut() {
+        let trs = &mut frame[root];
+        // Unwrap the heading so a full turn keeps counting.
+        let mut d = yaw_of(trs.r) - yaw0;
+        while d - last > std::f32::consts::PI {
+            d -= std::f32::consts::TAU;
+        }
+        while d - last < -std::f32::consts::PI {
+            d += std::f32::consts::TAU;
+        }
+        last = d;
+        track.push([trs.t[0] - first.t[0], trs.t[2] - first.t[2], d]);
+        trs.t[0] = first.t[0];
+        trs.t[2] = first.t[2];
+        if d != 0.0 {
+            // Turn the root back by d about +Y: q' = Ry(-d) * q.
+            let (s, c) = ((-d * 0.5).sin(), (-d * 0.5).cos());
+            let [x, y, z, w] = trs.r;
+            trs.r = normalize_quat([c * x + s * z, c * y + s * w, c * z - s * x, c * w - s * y]);
+        }
+    }
+    track
 }
 
 /// Animation clip names of a model master (the TMDL stores only their
@@ -1106,6 +1377,7 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
             fps,
             looping,
             frames,
+            ..ClipData::default()
         });
     }
 
@@ -1116,6 +1388,15 @@ fn load_gltf(path: &Path, opts: &ModelOptions) -> Result<MeshData, String> {
         }
         data.blend = blend_of_vertex;
     }
+    data.joint_names = joint_nodes
+        .iter()
+        .map(|&n| {
+            doc.nodes()
+                .nth(n)
+                .and_then(|x| x.name().map(String::from))
+                .unwrap_or_default()
+        })
+        .collect();
     data.skeleton = Some(SkeletonData {
         joint_of_vertex,
         joints,

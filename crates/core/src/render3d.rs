@@ -91,11 +91,46 @@ pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check};
 ///   u8 weight2` — the vertex blends from its `SKEL` joint toward `joint2`
 ///   by `weight2 / 255` (two-bone linear blend). Meshes without it stay
 ///   rigid (the N64-era look, and cheaper).
+/// - `ANMC` (issue #65, after `SKEL`, instead of `ANIM`): the clips as
+///   compressed tracks, decoded on the fly ([`crate::anim::anmc`]).
+/// - `IKCH` (issue #65, after `SKEL`): foot IK chains, `u8 legs, u8 pelvis
+///   (0xFF none)`, then `legs × (u8 hip, u8 knee, u8 foot)`
+///   ([`crate::anim::ik`]).
+/// - `ROOT` (issue #65): root motion the bake took out of clips. `u32
+///   count`, then per clip `u32 clip id, f32 fps, u32 frames` and `frames *
+///   (f32 x, f32 z, f32 yaw)`, cumulative from frame 0
+///   ([`crate::anim::RootTrack`]). The clip's root joint stays in place.
+/// - `AEVT` (issue #65): timeline events. `u32 count`, then per clip `u32
+///   clip id, u32 n` and `n * (f32 time, u32 event id, u32 sound id or 0)`
+///   ([`crate::anim::EventTrack`]). Neither section is read by the T&L.
 /// - `SLOT`: per vertex `u8` color slot, 0..=4. Slot 0 keeps the baked
 ///   color; slot `s` multiplies the vertex RGB by entry `s - 1` of the
 ///   draw's [`ModelParams::palette`] (before tint and lighting). Baked only
 ///   when some vertex has a non-zero slot (glTF attribute `_SLOT`).
 pub const TMDL_MAGIC: &[u8; 4] = b"TMDL";
+
+/// The body of the first section `tag` of a TMDL blob, if any (sections
+/// [`Mesh`] does not keep, read by the tools and by `trino_core::anim`).
+pub fn tmdl_section<'a>(bytes: &'a [u8], tag: &[u8; 4]) -> Option<&'a [u8]> {
+    if bytes.len() < 12 || &bytes[0..4] != TMDL_MAGIC {
+        return None;
+    }
+    let v = rd_u32(bytes, 4) as usize;
+    let i = rd_u32(bytes, 8) as usize;
+    let mut at = 12usize
+        .checked_add(v.checked_mul(28)?)?
+        .checked_add(i.checked_mul(2)?)?;
+    while bytes.len() >= at + 8 {
+        let len = rd_u32(bytes, at + 4) as usize;
+        let body_at = at + 8;
+        let body = bytes.get(body_at..body_at.checked_add(len)?)?;
+        if &bytes[at..at + 4] == tag {
+            return Some(body);
+        }
+        at = body_at + len;
+    }
+    None
+}
 
 /// Highest color slot a vertex may name (`SLOT`): the palette has
 /// [`MAX_SLOT`] entries ([`crate::Palette`]).
@@ -155,6 +190,10 @@ struct Skeleton<'a> {
     joint_count: usize,
     clips: &'a [u8],
     clip_count: usize,
+    /// The clips are `ANMC` (compressed tracks), not `ANIM` samples.
+    compressed: bool,
+    /// Foot IK chains (`IKCH`; `legs == 0`: none).
+    ik: crate::anim::ik::Chains,
 }
 
 /// Where each part of a validated TMDL blob lives (byte spans), so a
@@ -197,6 +236,8 @@ struct SkeletonLayout {
     joint_count: usize,
     clips: Span,
     clip_count: usize,
+    compressed: bool,
+    ik: crate::anim::ik::Chains,
 }
 
 /// A byte range of the blob.
@@ -409,6 +450,53 @@ impl<'a> Mesh<'a> {
                     skel.clips = &body[4..];
                     skel.clip_count = count;
                 }
+                b"ANMC" => {
+                    let Some(skel) = mesh.skeleton.as_mut() else {
+                        return Err(MeshError::BadSection);
+                    };
+                    if len < 4 {
+                        return Err(MeshError::BadSection);
+                    }
+                    let count = rd_u32(body, 0) as usize;
+                    let clips = &body[4..];
+                    let mut c_at = 0;
+                    for _ in 0..count {
+                        if clips.len() < c_at + crate::anim::anmc::CLIP_HEADER {
+                            return Err(MeshError::BadSection);
+                        }
+                        let (_, fps, frames, _, at, n) =
+                            crate::anim::anmc::clip_header(clips, c_at);
+                        if frames == 0
+                            || frames > u16::MAX as usize
+                            || !fps.is_finite()
+                            || n > u16::MAX as usize
+                            || clips.len() < at + n
+                            || !crate::anim::anmc::check_body(
+                                &clips[at..at + n],
+                                skel.joint_count,
+                                frames,
+                            )
+                        {
+                            return Err(MeshError::BadSection);
+                        }
+                        c_at = at + n;
+                    }
+                    skel.clips = clips;
+                    skel.clip_count = count;
+                    skel.compressed = true;
+                }
+                b"IKCH" => {
+                    let Some(skel) = mesh.skeleton.as_mut() else {
+                        return Err(MeshError::BadSection);
+                    };
+                    let joints = skel.joints;
+                    let parent = |j: usize| {
+                        let p = rd_u32(joints, j * JOINT_BYTES) as i32;
+                        (p >= 0 && (p as usize) < j).then_some(p as usize)
+                    };
+                    skel.ik = crate::anim::ik::Chains::parse(body, skel.joint_count, &parent)
+                        .ok_or(MeshError::BadSection)?;
+                }
                 b"TXUV" => {
                     if len < v * 8 {
                         return Err(MeshError::BadSection);
@@ -461,6 +549,8 @@ impl<'a> Mesh<'a> {
                 joint_count: k.joint_count,
                 clips: span(k.clips),
                 clip_count: k.clip_count,
+                compressed: k.compressed,
+                ik: k.ik,
             }),
             uvs: self.uvs.map(|u| span(u.as_flattened())),
             texture: self.texture,
@@ -493,6 +583,8 @@ impl<'a> Mesh<'a> {
                 joint_count: k.joint_count,
                 clips: k.clips.get(blob),
                 clip_count: k.clip_count,
+                compressed: k.compressed,
+                ik: k.ik,
             }),
             uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
             texture: l.texture,
@@ -568,6 +660,8 @@ impl<'a> Mesh<'a> {
             joint_count: j,
             clips: &[],
             clip_count: 0,
+            compressed: false,
+            ik: crate::anim::ik::Chains::default(),
         })
     }
 
@@ -681,10 +775,25 @@ impl<'a> Mesh<'a> {
     fn clip_offset(skel: &Skeleton, n: usize) -> usize {
         let mut at = 0;
         for _ in 0..n {
-            let frames = rd_u32(skel.clips, at + 8) as usize;
-            at += CLIP_HEADER + frames * skel.joint_count * SAMPLE_BYTES;
+            at += Self::clip_size(skel, at);
         }
         at
+    }
+
+    /// Bytes of the clip at `at` (header included), `ANIM` or `ANMC`.
+    #[inline]
+    fn clip_size(skel: &Skeleton, at: usize) -> usize {
+        if skel.compressed {
+            crate::anim::anmc::CLIP_HEADER + rd_u32(skel.clips, at + 16) as usize
+        } else {
+            let frames = rd_u32(skel.clips, at + 8) as usize;
+            CLIP_HEADER + frames * skel.joint_count * SAMPLE_BYTES
+        }
+    }
+
+    /// Whether the clips are compressed (`ANMC`).
+    pub fn compressed_clips(&self) -> bool {
+        self.skeleton.is_some_and(|s| s.compressed)
     }
 
     /// Metadata of clip `n` (`n < clip_count()`).
@@ -717,26 +826,62 @@ impl<'a> Mesh<'a> {
         let Some(skel) = self.skeleton else {
             return 0;
         };
+        let j_count = self.pose_world(anim, out);
+        // Skin = world * inverse bind.
+        for (j, m) in out.iter_mut().enumerate().take(j_count) {
+            let jat = j * JOINT_BYTES + 4;
+            let mut inv = Mat34::IDENTITY;
+            for r in 0..3 {
+                for c in 0..4 {
+                    inv.m[r][c] = rd_f32(skel.joints, jat + (r * 4 + c) * 4);
+                }
+            }
+            *m = m.mul(&inv);
+        }
+        j_count
+    }
+
+    /// Each joint's model-space matrix for `anim` (the rest pose when `None`),
+    /// foot IK applied: where the joints are, not the skinning matrices
+    /// [`pose`](Self::pose) makes of them (an ankle's position is `out[foot]`'s
+    /// translation). Returns the joint count.
+    pub fn pose_world(&self, anim: Option<AnimRef>, out: &mut [Mat34; MAX_JOINTS]) -> usize {
+        let Some(skel) = self.skeleton else {
+            return 0;
+        };
         let j_count = skel.joint_count;
 
         // Locate the clip(s) and the two frames of each to interpolate.
         let main = anim.and_then(|a| Self::locate(&skel, a.clip, a.time));
-        let blend = anim
-            .and_then(|a| a.blend)
-            .filter(|_| main.is_some())
-            .and_then(|b| {
+        let second = |b: Option<crate::render::AnimBlend>| {
+            b.filter(|_| main.is_some()).and_then(|b| {
                 let w = b.weight.clamp(0.0, 1.0);
                 Self::locate(&skel, b.clip, b.time).map(|s| (s, w))
-            });
+            })
+        };
+        let blend = second(anim.and_then(|a| a.blend));
+        let over = second(anim.map(|a| a.over).filter(|o| o.weight > 0.0));
+
+        // Compressed clips: each joint's track offset, once per clip.
+        let mut offs = [[0u16; MAX_JOINTS]; 3];
+        if skel.compressed {
+            Self::offsets_of(&skel, main, &mut offs[0]);
+            Self::offsets_of(&skel, blend.map(|b| b.0), &mut offs[1]);
+            Self::offsets_of(&skel, over.map(|o| o.0), &mut offs[2]);
+        }
 
         // World (model-space) matrix per joint; parents precede children.
         for j in 0..j_count {
             let jat = j * JOINT_BYTES;
             let (t, q, s) = match main {
                 Some(m) => {
-                    let a = Self::sample_joint(&skel, m, j);
-                    match blend {
-                        Some((b, w)) => lerp_trs(a, Self::sample_joint(&skel, b, j), w),
+                    let a = Self::sample_any(&skel, m, j, &offs[0]);
+                    let a = match blend {
+                        Some((b, w)) => lerp_trs(a, Self::sample_any(&skel, b, j, &offs[1]), w),
+                        None => a,
+                    };
+                    match over {
+                        Some((o, w)) => lerp_trs(a, Self::sample_any(&skel, o, j, &offs[2]), w),
                         None => a,
                     }
                 }
@@ -750,18 +895,25 @@ impl<'a> Mesh<'a> {
                 local
             };
         }
-        // Skin = world * inverse bind.
-        for (j, m) in out.iter_mut().enumerate().take(j_count) {
-            let jat = j * JOINT_BYTES + 4;
-            let mut inv = Mat34::IDENTITY;
-            for r in 0..3 {
-                for c in 0..4 {
-                    inv.m[r][c] = rd_f32(skel.joints, jat + (r * 4 + c) * 4);
-                }
-            }
-            *m = m.mul(&inv);
+        // Foot IK: only a pose that asks for it, only a model with chains.
+        if let Some(a) = anim
+            && !a.ik.is_none()
+            && skel.ik.legs > 0
+            && main.is_some()
+        {
+            let joints = skel.joints;
+            let parent = |j: usize| {
+                let p = rd_u32(joints, j * JOINT_BYTES) as i32;
+                (p >= 0 && (p as usize) < j).then_some(p as usize)
+            };
+            crate::anim::ik::solve(out, j_count, &parent, &skel.ik, a.ik);
         }
         j_count
+    }
+
+    /// The model's foot IK chains (`IKCH`).
+    pub fn ik_chains(&self) -> Option<crate::anim::ik::Chains> {
+        self.skeleton.map(|s| s.ik).filter(|c| c.legs > 0)
     }
 
     /// Clip byte offset + the two frames around `time` and the blend factor
@@ -792,9 +944,40 @@ impl<'a> Mesh<'a> {
                     k: f - f0 as f32,
                 });
             }
-            at += CLIP_HEADER + frames * skel.joint_count * SAMPLE_BYTES;
+            at += Self::clip_size(skel, at);
         }
         None
+    }
+
+    /// Each joint's track offset in a compressed clip (once per pose).
+    fn offsets_of(skel: &Skeleton, s: Option<ClipSample>, out: &mut [u16; MAX_JOINTS]) {
+        if let Some(s) = s
+            && skel.compressed
+        {
+            let (.., at, n) = crate::anim::anmc::clip_header(skel.clips, s.at);
+            crate::anim::anmc::joint_offsets(&skel.clips[at..at + n], skel.joint_count, out);
+        }
+    }
+
+    /// Local `(t, q, s)` of joint `j` at a located clip time; `offs` from
+    /// [`Self::offsets_of`] for compressed clips.
+    #[inline]
+    fn sample_any(
+        skel: &Skeleton,
+        s: ClipSample,
+        j: usize,
+        offs: &[u16; MAX_JOINTS],
+    ) -> (Vec3, Quat, Vec3) {
+        if skel.compressed {
+            let (.., at, n) = crate::anim::anmc::clip_header(skel.clips, s.at);
+            crate::anim::anmc::sample_joint(
+                &skel.clips[at..at + n],
+                offs[j] as usize,
+                s.f0 as f32 + s.k,
+            )
+        } else {
+            Self::sample_joint(skel, s, j)
+        }
     }
 
     /// Local `(t, q, s)` of joint `j` at a located clip time.

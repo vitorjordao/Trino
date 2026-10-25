@@ -414,9 +414,12 @@ fn assets_pc_bakes_the_repo_manifest() {
     let access = root().join("assets/palettes.ron").exists() as usize;
     // The achievements table (issue #61), `services/achievements`.
     let services = root().join("assets/achievements.ron").exists() as usize;
+    // Animation graphs (`assets/anim/*.anim.ron`, issue #65): `anim/<name>`.
+    let graphs = files("assets/anim", ".anim.ron");
+    assert!(graphs >= 2, "the strider's and the robots' graphs");
     assert_eq!(
         count,
-        all + fonts + mix + ui + access + services,
+        all + fonts + mix + ui + access + services + graphs,
         "every manifest entry is baked"
     );
     let index = std::fs::read_to_string(root().join("target/assets/pc/index.toml")).unwrap();
@@ -432,7 +435,7 @@ fn assets_pc_bakes_the_repo_manifest() {
     // are blobs, served like any other blob.
     assert_eq!(
         kind("blob"),
-        declared(&["blobs", "scenes", "particles", "luts"]) + ui + access + services
+        declared(&["blobs", "scenes", "particles", "luts"]) + ui + access + services + graphs
     );
     assert_eq!(
         index.matches("format = \"TLUT\"").count(),

@@ -3217,6 +3217,400 @@ pub fn particles(
     Ok(())
 }
 
+/// The strider's animation graph (`assets/anim/strider.anim.ron`, issue #65).
+pub const STRIDER_GRAPH: BlobId = BlobId::from_path("anim/strider");
+/// Its model (`[models.strider]`).
+pub const STRIDER: ModelId = ModelId::from_path("models/strider");
+
+/// The pose hash every target must reach on [`anim_graph`]'s script: the
+/// graph's f32 math is the same additions and products everywhere, and the
+/// hash quantizes to 1/4096 (computed on the PC; `xtask/tests/engine_checks.rs`
+/// prints it when it moves).
+pub const ANIM_GRAPH_HASH: u32 = 0x5dd6_83cb;
+
+/// What the `anim graph` step saw.
+#[derive(Debug)]
+pub struct AnimGraphReport {
+    pub hash: u32,
+    pub transitions: u32,
+    pub events: u32,
+    /// Root motion forward over the script (mm).
+    pub root_mm: i32,
+    /// Whether the posed strider's pixels were read back.
+    pub probed: bool,
+}
+
+/// The graph's script: 300 updates at 60 Hz — idle, a walk, a run, a hop
+/// on the trigger (refused once while airborne), back to idle. Returns the
+/// hash of every update's pose (clips, times, weights), events and root
+/// motion, and the instance at the update with the most clips in its pose.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn anim_graph_run(
+    g: &trino_core::AnimGraph,
+) -> Result<(u32, trino_core::AnimGraphInstance, AnimGraphReport), &'static str> {
+    use trino_core::anim::EventId;
+    let speed = g
+        .param_named("speed")
+        .ok_or("anim graph: no `speed` parameter")?;
+    let hop = g.param_named("hop").ok_or("anim graph: no `hop` trigger")?;
+    let grounded = g
+        .param_named("grounded")
+        .ok_or("anim graph: no `grounded`")?;
+    let mut i = trino_core::AnimGraphInstance::new(g);
+    let mut h: u32 = 0x811c_9dc5;
+    let mut mix = |v: u32| {
+        for b in v.to_le_bytes() {
+            h ^= b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+    };
+    let q = |v: f32| trino_core::math3d::to_i32(v * 4096.0) as u32;
+    let mut busiest = (0u8, i);
+    let (mut events, mut takeoffs, mut z) = (0u32, 0u32, 0.0f32);
+    for u in 0..300u32 {
+        let v = match u {
+            0..=39 => 0.0,
+            40..=99 => 0.8,
+            100..=139 => 2.0,
+            _ => (300 - u) as f32 * 0.005,
+        };
+        i.set_float(speed, v);
+        // The first hop is refused: the strider is not grounded.
+        i.set_bool(grounded, u != 120);
+        if u == 120 || u == 150 {
+            i.set_trigger(hop);
+        }
+        i.update(g, 1.0 / 60.0);
+        let a = i.anim(g);
+        mix(a.clip.0);
+        mix(q(a.time));
+        let mut clips = 1u8;
+        if let Some(b) = a.blend {
+            mix(b.clip.0);
+            mix(q(b.time));
+            mix(q(b.weight));
+            clips += 1;
+        }
+        if a.over.weight > 0.0 {
+            mix(a.over.clip.0);
+            mix(q(a.over.time));
+            mix(q(a.over.weight));
+            clips += 1;
+        }
+        if clips > busiest.0 {
+            busiest = (clips, i);
+        }
+        for e in i.events().iter() {
+            mix(e.id.0);
+            events += 1;
+            takeoffs += (e.id == EventId::from_name("sfx:jump")) as u32;
+        }
+        let d = i.root_motion();
+        mix(q(d.translation.x));
+        mix(q(d.translation.z));
+        z += d.translation.z;
+    }
+    mix(i.digest());
+    if busiest.0 < 3 {
+        return Err("anim graph: no pose mixed three clips (blend space into the hop)");
+    }
+    if takeoffs != 1 {
+        return Err("anim graph: the hop's sfx:jump event did not fire exactly once");
+    }
+    if i.transitions != 2 {
+        return Err("anim graph: expected locomotion -> hop -> locomotion");
+    }
+    if z < 1.0 {
+        return Err("anim graph: the walk and run carried the strider less than 1 m");
+    }
+    let report = AnimGraphReport {
+        hash: h,
+        transitions: i.transitions,
+        events,
+        root_mm: trino_core::math3d::to_i32(z * 1000.0),
+        probed: false,
+    };
+    Ok((h, busiest.1, report))
+}
+
+/// Animation graphs end to end (issue #65): the baked `anim/strider` graph
+/// parses on the target, the script plays the same states, events and root
+/// motion on every target (the hash equals [`ANIM_GRAPH_HASH`], the PC's),
+/// and the busiest pose — three clips, the blend space fading into the hop
+/// (`AnimRef::over`) — draws: the strider covers the screen's center.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn anim_graph(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<AnimGraphReport, &'static str> {
+    let bytes = platform
+        .blob(STRIDER_GRAPH)
+        .ok_or("anim graph: anim/strider blob missing")?;
+    let g = trino_core::AnimGraph::parse(bytes)
+        .map_err(|_| "anim graph: anim/strider does not parse")?;
+    if g.model() != STRIDER.0 {
+        return Err("anim graph: anim/strider names another model");
+    }
+    let (hash, busiest, mut report) = anim_graph_run(&g)?;
+    let (again, ..) = anim_graph_run(&g)?;
+    if hash != again {
+        return Err("anim graph: the same script gave another pose hash");
+    }
+    if hash != ANIM_GRAPH_HASH {
+        return Err("anim graph: pose hash differs from the PC's (ANIM_GRAPH_HASH)");
+    }
+    let clear = Color::rgb(10, 12, 30);
+    // Several identical frames: the 3DS LCD is double-buffered.
+    for _ in 0..3 {
+        renderer.begin_frame(clear);
+        renderer.set_camera(&Camera3 {
+            eye: Vec3::new(0.0, 1.0, 3.2),
+            target: Vec3::new(0.0, 0.9, 0.0),
+            fov_y: 1.0,
+        });
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model(
+            STRIDER,
+            &Transform3 {
+                position: Vec3::ZERO,
+                rotation: Vec3::new(0.0, core::f32::consts::PI, 0.0),
+                scale: Vec3::ONE,
+            },
+            Material::VertexLit,
+            &ModelParams {
+                anim: Some(busiest.anim(&g)),
+                ..ModelParams::DEFAULT
+            },
+        );
+        renderer.end_frame();
+    }
+    // Its triangles on whichever path drew them (CPU, the N64's RSP, the
+    // PICA200, the PC GPU: exclusive counters).
+    let st = renderer.stats();
+    let t = &st.tnl;
+    if st.not_loaded > 0 {
+        return Err("anim graph: models/strider is not loaded");
+    }
+    if st.tris + t.rsp_tris + t.gpu_tris + t.pc_gpu_tris == 0 {
+        return Err("anim graph: the posed strider drew nothing");
+    }
+    let caps = *renderer.caps();
+    let (w, h) = (caps.screen_width as u32, caps.screen_height as u32);
+    if let Some(px) = renderer.read_pixel(w / 2, h / 2) {
+        if px == clear {
+            return Err("anim graph: nothing at the screen's center (the strider's torso)");
+        }
+        report.probed = true;
+    }
+    Ok(report)
+}
+
+/// What the `foot ik` step saw.
+#[derive(Debug)]
+pub struct FootIkReport {
+    /// The tier's pose (the caps' `anim_ik`) and the forced one.
+    pub auto: trino_core::anim::IkPose,
+    pub forced: trino_core::anim::IkPose,
+    /// Whether the IK frame's pixels were compared with the plain one's.
+    pub probed: bool,
+    /// The CPU time of 16 IK draws less 16 plain ones (µs, per draw).
+    pub us_per_draw: i32,
+}
+
+/// The strider standing on a step: its graph's idle feet (`feet()`), the
+/// ground under them (the left foot's 0.2 m higher), and the pose's IK.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn ik_scene() -> (trino_core::Mat34, impl Fn(Vec3) -> Option<f32>) {
+    let m = trino_core::Mat34::from_rotation_scale_translation(
+        Vec3::new(0.0, core::f32::consts::PI, 0.0),
+        Vec3::ONE,
+        Vec3::ZERO,
+    );
+    // Facing the camera, the strider's left (+X) is the screen's... left
+    // after the turn: world x < 0. The step is under it.
+    (m, |p: Vec3| Some(if p.x < 0.0 { 0.2 } else { 0.0 }))
+}
+
+/// Foot IK by tier (issue #65): `FootIk::pose` is the 0.2 m step under the
+/// left foot where `Caps::anim_ik` is on (PC, Web, 3DS) and nothing on the
+/// N64 unless forced; forced, the frame differs from the plain one (the
+/// leg bent onto the step) and the tier's frame equals the plain one on the
+/// N64 and the forced one elsewhere. The step also times 16 IK draws
+/// against 16 plain ones (`TRINO_IK_COST:`, `perf::N64_COST.us_per_ik_draw`).
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn foot_ik(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+) -> Result<FootIkReport, &'static str> {
+    use trino_core::anim::{FootIk, IkPose};
+    let bytes = platform
+        .blob(STRIDER_GRAPH)
+        .ok_or("foot ik: anim/strider blob missing")?;
+    let g =
+        trino_core::AnimGraph::parse(bytes).map_err(|_| "foot ik: anim/strider does not parse")?;
+    let mut inst = trino_core::AnimGraphInstance::new(&g);
+    for _ in 0..10 {
+        inst.update(&g, 1.0 / 60.0);
+    }
+    let feet = inst
+        .feet(&g)
+        .ok_or("foot ik: the strider's graph has no feet (IKCH)")?;
+    let caps = *renderer.caps();
+    let (m, ground) = ik_scene();
+    let auto = FootIk::default().pose(&caps, &m, feet, &ground);
+    let forced = FootIk {
+        force: true,
+        ..FootIk::default()
+    }
+    .pose(&caps, &m, feet, &ground);
+    if forced
+        != (IkPose {
+            left: 200,
+            right: 0,
+        })
+    {
+        return Err("foot ik: the forced pose is not the 0.2 m step under the left foot");
+    }
+    if caps.anim_ik != (auto == forced) || (!caps.anim_ik && !auto.is_none()) {
+        return Err("foot ik: the tier's pose does not follow Caps::anim_ik");
+    }
+    let base = inst.anim(&g);
+    let clear = Color::rgb(12, 16, 28);
+    let frame_once = |renderer: &mut dyn Renderer, ik: IkPose| {
+        renderer.begin_frame(clear);
+        renderer.set_camera(&Camera3 {
+            eye: Vec3::new(0.0, 0.6, 2.4),
+            target: Vec3::new(0.0, 0.5, 0.0),
+            fov_y: 1.0,
+        });
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model_matrix(
+            STRIDER,
+            &m,
+            Material::VertexLit,
+            &ModelParams {
+                anim: Some(base.with_ik(ik)),
+                ..ModelParams::DEFAULT
+            },
+        );
+        renderer.end_frame();
+    };
+    // Each frame three times: the 3DS LCD is double-buffered.
+    let frame = |renderer: &mut dyn Renderer, ik: IkPose| {
+        for _ in 0..3 {
+            frame_once(renderer, ik);
+        }
+    };
+    // A coarse grid over the lower half of the screen: the legs.
+    let (w, h) = (caps.screen_width as u32, caps.screen_height as u32);
+    let grid = |renderer: &mut dyn Renderer| -> Option<u32> {
+        let mut hsh: u32 = 0x811c_9dc5;
+        for y in 0..12 {
+            for x in 0..16 {
+                let c = renderer.read_pixel(w * (2 * x + 1) / 32, h / 2 + h * (2 * y + 1) / 48)?;
+                for b in [c.r, c.g, c.b] {
+                    hsh ^= b as u32;
+                    hsh = hsh.wrapping_mul(0x0100_0193);
+                }
+            }
+        }
+        Some(hsh)
+    };
+    frame(renderer, IkPose::NONE);
+    let plain = grid(renderer);
+    frame(renderer, forced);
+    let bent = grid(renderer);
+    frame(renderer, auto);
+    let tier = grid(renderer);
+    let probed = match (plain, bent, tier) {
+        (Some(p), Some(b), Some(t)) => {
+            if p == b {
+                return Err("foot ik: the forced IK frame is the plain one (no leg moved)");
+            }
+            if (t == b) != caps.anim_ik || (t == p) == caps.anim_ik {
+                return Err("foot ik: the tier's frame is not the plain one (N64) or the IK one");
+            }
+            true
+        }
+        _ => false,
+    };
+    // The cost: 16 draws with both legs solved against 16 without, one a
+    // frame: more striders a frame grow the N64 renderer's batch buffers
+    // for good (16 at once kept 24 KB the base console's heap can't spare;
+    // one is 11 parts, fewer than the showcase's two robots).
+    let time = |renderer: &mut dyn Renderer, ik: IkPose| {
+        let mut total = 0i64;
+        for k in 0..16 {
+            renderer.begin_frame(clear);
+            renderer.set_light(&DEFAULT_LIGHT);
+            let mm = trino_core::Mat34::from_rotation_scale_translation(
+                Vec3::new(0.0, k as f32 * 0.3, 0.0),
+                Vec3::ONE,
+                Vec3::new(k as f32 * 0.01, 0.0, 0.0),
+            );
+            let t0 = platform.now_micros();
+            renderer.draw_model_matrix(
+                STRIDER,
+                &mm,
+                Material::VertexLit,
+                &ModelParams {
+                    anim: Some(base.with_ik(ik)),
+                    ..ModelParams::DEFAULT
+                },
+            );
+            total += platform.now_micros().saturating_sub(t0) as i64;
+            renderer.end_frame();
+        }
+        total
+    };
+    let both = IkPose {
+        left: 200,
+        right: -100,
+    };
+    let plain_us = time(renderer, IkPose::NONE);
+    let ik_us = time(renderer, both);
+    Ok(FootIkReport {
+        auto,
+        forced,
+        probed,
+        us_per_draw: ((ik_us - plain_us) / 16) as i32,
+    })
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn log_foot_ik(platform: &mut dyn Platform, r: &FootIkReport) {
+    let mut line: TextBuf<128> = TextBuf::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:foot ik tier={} forced={},{} {}\nTRINO_IK_COST: us_per_draw={}\n",
+            if r.auto.is_none() { "off" } else { "on" },
+            r.forced.left,
+            r.forced.right,
+            if r.probed { "probed" } else { "drawn" },
+            r.us_per_draw
+        ),
+    );
+    platform.log(line.as_str());
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn log_anim_graph(platform: &mut dyn Platform, r: &AnimGraphReport) {
+    let mut line: TextBuf<128> = TextBuf::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:anim graph data={:#010x} transitions={} events={} root_mm={} {}\n",
+            r.hash,
+            r.transitions,
+            r.events,
+            r.root_mm,
+            if r.probed { "probed" } else { "drawn" }
+        ),
+    );
+    platform.log(line.as_str());
+}
+
 /// The baked portal/cell demo (`scenes/interior.scene.ron`).
 pub const INTERIOR: BlobId = BlobId::from_path("scenes/interior");
 
@@ -3741,6 +4135,43 @@ pub fn asset_groups(
         return Err("asset groups: the heap did not return to its baseline after unload");
     }
     Ok(report)
+}
+
+/// The strider's group (`[groups.strider]`): the animation steps load it.
+pub const STRIDER_GROUP: trino_core::GroupId = trino_core::GroupId::from_name("strider");
+
+/// The animation steps (issue #65), with the strider's group loaded:
+/// `anim graph` and `foot ik`. Returns the frames the load took. Hosts run
+/// it last: the strider's load and unload in the middle of the run left the
+/// base N64's heap too fragmented for the perf scenes' 45 KB copies.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn anim_steps(host: &mut dyn GroupHost) -> Result<u32, &'static str> {
+    let before = heap_used(host);
+    let frames = load_until_ready(host, STRIDER_GROUP)?;
+    let loaded = heap_used(host);
+    {
+        let (renderer, platform) = host.parts();
+        platform.log("TRINO_STEP:anim graph\n");
+        let graph = anim_graph(renderer, platform)?;
+        log_anim_graph(platform, &graph);
+        platform.log("TRINO_STEP:foot ik\n");
+        let ik = foot_ik(renderer, platform)?;
+        log_foot_ik(platform, &ik);
+        platform.unload_group(STRIDER_GROUP);
+    }
+    // Frames for the backends to free what the RSP or the GPU may still
+    // read (the N64's grave keeps an unloaded mesh's copies 4 frames).
+    for _ in 0..8 {
+        loading_frame(host, 100);
+    }
+    let after = heap_used(host);
+    let mut line = TextBuf::<128>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("TRINO_STEP:anim steps heap before={before} loaded={loaded} after={after}\n"),
+    );
+    host.parts().1.log(line.as_str());
+    Ok(frames)
 }
 
 /// The `asset groups` step's log line.

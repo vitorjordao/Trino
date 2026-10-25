@@ -609,6 +609,17 @@ mod n3ds {
                             runtime::log("TRINO_STEP:texture formats golden frame\n");
                             castle64::selftest::draw_texture_formats(renderer, true);
                             renderer.dump_framebuffer();
+                            // 9) Animation (issue #65): last, its group
+                            // loaded and unloaded after everything else.
+                            let mut host = GroupHost {
+                                renderer: &mut *renderer,
+                                audio: &mut *audio,
+                                platform: &mut *platform,
+                            };
+                            let anim = castle64::selftest::anim_steps(&mut host);
+                            if let Err(e) = anim {
+                                fail(format!("{e}"));
+                            }
                             // The whole run's streaming: castle64's music
                             // played through every step above.
                             let s = trino_core::Audio::audio_stats(audio);
@@ -622,7 +633,9 @@ mod n3ds {
                                 s.streamed_frames,
                                 runtime::now_us() / 1000
                             ));
-                            runtime::log("TRINO_TEST_PASS\n");
+                            if anim.is_ok() {
+                                runtime::log("TRINO_TEST_PASS\n");
+                            }
                         }
                         Ok(false) => fail("showcase panel: no second screen to probe".into()),
                         Err(e) => fail(format!("{e}")),

@@ -228,8 +228,12 @@ fn model_inspect_reports_root_motion_events_and_compression() {
         assert!(r["bytes"].as_u64() < r["raw_bytes"].as_u64(), "{r}");
         assert!(r["max_rotation_deg"].as_f64().unwrap() <= 0.5, "{r}");
     }
-    // The robot isn't compressed in the manifest: inspect says what it would save.
+    // The robot's clips are compressed too (the base N64's boot RAM).
     let o = xtask(&["model", "inspect", "models/robot", "--compressed"]);
     assert!(o.status.success());
-    assert!(text(&o.stdout).contains("not baked so"), "{}", text(&o.stdout));
+    assert!(
+        text(&o.stdout).contains("baked compressed"),
+        "{}",
+        text(&o.stdout)
+    );
 }

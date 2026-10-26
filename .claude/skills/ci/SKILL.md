@@ -35,7 +35,10 @@ same scaffold in the booting job: the goldens and the `trino.toml` come from it.
 (target `i` runs in shard `i % 6`, `cargo xtask fuzz run`, the corpus cached per shard
 with `actions/cache`, crash inputs uploaded as `fuzz-artifacts-<shard>`). `schedule` only
 fires on the default branch: the PR trigger is how a change to the workflow is proven
-before it lands. The per-PR half is `cargo test -p trino-fuzz` inside `cargo test
+before it lands. **A step that needs nightly says `cargo +nightly`:** the repo's
+`rust-toolchain.toml` pins stable, which wins over the toolchain
+`dtolnay/rust-toolchain@nightly` installs (the first run failed with "'miri' is not
+available for the 'stable' toolchain"). The per-PR half is `cargo test -p trino-fuzz` inside `cargo test
 --workspace` (seeds, regressions, mutations).
 
 `release.yml` tags new workspace versions on main and publishes editor binaries, demo

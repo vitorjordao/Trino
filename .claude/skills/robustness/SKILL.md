@@ -84,6 +84,12 @@ test runs in the dev profile, which keeps overflow checks on.
   products (u32, then even u64 at `u32::MAX²·4`); TBND `raw` allocations; T3AU samples
   past the data (the pipeline asserted, the 3DS shim's DSP read past it); TUIL padding
   sums; ggrs messages decoded without a size limit (`trino_net::decode_message`).
+- From the PR's first CI fuzz run (45 s per target): a slider track narrower than its knob
+  (`f32::clamp` with crossed bounds panics in release too: `math::clamp_or` at every clamp
+  bounded by data); an EEPROM sequence bump half the circle past the intact save (the new
+  save read as older). CI's fresh corpus finds what a warm local one doesn't: download
+  `fuzz-artifacts-<shard>` (`gh run download <run> -n fuzz-artifacts-2`; the run id is the
+  latest push's), repro, fix, `fuzz keep`.
 
 ## Saves
 

@@ -48,7 +48,8 @@ jobs:
       # The unit tests of the no_std core: the parsers, the save slots, the
       # T&L's raw buffers (`as_chunks`, the scratch stacks). Tests Miri
       # can't finish in reasonable time are `cfg_attr(miri, ignore)`.
-      - run: cargo miri test -p trino-core --lib
+      # `+nightly`: rust-toolchain.toml pins stable in the repo.
+      - run: cargo +nightly miri test -p trino-core --lib
         env:
           # Tests leak 'static blobs on purpose (BakedScene borrows 'static).
           MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-ignore-leaks
@@ -70,7 +71,7 @@ jobs:
       # through a slice the core hands to std is caught.
       # (The fuzz targets run under ASan in the `fuzz` job.)
       - run: >
-          cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
           -p trino-core -p trino-asset-pipeline --no-fail-fast
         env:
           RUSTFLAGS: -Zsanitizer=address

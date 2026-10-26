@@ -67,6 +67,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0024](adr/0024-ui-system.md) | A declarative UI system for every target: `ui/*.ui.ron` screens, whole-pixel layout with safe areas and the 3DS touch screen, pad/mouse/touch focus, string tables, budgets, `ui check` |
 | [0025](adr/0025-shadows-per-tier.md) | Shadows per tier: blobs on the N64, planar shadows on the 3DS, a shadow map on the PC and the Web; depth-safe placement, scene shadows and receivers, budget, editor views |
 | [0027](adr/0027-accessibility.md) | Accessibility on every target: settings and persistence, semantic palettes per color-vision mode (no shader), icons, captions, text scale and high contrast, motion and flash guards, `access check`, the simulation view |
+| [0036](adr/0036-players-replays-netplay.md) | Local players (seats, the N64's four ports, `Join`, per-player bindings), `TREC` input recordings checked by state hashes on every target, rollback netplay over ggrs (UDP, WebRTC, a lobby), the editor's record/replay/Net tab, the 3DS local-wireless evaluation |
 
 ## Plans and history
 

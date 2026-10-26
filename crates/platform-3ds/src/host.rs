@@ -18,6 +18,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use trino_core::render3d::GpuReject;
+use trino_core::replay::ChannelSession;
 use trino_core::{Game, Input, InputState, Vec2};
 
 use crate::{N3dsAssets, N3dsAudio, N3dsInput, N3dsPlatform, N3dsRenderer, runtime};
@@ -68,7 +69,7 @@ impl N3dsHost {
         let mut host = N3dsHost {
             renderer: N3dsRenderer::new(),
             audio: N3dsAudio::new(),
-            input: N3dsInput,
+            input: N3dsInput::new(),
             platform: N3dsPlatform::new(),
         };
         N3dsAssets::load_all(&mut host.renderer, &mut host.audio, &mut host.platform);
@@ -91,8 +92,19 @@ impl N3dsHost {
 
     /// One frame with real controller + touch input.
     pub fn frame(&mut self, game: &mut dyn Game, dt: f32) {
-        let state = self.input.poll();
-        self.step(game, &state, dt);
+        let players = self.poll_players();
+        self.step(game, &players.players[0], dt);
+    }
+
+    /// Poll the controls as the one player (issue #67), apply the game's
+    /// seat requests and publish the players to the platform.
+    pub fn poll_players(&mut self) -> trino_core::PlayersInput {
+        while let Some(r) = self.platform.players.take_request() {
+            self.input.seats_mut().apply(r);
+        }
+        let players = self.input.poll_players();
+        self.platform.players.publish(self.input.seats());
+        players
     }
 
     /// One frame with scripted input (self-tests, bots). The asset groups'
@@ -100,9 +112,15 @@ impl N3dsHost {
     /// loads, what it unloaded is freed.
     pub fn step(&mut self, game: &mut dyn Game, input: &InputState, dt: f32) {
         N3dsAssets::pump(&mut self.renderer, &mut self.audio, &mut self.platform);
+        let zone = trino_core::trace::Zone::begin("update");
         game.update_with(&mut self.platform, input, &mut self.audio, dt);
+        zone.end();
+        let zone = trino_core::trace::Zone::begin("render");
         game.render(&mut self.renderer);
+        zone.end();
+        let zone = trino_core::trace::Zone::begin("audio");
         self.audio.poll();
+        zone.end();
         self.platform.sample_heap();
     }
 
@@ -193,16 +211,143 @@ impl N3dsHost {
         self.renderer.dump_framebuffer_bottom();
     }
 
-    /// The real-time loop, until the applet manager asks to quit.
+    /// What rollback netplay would cost on this console (issue #67): per
+    /// frame, a snapshot of `game` ([`Game::save_state`]), one sim update
+    /// with no drawing, and a load of the snapshot back; `window` updates
+    /// in a row is a full rollback of that many frames. The sim runs on a
+    /// [`Neutral`](trino_core::replay::Neutral) platform (no save writes)
+    /// with no sound. `None` when the game takes no snapshots.
+    pub fn rollback_cost(
+        &mut self,
+        game: &mut dyn Game,
+        frames: u32,
+        dt: f32,
+        mut input: impl FnMut(u32) -> InputState,
+    ) -> Option<trino_core::perf::RollbackCost> {
+        let size = game.state_size();
+        if size == 0 || frames == 0 {
+            return None;
+        }
+        let mut buf = alloc::vec![0u8; size];
+        let mut c = trino_core::perf::RollbackCost {
+            snapshot_bytes: size as u32,
+            ..Default::default()
+        };
+        let mut mute = trino_core::perf::Silent;
+        for i in 0..frames {
+            let state = input(i);
+            let t0 = runtime::now_us();
+            game.save_state(&mut buf)?;
+            let t1 = runtime::now_us();
+            {
+                let mut neutral = trino_core::replay::Neutral(&mut self.platform);
+                game.update_with(&mut neutral, &state, &mut mute, dt);
+            }
+            let t2 = runtime::now_us();
+            game.load_state(&buf);
+            let t3 = runtime::now_us();
+            c.save_us += t1.wrapping_sub(t0);
+            c.update_us += t2.wrapping_sub(t1);
+            c.load_us += t3.wrapping_sub(t2);
+            // Move on (the next frame's state is the updated one).
+            let mut neutral = trino_core::replay::Neutral(&mut self.platform);
+            game.update_with(&mut neutral, &state, &mut mute, dt);
+        }
+        c.save_us /= frames;
+        c.update_us /= frames;
+        c.load_us /= frames;
+        Some(c)
+    }
+
+    /// The replay or recording this app was built for (issue #67): a
+    /// `/replay.trec` in the RomFS replays it (`/replay_until` stops early,
+    /// `/replay_shot` dumps the last frame), a `/record` file (the game's
+    /// name) records the live input over the debug channel (`cargo xtask
+    /// replay run --platform 3ds`, `cargo xtask run 3ds --record`). `None`:
+    /// play.
+    pub fn channel_session(
+        &mut self,
+        game: &dyn Game,
+    ) -> Option<ChannelSession<'static, fn(&str)>> {
+        let log: fn(&str) = runtime::log;
+        if let Some(bytes) = N3dsAssets::read("/replay.trec") {
+            let bytes: &'static [u8] = alloc::boxed::Box::leak(bytes.into_boxed_slice());
+            let until = N3dsAssets::read("/replay_until")
+                .and_then(|b| core::str::from_utf8(&b).ok()?.trim().parse().ok());
+            return match ChannelSession::replay(bytes, until, "3ds", log) {
+                Ok(mut s) => {
+                    s.start(game);
+                    Some(s)
+                }
+                Err(e) => {
+                    runtime::log(&format!("TRINO_REPLAY: {}\n", e.message()));
+                    None
+                }
+            };
+        }
+        let name = N3dsAssets::read("/record")?;
+        let name = core::str::from_utf8(&name).ok()?.trim();
+        runtime::log(&format!("TRINO_RECORD: 3ds {name}\n"));
+        Some(ChannelSession::record(
+            game,
+            name,
+            (400, 240),
+            1,
+            "3ds",
+            log,
+        ))
+    }
+
+    /// The real-time loop, until the applet manager asks to quit (a replay
+    /// or a recording when the app asks for one:
+    /// [`channel_session`](Self::channel_session)).
     pub fn run(&mut self, game: &mut dyn Game) {
+        self.run_named(game, "3ds-game");
+    }
+
+    /// [`run`](Self::run) with the trace session's name (`run 3ds
+    /// --trace`; castle64's app names its own).
+    pub fn run_named(&mut self, game: &mut dyn Game, trace: &'static str) {
+        let mut session = self.channel_session(game);
         let mut last = runtime::now_us();
-        let mut trace = runtime::TraceLoop::start("3ds-game");
+        let mut trace = runtime::TraceLoop::start(trace);
         while runtime::running() {
             let now = runtime::now_us();
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
             last = now;
-            self.frame(game, dt);
+            match &mut session {
+                None => self.frame(game, dt),
+                Some(s) => {
+                    let live = self.poll_players();
+                    match s.input(&live, dt) {
+                        Some((players, dt)) => {
+                            if s.is_replay() {
+                                self.platform.players.publish_players(&players);
+                            }
+                            self.step(game, &players.players[0], dt);
+                            s.after(game, &players, dt);
+                        }
+                        None => {
+                            // The replay ended: its verdict, its last frame.
+                            if let Some(s) = session.take() {
+                                s.finish();
+                            }
+                            if N3dsAssets::exists("/replay_shot") {
+                                self.dump_framebuffer();
+                            }
+                            runtime::log("TRINO_REPLAY_DONE\n");
+                            while runtime::running() {
+                                game.render(&mut self.renderer);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
             trace.frame();
+        }
+        if let Some(s) = session {
+            s.finish();
         }
     }
 

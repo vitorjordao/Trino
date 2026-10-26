@@ -24,6 +24,7 @@ mod model;
 mod n3ds;
 mod n3ds_cia;
 mod n64;
+mod net;
 mod package;
 mod particles;
 mod perf;
@@ -32,6 +33,7 @@ mod post;
 mod post_assets;
 mod project;
 mod quality;
+mod replay;
 mod river_assets;
 mod scene;
 mod services;
@@ -86,6 +88,27 @@ commands:
                        debug log here; --no-build deploys target/'s file,
                        --selftest the self-test build; `run --target n64`
                        also works (docs/HARDWARE.md)
+  replay dump <file.trec> [--json]
+                       a recording's header and frames (issue #67)
+  replay run <file.trec> --platform pc|n64|3ds|web [--until-frame N]
+                       [--shot out.png] [--window] [--json]
+                       play a recording on a target (PC: headless sim, or
+                       the real window with --shot/--window; consoles: an
+                       image with replay.trec in ares/Azahar; web:
+                       ?replay= in Chromium) and say where it diverged
+  replay check <file.trec>... [--platforms pc,n64,3ds,web] [--json]
+                       every target replays it to the same final hash
+  replay record <out.trec> --platform n64|3ds
+                       play in the emulator; its input comes back over the
+                       debug channel (TRINO_REC lines) into out.trec
+  net lobby [--udp 7400] [--ws 7401]
+                       the lobby online players meet at by room code (PC:
+                       TRINO_NET=lobby:<code>@<ip>:7400; Web: ?net=<code>
+                       &lobby=ws://<ip>:7401)
+  net local [--game solid-eleven] [--sim latency=80,jitter=10,loss=3]
+                       [--script file.trec] [--frames N] [--json]
+                       the PC app twice, host and guest online on this
+                       machine (TRINO_NET=host:/join:), network simulated
   run|test|watch 3ds --accurate-timing
                        Azahar with \"Simulate 3DS GPU timings\" on for this
                        session (also TRINO_AZAHAR_GPU_TIMING=1); your own
@@ -648,6 +671,14 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             trace::run(&project.root, &rest)
+        }
+        (Some("net"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            net::run(&project, &rest)
+        }
+        (Some("replay"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            replay::run(&project, &rest)
         }
         (Some("i18n"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

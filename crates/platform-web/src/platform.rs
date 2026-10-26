@@ -34,6 +34,8 @@ pub struct WebPlatform {
     /// Achievements and stats (`localStorage` `trino-services:<name>`,
     /// loaded and stored by the runtime; issue #61).
     pub(crate) services: trino_core::HostedServices,
+    /// The local players (issue #67), published by the host each frame.
+    pub players: trino_core::HostedPlayers,
     /// `?lang=`, else `navigator.language` (`crate::language`).
     language: Option<trino_core::LangTag>,
 }
@@ -56,6 +58,7 @@ impl WebPlatform {
             groups: crate::groups::Groups::new(caps.ram_bytes),
             access: trino_core::HostedAccess::new(),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Local),
+            players: trino_core::HostedPlayers::new(),
             language: crate::language::detect(),
         }
     }
@@ -199,6 +202,14 @@ impl Platform for WebPlatform {
 
     fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
         Some(&mut self.services)
+    }
+
+    fn hosted_players(&self) -> Option<&trino_core::HostedPlayers> {
+        Some(&self.players)
+    }
+
+    fn hosted_players_mut(&mut self) -> Option<&mut trino_core::HostedPlayers> {
+        Some(&mut self.players)
     }
 
     fn set_access(&mut self, settings: trino_core::AccessSettings) {

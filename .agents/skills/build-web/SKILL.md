@@ -93,6 +93,35 @@ prints the lines every 120 frames (session `web`) and each zone becomes a
 `TraceHost` is the same struct the PC uses (`trino_render_wgpu::trace_host`). GPU pass
 zones need `TIMESTAMP_QUERY`: none on WebGL2.
 
+## Recordings and online play (issue #67)
+
+- **Recordings:**
+  - `?replay=<url>` (+ `replay_until`) plays a `TREC` back. The page finishes with the
+    verdict (`TRINO_REPLAY: … on web`) and keeps drawing the last frame for a
+    screenshot.
+  - `?record` keeps the recording in `__trino.info.recording` (base64, refreshed every
+    60 frames and at the end).
+  - Both live in `trino_platform_web::replay::WebSession` (`run_game`) and in
+    `apps/web`.
+- **The self-test's `replay` step** downloads the recording's bundle with the other
+  groups (`groups_frame`) and logs the re-recording as `TRINO_REC:` lines. `test web`
+  compares them per browser run (`target/web-test/<run>/replay.trec`).
+- **Online:** `?net=<room>&lobby=ws://<ip>:7401` (`apps/web/src/net.rs`,
+  `trino_net::rtc`).
+  - **Setup:** a WebSocket to `cargo xtask net lobby`; then the lower seat creates an
+    unordered, `maxRetransmits: 0` data channel and offers. SDP and ICE travel
+    URI-encoded in `SIGNAL` lines.
+  - **Host candidates suffice** on one machine or a LAN. Chromium needs
+    `--disable-features=WebRtcHideLocalIpsWithMdns` there, and Firefox
+    `media.peerconnection.ice.obfuscate_host_addresses=false` (`tools/web-test/net.mjs`
+    sets both).
+- **`cargo xtask net web`** builds, serves and runs a lobby, then opens two
+  Solid Eleven pages in separate browser contexts. Each plays its seat of
+  `two_players.trec` (`net_script`) and logs `TRINO_NET_HASH:760:<hash>`; the run fails
+  when they differ (`target/web-net/results.json`, screenshots).
+- **`trino-net` is std, and ggrs needs its `wasm-bindgen` feature** on wasm32 (`instant`,
+  `getrandom/js`). The feature is set in `crates/net/Cargo.toml`'s wasm target section.
+
 ## Traps (all hit while building it)
 
 - **WebGL2 depth:** naga's GLSL can't `textureLoad` a `texture_depth_2d`, and wgpu's GL

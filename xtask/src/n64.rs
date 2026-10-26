@@ -496,6 +496,8 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     if test_mode {
         std::fs::write(fsdir.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // `replay run` / `run --record` (issue #67): the session's files.
+    crate::replay::stage(&fsdir)?;
     // Compress in place what the groups ask for (after mksprite made the
     // sprites); the DFS's `groups/` exists before the container writes in
     // it, so the bundles below can be written by this user.
@@ -827,6 +829,77 @@ fn ares_command(ares: &Path, rom: &Path, args: &[&str]) -> (Command, Option<Stri
     (cmd, Some(name))
 }
 
+/// Boot the built ROM in ares (headless with `TRINO_ARES=docker`, the
+/// Expansion Pak per `pak`) and hand each output line to `on_line` until it
+/// returns true (`Ok`), ares exits, or the emulator watchdog fires. `replay
+/// run --platform n64` reads its verdict this way (issue #67).
+pub fn boot_for_lines(
+    p: &Project,
+    pak: bool,
+    on_line: &mut dyn FnMut(&str) -> bool,
+) -> Result<(), String> {
+    let ares = ares_exe(p)
+        .ok_or("ares not found (expected ares-v148/ares at the repo root, or TRINO_ARES=docker)")?;
+    let (mut cmd, container) = ares_command(
+        &ares,
+        &p.rom(),
+        &[
+            "--no-file-prompt",
+            "--setting",
+            "Video/Quality=SD",
+            "--setting",
+            pak_setting(pak),
+        ],
+    );
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to launch ares: {e}"))?;
+    use std::io::BufRead;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    for pipe in [
+        Box::new(child.stdout.take().expect("piped stdout")) as Box<dyn std::io::Read + Send>,
+        Box::new(child.stderr.take().expect("piped stderr")),
+    ] {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+    }
+    drop(tx);
+    let mut watchdog = crate::emulators::Watchdog::new();
+    let result = loop {
+        if let Some(why) = watchdog.expired(Instant::now()) {
+            break Err(why);
+        }
+        let left = watchdog.left(Instant::now());
+        match rx.recv_timeout(left.min(Duration::from_millis(500))) {
+            Ok(line) => {
+                watchdog.saw(&line, Instant::now());
+                if on_line(&line) {
+                    break Ok(());
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                break Err("ares exited before the run ended".to_string());
+            }
+        }
+    };
+    let _ = child.kill();
+    if let Some(name) = container {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    result
+}
+
 /// ares's Expansion Pak setting (`--expansion-pak on|off`, issue #54).
 fn pak_setting(pak: bool) -> &'static str {
     if pak {
@@ -1037,6 +1110,9 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     let mut hw_line = None;
     let mut tier_step = None;
     let mut quality_step = None;
+    let mut players_step: Option<String> = None;
+    let mut replay_step: Option<String> = None;
+    let mut rerecord = crate::replay::Rerecord::default();
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
             break Err(why);
@@ -1055,6 +1131,10 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                 }
                 // Trace lines are collected, not echoed (issue #62).
                 if traces.feed(&line) {
+                    continue;
+                }
+                // The replay step's re-recording (issue #67).
+                if rerecord.feed(&line) {
                     continue;
                 }
                 println!("[ares] {line}");
@@ -1078,6 +1158,12 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                 }
                 if line.contains("TRINO_STEP:quality ") {
                     quality_step = Some(line.clone());
+                }
+                if line.contains("TRINO_STEP:players connected=") {
+                    players_step = Some(line.clone());
+                }
+                if line.contains("TRINO_STEP:replay ok ") {
+                    replay_step = Some(line.clone());
                 }
                 if line.contains("TRINO_TEST_PASS") {
                     break Ok(());
@@ -1113,6 +1199,14 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
             // Pak (issue #55).
             let q = crate::hwtier::check_quality(quality_step.as_deref(), "low")?;
             println!("[n64] quality: {q}");
+            // ares plugs a pad into every port (issue #67); the PC's
+            // recording replayed hash for hash.
+            let pl = crate::replay::check_players_step(players_step.as_deref(), "1111")?;
+            println!("[n64] players: {pl}");
+            let r = crate::replay::check_replay_step(replay_step.as_deref())?;
+            println!("[n64] replay: {r}");
+            let again = rerecord.check(&p.engine, &p.engine.join("target/n64/replay-n64.trec"))?;
+            println!("[n64] re-recording: {again}");
         }
         Ok(())
     });

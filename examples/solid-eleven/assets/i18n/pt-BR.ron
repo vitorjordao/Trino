@@ -175,6 +175,7 @@ Strings(
         "side_away": "P1: FORA",
         "side_cpu": "CPU X CPU",
         "side_home": "P1: CASA",
+        "side_two": "P1 X P2",
         "simulate": "SIMULAR",
         "sold": "VENDIDO!",
         "speed": "VELOCIDADE",

@@ -139,6 +139,29 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   /rom/trino.z64 > play.log; cargo xtask trace report play.log` (verified 2026-10-24).
 - A 3DS `--trace` boot prints ~2 500 lines (20 000 events); Azahar's log keeps up.
 
+## Players and replays (issue #67, ADR 0036)
+
+- **The `players` step.** `test n64` expects `TRINO_STEP:players connected=1111`,
+  because ares v148 plugs a pad into all four ports, unconditionally (desktop-ui's
+  `nintendo-64.cpp`; only one game id gets three). `test 3ds` expects `0001`.
+- **The `replay` step** plays castle64's PC recording and prints `TRINO_STEP:replay ok
+  frames=731 checked=731 hash=…`, then the float control word (`fcr31=0x01800e04` on
+  the N64, `fpscr=0x83000013` on the 3DS).
+- **The re-recording.** The ROM also streams its re-recording as `TRINO_REC:<hex>` lines
+  ending in `TRINO_REC_END`. The harness doesn't echo them: it compares them byte for
+  byte with `assets/shared/replays/castle64_green.trec` and writes its copy to
+  `target/n64/replay-n64.trec` (`replay-3ds.trec`). A mismatch names the first byte
+  that differs.
+- **Replay any recording in an emulator:** `cargo xtask replay run <file> --platform
+  n64|3ds [--until-frame N] [--shot x.png]`. It builds a non-test image with
+  `replay.trec` in the DFS/RomFS, then waits for `TRINO_REPLAY_DONE`. The engine's
+  image runs castle64; replay Solid Eleven from its project (`--project`).
+- **Record in an emulator:** `cargo xtask replay record <out.trec> --platform n64|3ds`.
+  A `/record` file in the image (its text is the game's name) makes
+  `N64Host`/`N3dsHost::run` stream the live input as `TRINO_REC:` lines. The file is
+  written when the emulator closes or times out. Play in a local ares or Azahar
+  window: `TRINO_ARES=docker` has no window to play in.
+
 ## Hardware tiers (issue #54, ADR 0020)
 
 Both consoles have a base and an expanded variant, and one ROM / app runs on both. The

@@ -47,6 +47,9 @@ const RIGID: ModelId = ModelId::from_path("micro/rigid");
 const GRID_N: usize = 16;
 /// 64 small draws in an 8×8 block.
 const DRAWS: usize = 64;
+/// Triangles of [`GRID2`]: every grid cell's two triangles, twice — the
+/// biggest batch of the micro scenes (the caller sizes it first).
+pub const BATCH_TRIS: usize = (GRID_N - 1) * (GRID_N - 1) * 4;
 
 /// TMDL blob (see `trino_core::render3d`): positions, normals (all facing
 /// the camera, -Z), colors, indices, plus a `BNDS` bounding sphere so the
@@ -143,6 +146,7 @@ fn register_meshes(r: &mut N64Renderer) -> bool {
             bidx.extend_from_slice(&[i, i + w, i + 1, i + 1, i + w, i + w + 1]);
         }
     }
+    debug_assert_eq!(idx2.len() / 3, BATCH_TRIS);
     r.register_mesh(TRI.0, tri)
         && r.register_mesh(GRID.0, tmdl(&pos, &idx, Vec3::ZERO, r_grid))
         && r.register_mesh(GRID2.0, tmdl(&pos, &idx2, Vec3::ZERO, r_grid))

@@ -1266,6 +1266,15 @@ static void trino_debug_landed(void)
 // the wait, see trino_debug_landed); callers draw the probed frame several
 // times so both LCD buffers hold it. The LCD buffer is column-major,
 // bottom-up.
+// The VFP's FPSCR (issue #67, the `replay` step's log): flush-to-zero
+// (FZ, bit 24), default NaN (DN, bit 25) and the rounding mode.
+uint32_t trino_fpu_control(void)
+{
+    uint32_t v;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(v));
+    return v;
+}
+
 uint32_t trino_debug_pixel(uint32_t x, uint32_t y, uint32_t screen)
 {
     trino_tnl_leave();

@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <malloc.h>
 #include <string.h>
 #include <libdragon.h>
 
@@ -498,6 +499,17 @@ uint32_t trino_heap_total(void)
     return (uint32_t)s.total;
 }
 
+// The heap's top free block (GitHub #110): newlib's top chunk plus what
+// sbrk has not handed out yet. Free bytes say little on a fragmented 4 MB
+// heap; big allocations come from here. Allocates nothing.
+uint32_t trino_heap_top_free(void)
+{
+    extern char *__heap_end;
+    extern char *__heap_top;
+    struct mallinfo m = mallinfo();
+    return (uint32_t)m.keepcost + (uint32_t)(__heap_top - __heap_end);
+}
+
 // pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
 // colors: 12 bytes (r,g,b,a per vertex);
 // zs: 3 floats, normalized depth 0..1 (0 = near plane).
@@ -823,10 +835,51 @@ uint32_t trino_debug_pixel(uint32_t x, uint32_t y)
 // bits 16..19 are the raw C buttons (up, down, left, right), which Rust
 // turns into `InputState::right_stick` (C-left/C-down also stay X/Y).
 
+static uint32_t trino_pack_buttons(joypad_buttons_t b);
+
 uint32_t trino_joypad_buttons(void)
 {
     joypad_poll();
-    joypad_buttons_t b = joypad_get_buttons_held(JOYPAD_PORT_1);
+    return trino_pack_buttons(joypad_get_buttons_held(JOYPAD_PORT_1));
+}
+
+// The FPU's control/status word (issue #67, the `replay` step's log):
+// libdragon's flush-to-zero (FS) and exception enables decide how
+// subnormals and NaNs behave, which the determinism docs cite.
+uint32_t trino_fpu_control(void)
+{
+    return C1_FCR31();
+}
+
+// Local multiplayer (issue #67): one poll a frame, then each port.
+// Returns bit `p` for every port holding an N64 controller.
+uint32_t trino_joypad_poll(void)
+{
+    joypad_poll();
+    uint32_t mask = 0;
+    JOYPAD_PORT_FOREACH(port) {
+        if (joypad_get_style(port) == JOYPAD_STYLE_N64) mask |= 1u << port;
+    }
+    return mask;
+}
+
+uint32_t trino_joypad_port_buttons(uint32_t port)
+{
+    if (port >= JOYPAD_PORT_COUNT) return 0;
+    return trino_pack_buttons(joypad_get_buttons_held((joypad_port_t)port));
+}
+
+uint32_t trino_joypad_port_stick(uint32_t port)
+{
+    if (port >= JOYPAD_PORT_COUNT) return 0;
+    joypad_inputs_t in = joypad_get_inputs((joypad_port_t)port);
+    uint16_t x = (uint16_t)(int16_t)in.stick_x;
+    uint16_t y = (uint16_t)(int16_t)in.stick_y;
+    return ((uint32_t)x << 16) | y;
+}
+
+static uint32_t trino_pack_buttons(joypad_buttons_t b)
+{
     uint32_t out = 0;
     if (b.a) out |= 1u << 0;        // A
     if (b.b) out |= 1u << 1;        // B

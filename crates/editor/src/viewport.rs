@@ -135,6 +135,12 @@ pub struct ViewInput<'a> {
 }
 
 pub enum ViewAction {
+    /// Play here again from the scene's start, recording (issue #67).
+    RecordPlay,
+    /// A finished recording to save under `recordings/`.
+    SaveRecording(Vec<u8>),
+    /// Play here again from the scene's start, replaying this file.
+    ReplayFile(std::path::PathBuf),
     Select(Option<Vec<usize>>),
     /// Ctrl/Shift+click: add or remove from the selection.
     ToggleSelect(Vec<usize>),
@@ -817,12 +823,10 @@ impl Viewport {
             // keyboard (unless a text field has focus).
             let dt = session.tick();
             let typing = ui.ctx().egui_wants_keyboard_input();
-            let input_state =
-                ui.input(|i| crate::play::input_from_keys(|k| !typing && i.key_down(k)));
+            // The simulated seats (issue #67), or the replay's frame; a
+            // recording takes it.
+            ui.input(|i| session.step(|k| !typing && i.key_down(k), dt));
             use trino_core::Game as _;
-            session
-                .game
-                .update(&input_state, &mut crate::play::NullAudio, dt);
             session.game.render(&mut self.renderer);
             self.stats = Stats {
                 items: input.resolved.items.len(),
@@ -1154,6 +1158,9 @@ impl Viewport {
 
         // ---- floating toolbar + widgets -------------------------------------
         self.toolbar(ui, avail, input, &mut actions);
+        if self.kind == ViewKind::Game && self.play.is_some() {
+            self.play_bar(ui, avail, input, &mut actions);
+        }
         if self.kind == ViewKind::Scene {
             let center = Pos2::new(avail.max.x - 48.0, avail.min.y + 52.0);
             if let Some(event) = gizmo::axis_widget(ui, &proj, center, self.cam.ortho) {
@@ -1571,6 +1578,204 @@ impl Viewport {
             );
         }
         lines
+    }
+
+    /// The Game view's bar while playing here (issue #67): record, replay a
+    /// recording with its scrubber, and the simulated local players.
+    fn play_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        avail: Rect,
+        input: &ViewInput,
+        actions: &mut Vec<ViewAction>,
+    ) {
+        let Some(session) = self.play.as_mut() else {
+            return;
+        };
+        let replaying = session.replay.is_some();
+        let h = if replaying { 62.0 } else { 34.0 };
+        let rect = Rect::from_min_size(
+            Pos2::new(avail.min.x + 8.0, avail.max.y - h - 8.0),
+            Vec2::new((avail.width() - 16.0).max(120.0), h),
+        );
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        egui::Frame::new()
+            .fill(c::BG1.gamma_multiply(0.9))
+            .stroke(Stroke::new(1.0, c::BORDER))
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::symmetric(6, 3))
+            .show(&mut child, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    match session.recorded() {
+                        Some(n) => {
+                            if ui
+                                .add(egui::Button::new(
+                                    RichText::new(format!("{}  Save ({n})", icon::STOP))
+                                        .color(c::ERROR),
+                                ))
+                                .on_hover_text("Stop recording and save it under recordings/")
+                                .clicked()
+                                && let Some(bytes) = session.end_recording()
+                            {
+                                actions.push(ViewAction::SaveRecording(bytes));
+                            }
+                        }
+                        None if !replaying
+                            && ui
+                                .button(
+                                    RichText::new(format!("{}  Rec", icon::RECORD)).color(c::ERROR),
+                                )
+                                .on_hover_text(
+                                    "Play again from the scene's start, recording the input \
+                                     (TRINO_RECORD's format: cargo xtask replay dump / run)",
+                                )
+                                .clicked() =>
+                        {
+                            actions.push(ViewAction::RecordPlay);
+                        }
+                        None => {}
+                    }
+                    let files = crate::play::recordings(&input.project.root);
+                    ui.menu_button(format!("{}  Replay", icon::FILM_STRIP), |ui| {
+                        if files.is_empty() {
+                            ui.label(RichText::new("No recordings yet (Rec)").color(c::TEXT_WEAK));
+                        }
+                        for f in files.iter().take(12) {
+                            let name = f
+                                .file_name()
+                                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                            if ui.button(name).clicked() {
+                                actions.push(ViewAction::ReplayFile(f.clone()));
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.separator();
+                    // The simulated local players (a replay plays its own).
+                    let sim = &mut session.players;
+                    if !replaying {
+                        ui.label(RichText::new(icon::USERS).color(c::TEXT_WEAK));
+                        egui::ComboBox::from_id_salt("play-players")
+                            .width(84.0)
+                            .selected_text(format!(
+                                "{} player{}",
+                                sim.count,
+                                if sim.count > 1 { "s" } else { "" }
+                            ))
+                            .show_ui(ui, |ui| {
+                                for n in 1..=4u8 {
+                                    ui.selectable_value(
+                                        &mut sim.count,
+                                        n,
+                                        format!("{n} player{}", if n > 1 { "s" } else { "" }),
+                                    );
+                                }
+                            })
+                            .response
+                            .on_hover_text(
+                                "Local players the game gets (Platform::players): one takes the \
+                             whole keyboard; more split it (P1 WASD + F G R T, P2 arrows + \
+                             K L I O) and seats 3–4 are bots or idle pads",
+                            );
+                        if sim.count > 1 {
+                            for seat in 2..sim.count as usize {
+                                egui::ComboBox::from_id_salt(("play-seat", seat))
+                                    .width(110.0)
+                                    .selected_text(format!(
+                                        "P{} {}",
+                                        seat + 1,
+                                        sim.seats[seat].label()
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        for m in crate::play::SeatMode::ALL {
+                                            ui.selectable_value(&mut sim.seats[seat], m, m.label());
+                                        }
+                                    });
+                            }
+                        }
+                    }
+                    // Each seat's input as the game sees it this frame.
+                    let players = match &session.replay {
+                        Some(r) => r.players().copied().unwrap_or_default(),
+                        None => *trino_core::Platform::players(&session.platform),
+                    };
+                    for i in 0..4 {
+                        if !players.is_connected(i) {
+                            continue;
+                        }
+                        let p = &players.players[i];
+                        let held: Vec<String> = trino_core::Button::ALL
+                            .iter()
+                            .filter(|b| p.is_down(**b))
+                            .map(|b| format!("{b:?}"))
+                            .collect();
+                        let moving = p.stick.x != 0.0 || p.stick.y != 0.0;
+                        let text = format!(
+                            "P{} {}{}",
+                            i + 1,
+                            if moving { icon::JOYSTICK } else { "" },
+                            held.join("+")
+                        );
+                        theme::pill(
+                            ui,
+                            text.trim_end(),
+                            c::ACCENT,
+                            c::ACCENT.gamma_multiply(0.12),
+                        );
+                    }
+                });
+                if let Some(r) = &mut session.replay {
+                    let total = r.frames.len() as u32;
+                    let mut target = None;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        if theme::icon_button(ui, icon::SKIP_BACK, "Back to the start").clicked() {
+                            target = Some(0);
+                        }
+                        let glyph = if r.playing { icon::PAUSE } else { icon::PLAY };
+                        if theme::icon_button(ui, glyph, "Play / pause the replay").clicked() {
+                            r.playing = !r.playing;
+                        }
+                        if theme::icon_button(ui, icon::CARET_RIGHT, "One frame").clicked() {
+                            target = Some(r.pos + 1);
+                        }
+                        let mut pos = r.pos;
+                        let slider = ui.add(
+                            egui::Slider::new(&mut pos, 0..=total)
+                                .show_value(false)
+                                .trailing_fill(true),
+                        );
+                        if slider.changed() {
+                            r.playing = false;
+                            target = Some(pos);
+                        }
+                        ui.label(RichText::new(format!("{} / {total}", r.pos)).monospace());
+                        let (text, color) = match (r.other_start, r.diverged) {
+                            (true, _) => ("another start state".to_string(), c::WARN),
+                            (_, Some(d)) => (format!("diverged at frame {}", d.frame), c::ERROR),
+                            _ => (format!("{} hashes match", r.checked), c::PLAY),
+                        };
+                        theme::pill(ui, &text, color, color.gamma_multiply(0.12));
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {} player{}",
+                                r.name,
+                                r.header.players,
+                                if r.header.players > 1 { "s" } else { "" }
+                            ))
+                            .color(c::TEXT_WEAK),
+                        );
+                    });
+                    if let Some(t) = target {
+                        // Scrubbing pauses: the frame stays put to look at.
+                        if let Some(r) = &mut session.replay {
+                            r.playing = false;
+                        }
+                        session.seek(t);
+                    }
+                }
+            });
     }
 
     fn toolbar(

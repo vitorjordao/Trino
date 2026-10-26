@@ -35,6 +35,9 @@ pub struct N64Platform {
     /// Achievements and stats for the session (issue #61): the game's save
     /// holds them (`AchievementState::pack_for`, `restore_achievements`).
     services: trino_core::HostedServices,
+    /// The four controller ports as players (issue #67), published by the
+    /// host before each update.
+    pub players: trino_core::HostedPlayers,
 }
 
 /// An unfinished save: the planned body, how much of it is on the EEPROM,
@@ -75,6 +78,7 @@ impl N64Platform {
             groups: crate::assets::Groups::new(),
             access: trino_core::HostedAccess::new(),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
+            players: trino_core::HostedPlayers::new(),
         }
     }
 
@@ -203,6 +207,14 @@ impl Platform for N64Platform {
 
     fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
         Some(&mut self.services)
+    }
+
+    fn hosted_players(&self) -> Option<&trino_core::HostedPlayers> {
+        Some(&self.players)
+    }
+
+    fn hosted_players_mut(&mut self) -> Option<&mut trino_core::HostedPlayers> {
+        Some(&mut self.players)
     }
 
     /// The N64 has no language setting (issue #59): `None`, so the game

@@ -12,7 +12,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use trino_core::{GamepadStatus, Input, InputState, PadFamily, PointerButton, Vec2};
+use trino_core::{
+    DeviceKind, GamepadStatus, Input, InputState, PadFamily, PlayersInput, PointerButton, Seats,
+    Vec2,
+};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, KeyboardEvent, MouseEvent, TouchEvent, WheelEvent};
@@ -43,6 +46,8 @@ pub struct WebInput {
     pad_status: GamepadStatus,
     pad_name: Option<String>,
     pad_family: Option<PadFamily>,
+    /// The keyboard and each pad as devices with seats (issue #67).
+    pub(crate) seats: Seats,
     _listeners: Vec<Listener>,
 }
 
@@ -246,6 +251,7 @@ impl WebInput {
             pad_status: GamepadStatus::Disconnected,
             pad_name: None,
             pad_family: None,
+            seats: Seats::new(),
             _listeners: listeners,
         }
     }
@@ -270,8 +276,9 @@ impl WebInput {
         self.pad_family
     }
 
-    /// Every connected pad in the standard mapping.
-    fn read_pads(&mut self) -> Vec<PadReading> {
+    /// Every connected pad in the standard mapping, with its
+    /// `Gamepad.index` and family.
+    fn read_pads(&mut self) -> Vec<(u32, PadFamily, PadReading)> {
         let Some(nav) = web_sys::window().map(|w| w.navigator()) else {
             return Vec::new();
         };
@@ -288,9 +295,10 @@ impl WebInput {
             if !pad.connected() {
                 continue;
             }
+            let id = pad.id();
+            let family = crate::keys::pad_family(&id);
             if self.pad_name.is_none() {
-                let id = pad.id();
-                self.pad_family = Some(crate::keys::pad_family(&id));
+                self.pad_family = Some(family);
                 self.pad_name = Some(id);
             }
             let buttons = pad
@@ -306,7 +314,7 @@ impl WebInput {
                 .iter()
                 .map(|a| a.as_f64().unwrap_or(0.0) as f32)
                 .collect();
-            out.push(PadReading { buttons, axes });
+            out.push((pad.index(), family, PadReading { buttons, axes }));
         }
         self.pad_status = if out.is_empty() {
             GamepadStatus::Disconnected
@@ -319,7 +327,29 @@ impl WebInput {
 
 impl Input for WebInput {
     fn poll(&mut self) -> InputState {
+        self.poll_players().players[0]
+    }
+
+    /// The keyboard and every pad as devices, folded by seat (issue #67;
+    /// one player by default: everything is player 0, as before).
+    fn poll_players(&mut self) -> PlayersInput {
         let pads = self.read_pads();
+        let keyboard = self.keyboard_state();
+        self.seats.begin();
+        self.seats.report(DeviceKind::Keyboard, 0, None, keyboard);
+        for (index, family, pad) in &pads {
+            let mut state = InputState::IDLE;
+            merge_pad(&mut state, pad);
+            self.seats
+                .report(DeviceKind::Gamepad, *index, Some(*family), state);
+        }
+        *self.seats.finish()
+    }
+}
+
+impl WebInput {
+    /// The keyboard and mouse as one device.
+    fn keyboard_state(&mut self) -> InputState {
         let mut s = self.shared.borrow_mut();
         let mut state = s.keyboard.state();
         for (i, b) in [
@@ -342,9 +372,6 @@ impl Input for WebInput {
             state.is_down(trino_core::Button::L2) as u8 as f32,
             state.is_down(trino_core::Button::R2) as u8 as f32,
         );
-        for pad in &pads {
-            merge_pad(&mut state, pad);
-        }
         state
     }
 }

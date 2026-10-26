@@ -63,6 +63,8 @@ mod platform;
 #[cfg(target_arch = "wasm32")]
 mod quality;
 #[cfg(target_arch = "wasm32")]
+pub mod replay;
+#[cfg(target_arch = "wasm32")]
 mod runtime;
 
 #[cfg(target_arch = "wasm32")]

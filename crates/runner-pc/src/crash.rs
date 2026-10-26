@@ -176,11 +176,33 @@ pub fn install(info: CrashInfo, save_dir: &Path) -> PathBuf {
             std::process::id()
         );
         let path = target.join(name);
+        // The last minute of input beside it (issue #67, #100): what the
+        // player did up to the crash, readable with `cargo xtask replay
+        // dump` (a tail: it doesn't replay from boot).
+        let mut text = text;
+        if let Some(trec) = trino_platform_pc::replay_host::recent_input() {
+            let input = path.with_extension("trec");
+            if std::fs::write(&input, &trec).is_ok() {
+                text.push_str(&input_note(&input, &trec));
+            }
+        }
         if std::fs::write(&path, text).is_ok() {
             eprintln!("[trino] crash report: {}", path.display());
         }
     }));
     dir
+}
+
+/// The report's line about the input tail written beside it.
+pub fn input_note(file: &Path, trec: &[u8]) -> String {
+    let frames = trino_core::replay::Header::parse(trec).map_or(0, |h| h.frames);
+    let name = file
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    format!(
+        "\n== input ==\nThe last {frames} frames of input are in {name} \
+         (`cargo xtask replay dump {name}`).\n"
+    )
 }
 
 /// Reports waiting in `dir` (not sent).

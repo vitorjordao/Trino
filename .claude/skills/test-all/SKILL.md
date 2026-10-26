@@ -137,6 +137,20 @@ be half-written: a link failing with `undefined hidden symbol: anon.…` is that
 
 On Linux the PC crates need `pkg-config` and ALSA headers (`apt install pkg-config libasound2-dev`).
 
+## Netplay and replays (issue #67)
+
+- **`cargo test --workspace` runs `crates/net/tests/soak.rs`:** 10 000 frames for each
+  latency × loss, the sync test on Solid Eleven, and UDP loopback. It takes about 20 s in
+  release, longer in debug.
+- **Run it alone** after touching `trino-net`:
+  `cargo test -p trino-net --release -- --nocapture` prints the rollback table.
+- **The determinism guard:** `cargo test -p trino-core --features strict-determinism
+  determinism`. To run a game's replay under it: `cargo test -p xtask --test replay_gate
+  --features trino-core/strict-determinism`.
+- **The end-to-end runs** (windows or browsers, not in `cargo test`): `cargo xtask net
+  local --script examples/solid-eleven/assets/shared/replays/two_players.trec --frames
+  900` and `cargo xtask net web`. Both instances must print the same `TRINO_NET_HASH`.
+
 ## Solid Eleven
 
 ```sh

@@ -52,6 +52,7 @@ mod layout_audit;
 mod level_editor;
 mod localization;
 mod log;
+mod net;
 mod ops;
 mod palette;
 mod panels;

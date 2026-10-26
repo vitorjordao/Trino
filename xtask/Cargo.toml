@@ -15,6 +15,13 @@ trino-scene = { workspace = true }
 trino-scaffold = { workspace = true }
 # The showcase's river course: `gen-assets` builds its meshes from it.
 showcase = { workspace = true }
+# `replay run --platform pc` replays the engine's games headless (#67).
+castle64 = { workspace = true }
+solid-eleven = { workspace = true }
+# `net lobby`: the rooms online players meet in (UDP for the PC, a
+# WebSocket for the Web's WebRTC signalling; issue #67).
+trino-net = { workspace = true }
+tungstenite = "0.30"
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 png = { workspace = true }

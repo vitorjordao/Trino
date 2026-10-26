@@ -37,7 +37,7 @@ cargo xtask package 3ds --cia [--selftest] --project <dir>
 - `--smoke` is the proof a package works: it runs the artifact from outside the
   repository (so the packaged mode, not the source tree, serves the assets), saves the
   frame to `dist/<stem>-smoke.png`, and crashes it once on purpose (`TRINO_CRASH_AFTER=3`)
-  expecting a report. Read `[package] smoke:` lines.
+  expecting one report and its input tail. Read `[package] smoke:` lines.
 - Building takes minutes (fat LTO). Give a scratch project its own `CARGO_TARGET_DIR`
   only if you accept a full rebuild; `target/test-projects/<name>` with the engine's
   `target/` is fastest.
@@ -66,8 +66,11 @@ cargo xtask package 3ds --cia [--selftest] --project <dir>
 
 ## Crash reports
 
-- The runner's hook writes `<save folder>/crashes/crash-*.txt`; `Platform::log` lines are
-  kept (`trino_platform_pc::system::remember_log`), `println!` is not.
+- The runner's hook writes `<save folder>/crashes/crash-*.txt` and, beside it, the last
+  3 600 frames of input as `crash-*.trec` (#67; read it with `cargo xtask replay dump`).
+  A check that counts the folder's files counts two per crash: count the `.txt`s.
+  `Platform::log` lines are kept (`trino_platform_pc::system::remember_log`), `println!`
+  is not.
 - Test a panic hook in a **child process** (`crates/runner-pc/tests/crash_hook.rs`
   re-runs its own test binary with an env var): a hook is process-wide.
 - Upload only with `CrashConsent::Allow` and an endpoint; `http://` to localhost works

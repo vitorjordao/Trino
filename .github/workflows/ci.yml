@@ -33,6 +33,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets --features trino-core/trace -- -D warnings
       - run: cargo test -p trino-core --features trace --lib trace
       - run: cargo clippy -p trino-app-pc --features tracy --all-targets -- -D warnings
+      # Determinism guard rails (issue #67): a NaN or a subnormal in a state
+      # hash panics with its name; castle64's PC recording replays under it.
+      - run: cargo test -p trino-core --features strict-determinism --lib determinism
       # Achievements: castle64's table checks out, the Deck checklist passes.
       - run: cargo xtask services check
       - run: cargo xtask deck check
@@ -133,6 +136,13 @@ jobs:
       - name: Editor Play-here smoke (Linux, headless)
         if: runner.os == 'Linux'
         run: TRINO_EDITOR_PLAY=here TRINO_EDITOR_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-editor
+      # Online play (issue #67): two Solid Eleven instances on this machine
+      # over UDP with 40 ms, jitter and 3 % loss, each playing its seat of the
+      # two-player recording; both must print the same hash on frame 760.
+      # The N64 look keeps two software-rendered windows cheap.
+      - name: Online play, two PC instances (Linux, headless)
+        if: runner.os == 'Linux'
+        run: TRINO_SIM=n64 xvfb-run -a cargo xtask net local --script examples/solid-eleven/assets/shared/replays/two_players.trec --frames 900
       # `cargo xtask new --standalone` into a temp dir, built and run there;
       # every --template (blank, castle64, showcase) must `cargo check`.
       - name: Standalone project smoke (Linux, headless)
@@ -237,7 +247,7 @@ jobs:
           path: target/tools
           key: wasm-bindgen-cli-${{ hashFiles('Cargo.lock') }}
       - name: Clippy (wasm32)
-        run: cargo clippy -p trino-render-wgpu -p trino-platform-web -p trino-app-web --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy -p trino-render-wgpu -p trino-platform-web -p trino-app-web -p trino-net --target wasm32-unknown-unknown -- -D warnings
       - name: Playwright and its browsers
         working-directory: tools/web-test
         run: npm ci && npx playwright install --with-deps chromium firefox webkit
@@ -261,6 +271,12 @@ jobs:
           TRINO_SKIP_BROWSER_INSTALL: "1"
           TRINO_WEB_TIMEOUT: "900"
           TRINO_WEB_FIREFOX_HEADED: "1"
+      # Online play in the browser (issue #67): two Chromium pages meet in a
+      # lobby room and play over WebRTC; the same hash on frame 760.
+      - name: Online play, two browser pages (WebRTC)
+        run: xvfb-run -a cargo xtask net web --no-build
+        env:
+          TRINO_SKIP_BROWSER_INSTALL: "1"
       # A project scaffolded from a template, built for the Web and run in
       # Chromium: what `cargo xtask new --standalone` users get.
       - name: Standalone project in the browser

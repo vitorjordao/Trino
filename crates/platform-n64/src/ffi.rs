@@ -88,6 +88,7 @@ unsafe extern "C" {
     pub fn trino_cache_create(p: *mut c_void, len: u32);
     /// Heap bytes in use / in total (libdragon `sys_get_heap_stats`).
     pub fn trino_heap_used() -> u32;
+    pub fn trino_heap_top_free() -> u32;
     pub fn trino_heap_total() -> u32;
     /// Profiling: wait for the RSP and RDP to finish everything queued.
     pub fn trino_drain();
@@ -131,6 +132,16 @@ unsafe extern "C" {
     pub fn trino_joypad_buttons() -> u32;
     /// (x as i16 as u16) << 16 | (y as i16 as u16).
     pub fn trino_joypad_stick() -> u32;
+    /// Poll every controller port once (issue #67): bit `p` = an N64
+    /// controller in port `p` (0..4).
+    pub fn trino_joypad_poll() -> u32;
+    /// The VR4300's FCR31 (flush-to-zero, rounding, exception enables).
+    pub fn trino_fpu_control() -> u32;
+    /// Port `port`'s buttons as [`trino_joypad_buttons`] packs them (after
+    /// [`trino_joypad_poll`]).
+    pub fn trino_joypad_port_buttons(port: u32) -> u32;
+    /// Port `port`'s stick as [`trino_joypad_stick`] packs it.
+    pub fn trino_joypad_port_stick(port: u32) -> u32;
 
     pub fn trino_wav_load(dfs_path: *const c_char) -> *mut c_void;
     /// Stop the channels playing `wav`, `wav64_close` it and free it.

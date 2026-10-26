@@ -88,6 +88,23 @@ fn dependency_direction_is_enforced() {
                     "{name}: within the workspace it may depend only on {allowed:?}; found: {bad:?}"
                 )
             })
+        } else if name == "trino-net" {
+            // Netplay (issue #67): ggrs and the transports, on the core's
+            // contract only; hosts (runner-pc, apps, the editor) use it, the
+            // platform crates and games never do.
+            let workspace_names: BTreeSet<&str> = packages
+                .iter()
+                .map(|p| p["name"].as_str().unwrap())
+                .collect();
+            let bad: Vec<&String> = deps
+                .iter()
+                .filter(|d| workspace_names.contains(d.as_str()) && d.as_str() != "trino-core")
+                .collect();
+            (!bad.is_empty()).then(|| {
+                format!(
+                    "{name}: within the workspace it may depend only on trino-core; found: {bad:?}"
+                )
+            })
         } else if name.starts_with("trino-game") || manifest.contains("/examples/") {
             check(
                 &["trino-core", "trino-game-api"],

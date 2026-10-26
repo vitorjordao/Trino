@@ -323,6 +323,12 @@ pub struct SolidElevenGame {
     asked_scale: Option<u8>,
     /// Currently using gamepad (true) or keyboard (false).
     pub using_pad: bool,
+    /// Player 2's input this frame and last (issue #67: a two-player match
+    /// reads it from `Platform::players`).
+    pub p2: InputState,
+    p2_prev: InputState,
+    /// This game asked the host for two players (a two-player match).
+    two_players: bool,
 }
 
 impl SolidElevenGame {
@@ -391,6 +397,9 @@ impl SolidElevenGame {
             device: DEVICE,
             asked_scale: None,
             using_pad: DEVICE != Device::Pc,
+            p2: InputState::IDLE,
+            p2_prev: InputState::IDLE,
+            two_players: false,
         }
     }
 
@@ -611,7 +620,8 @@ impl SolidElevenGame {
                 touch.0 = id + 1;
             }
         }
-        s.update(input, prev, audio, dt, touch);
+        let p2 = s.second.map(|_| (&self.p2, &self.p2_prev));
+        s.update(input, prev, audio, dt, touch, p2);
         if matches!(s.m.phase, Phase::HalfTime { .. }) && s.human.is_some() {
             self.scene = Scene::HalfTime;
             self.cur.half_time = 0;
@@ -977,7 +987,7 @@ impl SolidElevenGame {
         match self.cur.quick {
             0 => q.home = wrap(q.home, TEAMS as u8, d),
             1 => q.away = wrap(q.away, TEAMS as u8, d),
-            2 => q.side = wrap(q.side, 3, d),
+            2 => q.side = wrap(q.side, 4, d),
             3 => q.stadium = wrap(q.stadium, crate::render::Stadium::ALL.len() as u8, d),
             4 => q.sky = wrap(q.sky, 3, d),
             5 if d != 0 => {
@@ -999,6 +1009,7 @@ impl SolidElevenGame {
             let humans = match self.quick.side {
                 0 => [true, false],
                 1 => [false, true],
+                3 => [true, true],
                 _ => [false, false],
             };
             let sky = [Sky::Day, Sky::Dusk, Sky::Night][self.quick.sky as usize % 3];
@@ -1583,6 +1594,7 @@ impl Game for SolidElevenGame {
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         self.step(input, audio, dt);
         self.prev = *input;
+        self.p2_prev = self.p2;
     }
 
     fn update_with(
@@ -1606,6 +1618,21 @@ impl Game for SolidElevenGame {
         }
         self.peek_input(platform);
         self.apply_graphics(platform);
+        // Player 2 (issue #67): the host's second seat — another pad, the
+        // N64's port 2, or the online friend's input.
+        self.p2 = platform.players().players[1];
+        let two = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.second.is_some() && s.m.phase != Phase::FullTime);
+        if two != self.two_players {
+            self.two_players = two;
+            platform.set_player_setup(if two {
+                trino_core::PlayerSetup::up_to(2)
+            } else {
+                trino_core::PlayerSetup::SINGLE
+            });
+        }
         // What the match plays goes through the caption queue.
         let mut captions = self.captions;
         captions.update(dt);
@@ -1618,6 +1645,77 @@ impl Game for SolidElevenGame {
                 HostAsk::Reset => platform.reset_bindings(),
             }
         }
+    }
+
+    /// The screen and its cursors, the clock seeds read, the match (its
+    /// own sim hash, the tick accumulator, both sides' controls) and the
+    /// buttons edges are pressed against (issue #67).
+    fn state_hash(&self) -> Option<u64> {
+        let mut h = trino_core::StateHasher::new();
+        let scene = match self.scene {
+            Scene::Title => 0,
+            Scene::Quick => 1,
+            Scene::PickClub { .. } => 2,
+            Scene::Club => 3,
+            Scene::Table => 4,
+            Scene::Teams => 5,
+            Scene::Edit => 6,
+            Scene::Market => 7,
+            Scene::Settings => 8,
+            Scene::Controls => 9,
+            Scene::Confirm => 10,
+            Scene::Match => 11,
+            Scene::Pause => 12,
+            Scene::HalfTime => 13,
+            Scene::Substitutions { from_half_time } => 14 + from_half_time as u8,
+            Scene::Results => 16,
+            Scene::Trophy => 17,
+        };
+        h.u8(scene).f32(self.time).u32(self.menu_ticks);
+        let c = &self.cur;
+        h.usize(c.title).usize(c.quick).usize(c.pause).usize(c.pick);
+        let q = &self.quick;
+        h.u8(q.home)
+            .u8(q.away)
+            .u8(q.side)
+            .u8(q.sky)
+            .bool(q.rain)
+            .u8(q.stadium);
+        h.u32(self.prev.button_bits())
+            .u32(self.p2_prev.button_bits());
+        h.bool(self.career_on).bool(self.in_career_match);
+        h.f32(self.after_full_time);
+        match &self.session {
+            Some(s) => {
+                h.u8(1).u32(s.m.hash()).f32(s.accumulated());
+                for c in [&s.controls, &s.controls2] {
+                    for t in c.held {
+                        h.f32(t);
+                    }
+                }
+            }
+            None => {
+                h.u8(0);
+            }
+        }
+        Some(h.value())
+    }
+
+    /// The whole game, byte for byte (issue #67): a rollback session
+    /// snapshots it every frame (a few dozen KB on the PC).
+    fn state_size(&self) -> usize {
+        trino_core::snapshot::size_of_raw::<SolidElevenGame>()
+    }
+
+    fn save_state(&self, out: &mut [u8]) -> Option<usize> {
+        // SAFETY: the game is plain data: no_std without `alloc`, only
+        // values, arrays and `'static` borrows of baked blobs.
+        unsafe { trino_core::snapshot::save_raw(self, out) }
+    }
+
+    fn load_state(&mut self, bytes: &[u8]) -> bool {
+        // SAFETY: as `save_state`; the snapshot is this process's own.
+        unsafe { trino_core::snapshot::load_raw(self, bytes) }
     }
 
     fn render(&mut self, renderer: &mut dyn Renderer) {

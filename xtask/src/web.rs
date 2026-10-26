@@ -311,7 +311,7 @@ pub fn build(project: &Project, opts: &BuildOptions) -> ExitCode {
     }
 }
 
-fn build_inner(project: &Project, opts: &BuildOptions) -> Result<PathBuf, String> {
+pub fn build_inner(project: &Project, opts: &BuildOptions) -> Result<PathBuf, String> {
     ensure_target()?;
     let bindgen = ensure_bindgen(project)?;
     let out = opts
@@ -661,8 +661,19 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
         let console =
             std::fs::read_to_string(out.join(&name).join("console.log")).unwrap_or_default();
         let mut traces = crate::trace::Capture::default();
+        let mut rerecord = crate::replay::Rerecord::default();
         for line in console.lines() {
-            traces.feed(line);
+            if !rerecord.feed(line) {
+                traces.feed(line);
+            }
+        }
+        // The replay step's re-recording against the PC's file (issue #67).
+        if project.is_engine {
+            let file = out.join(&name).join("replay.trec");
+            match rerecord.check(&project.engine, &file) {
+                Ok(msg) => println!("[web] {name}: re-recording: {msg}"),
+                Err(e) => failures.push(format!("{name}: {e}")),
+            }
         }
         let file = format!("web-{name}{}", if project.trace { "-trace" } else { "" });
         match traces.finish(&project.engine, &file, project.is_engine) {
@@ -686,7 +697,7 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
 
 /// `tools/web-test` has its node modules and the browsers Playwright drives
 /// (`npm ci`, `npx playwright install`).
-fn ensure_harness(dir: &Path, browsers: &[String]) -> Result<(), String> {
+pub fn ensure_harness(dir: &Path, browsers: &[String]) -> Result<(), String> {
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
     if Command::new("node").arg("--version").output().is_err() {

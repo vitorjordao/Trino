@@ -37,7 +37,7 @@ mod n3ds {
 
         let mut renderer = N3dsRenderer::new();
         let mut audio = N3dsAudio::new();
-        let mut input = N3dsInput;
+        let input = N3dsInput::new();
         let mut platform = N3dsPlatform::new();
         N3dsAssets::load_all(&mut renderer, &mut audio, &mut platform);
 
@@ -49,30 +49,15 @@ mod n3ds {
             return;
         }
 
-        let mut last = runtime::now_us();
-        // `run 3ds --trace`: the play loop's zones every 60 frames.
-        let mut trace = runtime::TraceLoop::start("3ds-castle64");
-        while runtime::running() {
-            let now = runtime::now_us();
-            let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
-            last = now;
-
-            // Asset groups (issue #56): what the game asked for loads, what
-            // it unloaded is freed, before its update.
-            N3dsAssets::pump(&mut renderer, &mut audio, &mut platform);
-            let state = input.poll();
-            let zone = trino_core::trace::Zone::begin("update");
-            game.update_with(&mut platform, &state, &mut audio, dt);
-            zone.end();
-            let zone = trino_core::trace::Zone::begin("render");
-            game.render(&mut renderer);
-            zone.end();
-            let zone = trino_core::trace::Zone::begin("audio");
-            audio.poll();
-            zone.end();
-            platform.sample_heap();
-            trace.frame();
-        }
+        // Play (or replay / record, issue #67) through the engine's host
+        // loop; `run 3ds --trace` names the session after castle64.
+        let mut host = trino_platform_3ds::N3dsHost {
+            renderer,
+            audio,
+            input,
+            platform,
+        };
+        host.run_named(&mut game, "3ds-castle64");
     }
 
     /// The `asset groups` step's backends and the loader's frame.
@@ -114,6 +99,34 @@ mod n3ds {
             "TRINO_STEP:asset groups took {}ms worker={}\n",
             runtime::now_us().wrapping_sub(t0) / 1000,
             trino_platform_3ds::worker::core().map_or(-1, i32::from)
+        ));
+        Ok(())
+    }
+
+    /// The cross-platform replay (issue #67): the PC's recording of
+    /// castle64's bot, every state hash compared; the VFP's FPSCR beside it.
+    fn replay_step(
+        game: &mut castle64::Castle64Game,
+        renderer: &mut N3dsRenderer,
+        audio: &mut N3dsAudio,
+        platform: &mut N3dsPlatform,
+    ) -> Result<(), alloc::string::String> {
+        let t0 = runtime::now_us();
+        let mut host = GroupHost {
+            renderer,
+            audio,
+            platform,
+        };
+        // What the 3DS fed and hashed goes back over the debug channel as
+        // `TRINO_REC:` lines: `test 3ds` holds it to the PC's file.
+        let mut rec = trino_core::replay::LineSink::new(runtime::log);
+        let r = castle64::selftest::replay(&mut host, game, false, Some(&mut rec))?;
+        rec.end();
+        castle64::selftest::log_replay(host.platform, &r);
+        runtime::log(&format!(
+            "TRINO_STEP:replay took {}ms fpscr={:#010x}\n",
+            runtime::now_us().wrapping_sub(t0) / 1000,
+            runtime::fpu_control()
         ));
         Ok(())
     }
@@ -345,6 +358,15 @@ mod n3ds {
             }
             return;
         }
+        runtime::log("TRINO_STEP:replay\n");
+        if let Err(e) = replay_step(game, renderer, audio, platform) {
+            runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+            while runtime::running() {
+                trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                trino_core::Renderer::end_frame(renderer);
+            }
+            return;
+        }
         runtime::log("TRINO_STEP:audio\n");
         if let Err(e) = castle64::selftest::audio_checks(audio) {
             runtime::log(&format!("TRINO_TEST_FAIL:audio: {e}\n"));
@@ -397,13 +419,26 @@ mod n3ds {
             }
         }
         runtime::log("TRINO_STEP:input\n");
-        if let Err(e) = castle64::selftest::idle_input_checks(&mut N3dsInput) {
+        if let Err(e) = castle64::selftest::idle_input_checks(&mut N3dsInput::new()) {
             runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
             while runtime::running() {
                 trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
                 trino_core::Renderer::end_frame(renderer);
             }
             return;
+        }
+        // Local players (issue #67): one player on the 3DS.
+        runtime::log("TRINO_STEP:players\n");
+        match castle64::selftest::players_checks(&mut N3dsInput::new()) {
+            Ok(r) => castle64::selftest::log_players(platform, &r),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                while runtime::running() {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+                return;
+            }
         }
         runtime::log("TRINO_STEP:showcase demo\n");
         // 0b) Collision from scenes + runtime entities: the showcase demo

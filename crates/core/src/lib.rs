@@ -26,6 +26,7 @@ pub mod audio;
 pub mod bundle;
 pub mod caps;
 pub mod collide;
+pub mod determinism;
 pub mod entity;
 pub mod game;
 pub mod group;
@@ -38,21 +39,25 @@ pub mod math;
 pub mod math3d;
 pub mod mem;
 pub mod memo;
+pub mod netpad;
 pub mod options;
 pub mod pad;
 pub mod particles;
 pub mod perf;
 pub mod physics;
 pub mod platform;
+pub mod players;
 pub mod post;
 pub mod precompile;
 pub mod quality;
 pub mod render;
 pub mod render3d;
+pub mod replay;
 pub mod save;
 pub mod scene;
 pub mod services;
 pub mod shadow;
+pub mod snapshot;
 pub mod stereo;
 pub mod text;
 pub mod threads;
@@ -90,6 +95,7 @@ pub use light::{
 };
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
+pub use netpad::{NET_PAD_LEN, NetPad};
 pub use options::{GraphicsOptions, OptionsEvent, OptionsRow, OptionsStyle};
 pub use pad::{GlyphShape, PadFamily, PadGlyph, PadSlot};
 pub use particles::{Effect, Emitter, ParticleSystem};
@@ -99,6 +105,10 @@ pub use physics::{
 };
 pub use platform::{
     BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
+};
+pub use players::{
+    DeviceId, DeviceKind, HostedPlayers, InputDevice, Join, JoinEvent, MAX_DEVICES, MAX_PLAYERS,
+    PlayerSetup, PlayersInput, PlayersRequest, Seats,
 };
 pub use post::{
     Bloom, Glow, GlowMode, Lut, LutError, LutId, PostSettings, PostTier, Tonemap, draw_glow,
@@ -118,6 +128,7 @@ pub use render3d::{
     PcGpuReject, RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch,
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
+pub use replay::{Recorder, Replay, ReplayError, StateHasher};
 pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
 pub use services::{
     AchievementId, AchievementInfo, AchievementList, AchievementState, AchievementTable,

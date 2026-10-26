@@ -1329,19 +1329,27 @@ fn smoke_run(
         &format!("[package] smoke: {line} (frame in {})", shot.display()),
     );
     let (ok, text) = run(&[("TRINO_CRASH_AFTER", "3")])?;
-    let reports: Vec<PathBuf> = std::fs::read_dir(save.join("crashes"))
+    let files: Vec<PathBuf> = std::fs::read_dir(save.join("crashes"))
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     let _ = std::fs::remove_dir_all(&base);
-    if ok || reports.len() != 1 {
+    // A report (`crash-*.txt`) and its input tail (`crash-*.trec`, #67).
+    let count = |ext: &str| {
+        files
+            .iter()
+            .filter(|p| p.extension().is_some_and(|e| e == ext))
+            .count()
+    };
+    let (reports, tails) = (count("txt"), count("trec"));
+    if ok || reports != 1 || tails != 1 {
         return Err(format!(
-            "crash check: expected a failing run and one report, got exit ok={ok}, {} report(s):\n{text}",
-            reports.len()
+            "crash check: expected a failing run, one report and its input tail, got exit \
+             ok={ok}, {reports} report(s), {tails} tail(s):\n{text}"
         ));
     }
     say(
         json,
-        "[package] smoke: a deliberate panic wrote its crash report in the save folder",
+        "[package] smoke: a deliberate panic wrote its crash report and input tail in the save folder",
     );
     Ok(line)
 }

@@ -595,3 +595,46 @@ mod tests {
         assert!(m.audio_us(&[44_100], 0, 30.0) > m.audio_us(&[44_100], 0, 60.0));
     }
 }
+
+/// What a rollback costs on a target (issue #67, the hosts'
+/// `rollback_cost`): the snapshot's size and the mean microseconds of a
+/// snapshot, a load and one sim update without drawing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RollbackCost {
+    pub snapshot_bytes: u32,
+    pub save_us: u32,
+    pub load_us: u32,
+    pub update_us: u32,
+}
+
+impl RollbackCost {
+    /// A rollback of `frames`: one load, then `frames` updates each with
+    /// its snapshot (what a session does when a late input arrives).
+    pub fn window_us(&self, frames: u32) -> u32 {
+        self.load_us + frames * (self.update_us + self.save_us)
+    }
+
+    /// `TRINO_ROLLBACK: snapshot=… save_us=… load_us=… update_us=…
+    /// window8_us=…` (the console hosts log it).
+    pub fn write_line(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        write!(
+            out,
+            "TRINO_ROLLBACK: snapshot={} save_us={} load_us={} update_us={} window8_us={}",
+            self.snapshot_bytes,
+            self.save_us,
+            self.load_us,
+            self.update_us,
+            self.window_us(8)
+        )
+    }
+}
+
+/// Audio that plays nothing (a measurement's or a re-simulation's).
+pub struct Silent;
+
+impl crate::Audio for Silent {
+    fn play_sound(&mut self, _: crate::SoundId) {}
+    fn play_music(&mut self, _: crate::MusicId, _: bool) {}
+    fn stop_music(&mut self) {}
+    fn set_master_volume(&mut self, _: f32) {}
+}

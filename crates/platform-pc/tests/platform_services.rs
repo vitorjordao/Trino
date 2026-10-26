@@ -301,7 +301,7 @@ fn rebinding_keys_through_the_platform() {
 
     p.rebind(Button::A, BindDevice::Keyboard);
     let r = p.take_input_request().expect("a request");
-    assert_eq!(r, InputRequest::Rebind(Button::A, BindDevice::Keyboard));
+    assert_eq!(r, InputRequest::Rebind(0, Button::A, BindDevice::Keyboard));
     input.apply(r);
     p.publish_input(&input);
     assert_eq!(
@@ -338,7 +338,7 @@ fn rebinding_keys_through_the_platform() {
 
     // A key with a fixed role (W moves the stick) is not taken: the
     // rebind keeps waiting, and the next bindable key gets it.
-    input.apply(InputRequest::Rebind(Button::Y, BindDevice::Keyboard));
+    input.apply(InputRequest::Rebind(0, Button::Y, BindDevice::Keyboard));
     input.handle_key(KeyCode::KeyW, true);
     input.handle_key(KeyCode::KeyW, false);
     assert_eq!(
@@ -358,7 +358,7 @@ fn rebinding_keys_through_the_platform() {
     assert!(input.take_changed());
 
     // Escape cancels a pending rebind.
-    input.apply(InputRequest::Rebind(Button::Y, BindDevice::Keyboard));
+    input.apply(InputRequest::Rebind(0, Button::Y, BindDevice::Keyboard));
     input.handle_key(KeyCode::Escape, true);
     assert_eq!(input.info().capturing, None);
     assert!(!input.take_changed());

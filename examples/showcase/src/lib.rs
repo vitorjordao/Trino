@@ -747,6 +747,11 @@ impl ShowcaseGame {
 
     /// The camera of the current preset ([`panel::Look::camera`]): the
     /// orbit behind the hero, a steep one, or the scene's own camera.
+    /// The picture the game lays out for.
+    pub fn screen(&self) -> Vec2 {
+        self.screen
+    }
+
     pub fn camera(&self) -> Camera3 {
         let (pitch, dist) = match self.look.camera {
             panel::CAMERA_SCENE => return self.scene_camera,
@@ -1361,6 +1366,46 @@ impl Game for ShowcaseGame {
                 feet,
             );
         }
+    }
+
+    /// The hero, the coins, the clock, the robot's patrol, the crate and
+    /// the edges' last buttons (issue #67: the editor's Play here records
+    /// and replays scenes).
+    fn state_hash(&self) -> Option<u64> {
+        let mut h = trino_core::StateHasher::new();
+        h.vec3(self.pos).vec3(self.vel).bool(self.on_ground);
+        h.u32(self.coins).bool(self.reached_goal);
+        h.f32(self.facing).f32(self.time).f32(self.yaw);
+        h.u32(self.prev.button_bits());
+        h.f32(self.patrol_t).u32(self.splashes);
+        match self.crate_state {
+            CrateState::Resting => h.u8(0),
+            CrateState::Falling(v) => h.u8(1).f32(v),
+            CrateState::Floating => h.u8(2),
+        };
+        if let Some(c) = self.pushable.and_then(|id| self.world.get(id)) {
+            h.f32(c.matrix.m[0][3])
+                .f32(c.matrix.m[1][3])
+                .f32(c.matrix.m[2][3]);
+        }
+        Some(h.value())
+    }
+
+    /// The whole game, byte for byte: the editor's replay scrubber keeps a
+    /// snapshot every few seconds to seek from.
+    fn state_size(&self) -> usize {
+        trino_core::snapshot::size_of_raw::<ShowcaseGame>()
+    }
+
+    fn save_state(&self, out: &mut [u8]) -> Option<usize> {
+        // SAFETY: plain data (no_std, no alloc): values, arrays, `'static`
+        // borrows of baked blobs.
+        unsafe { trino_core::snapshot::save_raw(self, out) }
+    }
+
+    fn load_state(&mut self, bytes: &[u8]) -> bool {
+        // SAFETY: as `save_state`; the snapshot is this process's own.
+        unsafe { trino_core::snapshot::load_raw(self, bytes) }
     }
 
     fn render(&mut self, r: &mut dyn Renderer) {

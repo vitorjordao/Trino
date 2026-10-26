@@ -55,6 +55,9 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Localization (`assets/i18n/<lang>.ron`): fallback, plurals, number/money/date formats, fonts subset per language | the OS language (`TRINO_LANG`), the browser's on the Web | the game's default, then the saved choice; atlases sized for TMEM | the system language |
 | Two screens | simulated by the 3DS profile | one screen | top 400x240 and touch bottom 320x240 |
 | Input | keyboard, mouse, gamepads (feature `gamepad`), rebinding | controller | buttons, circle pad, touch |
+| Local players (`Platform::players`) | up to 4: the keyboard and each pad by seat, bindings per player, a join screen helper | 4 controller ports | 1 |
+| Input recordings and replays (`TREC`), checked by state hash | record and replay (`TRINO_RECORD`, `TRINO_REPLAY`; `?record`, `?replay=` on the Web), crash reports keep the last minute | replay and record over the debug channel | replay and record over the debug channel |
+| Online play: rollback (GGPO's model) or delay-based lockstep | UDP, a lobby by room code (and WebRTC on the Web) | local only | local only (local wireless evaluated) |
 | Audio: SFX, music, stingers, positional sound | yes | yes | yes |
 | Save data | file | 16 Kbit EEPROM | SD card |
 | Quality presets (Low…Ultra): auto-detect, dynamic resolution, frame cap, a Graphics options page | yes (and the Web; Steam Deck preset) | fixed | fixed |
@@ -71,6 +74,7 @@ impostors) is part of the same pipeline, drawn by the same renderer in the same 
 | Accessibility tools | `cargo xtask access check` proves semantic colors stay apart and readable in every color-vision mode, the high-contrast theme keeps 7:1, every caption key exists in every language and every screen fits at 200 % text on every target; `access shot` renders a screen or scene as a player with those settings sees it; the editor's Accessibility tab simulates color vision in every view and edits the palettes. New projects start with an Accessibility screen. |
 | Localization tools | `cargo xtask i18n check` holds every language to its keys, placeholders, plural forms, the glyphs its fonts bake and every UI box on every target; `i18n pseudo` finds hard-coded text and tight boxes; CSV for translators; the editor's Localization tab edits the tables. |
 | Live reload | Game code reloads as a dylib on PC (`cargo xtask watch pc`); consoles rebuild and relaunch in the emulator on save (`watch n64`, `watch 3ds`). |
+| Replays and netplay | `cargo xtask replay dump\|run\|check` reads a recording and replays it on any target; every build replays a PC recording in ares, Azahar and the browsers and holds them to the same state hashes. `cargo xtask net local\|web` plays two instances online with a simulated network; the editor records, replays and scrubs Play here sessions and simulates 2–4 local players ([ADR 0036](docs/adr/0036-players-replays-netplay.md)). |
 | Emulator self-tests and goldens | `cargo xtask test n64` and `test 3ds` boot the game in ares or Azahar, run a self-test step for every engine service, have a bot play a stage, and compare frames with golden images. The N64 run also gates frame time. |
 | Real hardware | `run n64 --device sc64\|everdrive` and `run 3ds --device network` deploy to a console and print its debug log in your terminal. Tested with stub loaders so far ([docs/HARDWARE.md](docs/HARDWARE.md)). |
 

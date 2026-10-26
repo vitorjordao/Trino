@@ -63,6 +63,12 @@ pub fn log(msg: &str) {
 }
 
 /// Monotonic microseconds (wraps every ~71 minutes; diff arithmetic only).
+/// The FPU's control word (FPSCR): how this CPU treats subnormals and
+/// NaNs (issue #67, logged by the `replay` self-test step).
+pub fn fpu_control() -> u32 {
+    unsafe { crate::ffi::trino_fpu_control() }
+}
+
 pub fn now_us() -> u32 {
     unsafe { ffi::trino_ticks_us() }
 }

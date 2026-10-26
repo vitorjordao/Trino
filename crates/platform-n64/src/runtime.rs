@@ -51,7 +51,21 @@ pub fn heap() -> (u32, u32) {
     unsafe { (ffi::trino_heap_used(), ffi::trino_heap_total()) }
 }
 
+/// The heap's top free block, where big allocations come from (newlib's
+/// top chunk + the unclaimed sbrk room; allocates nothing). On the base
+/// N64 the free bytes fragment and this is what a big `Vec` finds
+/// (GitHub #110).
+pub fn heap_top_free() -> u32 {
+    unsafe { ffi::trino_heap_top_free() }
+}
+
 /// Monotonic microseconds (wraps every ~71 minutes; diff arithmetic only).
+/// The FPU's control word (FCR31): how this CPU treats subnormals and
+/// NaNs (issue #67, logged by the `replay` self-test step).
+pub fn fpu_control() -> u32 {
+    unsafe { crate::ffi::trino_fpu_control() }
+}
+
 pub fn now_us() -> u32 {
     unsafe { ffi::trino_ticks_us() }
 }

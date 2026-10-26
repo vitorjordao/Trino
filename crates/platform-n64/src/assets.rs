@@ -118,6 +118,14 @@ impl N64Assets {
         unsafe { ffi::trino_file_exists(cpath.as_ptr()) != 0 }
     }
 
+    /// A DFS file's bytes (`/replay.trec`), decompressed if the bake
+    /// compressed it. `None` when it isn't there.
+    pub fn read(dfs_relative_path: &str) -> Option<Vec<u8>> {
+        let mut path = String::from("rom:");
+        path.push_str(dfs_relative_path);
+        read_bytes(&path)
+    }
+
     /// Read `rom:/index.tsv` and register every boot asset with the
     /// renderer, audio and platform (blobs) backends, and the groups the
     /// build holds.

@@ -68,6 +68,24 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
   `asset_load` / `sprite_load`, each locator in a `FrameArena` (no heap churn). Boot logs
   `TRINO_MEM: ram= heap_total= before_assets= boot_assets=`; `check_heap` fails the
   self-test when the heap's peak leaves < 128 KB (`TRINO_HEAP:` lines).
+- **The base N64's heap (4 MB, no Pak) is what's left after the image.** Every KB of
+  new code comes straight out of the self-test's top free block, and that block is what
+  a big `Vec` finds once the run has fragmented the rest. `TRINO_HEAP … top=` (newlib's
+  top chunk + the unclaimed `sbrk` room, `runtime::heap_top_free`, allocates nothing)
+  shows it; free bytes don't. #67 added ~45 KB of code and the micro scenes' 900-triangle
+  batch no longer fit. Levers, in the order they paid off:
+  - the draw memo is the biggest boot allocation: 1 024 slots × 304 B on the Pak,
+    768 on the base tier (`memo_slots`, −78 KB, no measurable frame cost);
+  - size a big batch once and exactly before the frame that needs it
+    (`N64Renderer::reserve_batch`), never through `Vec` doubling, which holds the old
+    block while asking for one twice its size;
+  - an asset the N64 never draws gets a tiny `assets/n64/` override (the 3DS format
+    photos, −12 KB). Draw it in colors the format stores exactly, or a `min_psnr` on
+    the table fails the N64 bake (the editor's texture test caught a gray card);
+  - out-of-line helpers for code called per field or per player (`StateHasher`, the
+    TREC per-player codecs): ~5 KB.
+  A malloc/free bisection to find the "largest block" changes the arena it measures
+  (newlib trims and re-extends the top): use `top=`.
 - Sizes: `cargo xtask build n64` prints each group's entries, raw and stored KB; `cargo
   xtask assets report` the RAM per tier.
 

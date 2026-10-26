@@ -272,6 +272,70 @@ pub trait Platform {
     /// (the default).
     fn set_access(&mut self, _settings: crate::AccessSettings) {}
 
+    /// The players this backend's host publishes ([`crate::players`], issue
+    /// #67): every backend returns its [`HostedPlayers`](crate::HostedPlayers)
+    /// and the methods below work through it. `None` (the default): a
+    /// platform that hosts no players (a test fake), where
+    /// [`players`](Self::players) reports nobody connected.
+    fn hosted_players(&self) -> Option<&crate::HostedPlayers> {
+        None
+    }
+
+    fn hosted_players_mut(&mut self) -> Option<&mut crate::HostedPlayers> {
+        None
+    }
+
+    /// Every local player's input this frame: the N64's four controller
+    /// ports, the PC's and the Web's keyboard and pads by seat, the 3DS's
+    /// one player. Player 0 is the `input` the game's update receives. A
+    /// platform without players (the default) reports
+    /// [`PlayersInput::NONE`](crate::PlayersInput::NONE): nobody connected.
+    fn players(&self) -> &crate::PlayersInput {
+        match self.hosted_players() {
+            Some(h) => h.players(),
+            None => &crate::PlayersInput::NONE,
+        }
+    }
+
+    /// The controllers the host sees, with their seats and their own input
+    /// (an assignment screen reads them: [`crate::Join`]). Empty where the
+    /// players come from a recording or a network session.
+    fn input_devices(&self) -> &[crate::InputDevice] {
+        match self.hosted_players() {
+            Some(h) => h.devices(),
+            None => &[],
+        }
+    }
+
+    /// How the host seats its devices ([`crate::PlayerSetup`]; one player,
+    /// every device on it, by default).
+    fn player_setup(&self) -> crate::PlayerSetup {
+        self.hosted_players()
+            .map_or(crate::PlayerSetup::SINGLE, |h| h.setup())
+    }
+
+    /// Take up to `setup.max` players (applied by the host after the frame;
+    /// [`input_devices`](Self::input_devices) shows it at once).
+    fn set_player_setup(&mut self, setup: crate::PlayerSetup) {
+        if let Some(h) = self.hosted_players_mut() {
+            h.request(crate::PlayersRequest::Setup(setup));
+        }
+    }
+
+    /// Seat `device` on player `seat` (`None`: it plays for nobody).
+    fn assign_player(&mut self, device: crate::DeviceId, seat: Option<u8>) {
+        if let Some(h) = self.hosted_players_mut() {
+            h.request(crate::PlayersRequest::Assign(device, seat));
+        }
+    }
+
+    /// Unseat every keyboard and pad (console ports keep their players).
+    fn clear_players(&mut self) {
+        if let Some(h) = self.hosted_players_mut() {
+            h.request(crate::PlayersRequest::Clear);
+        }
+    }
+
     /// The input bindings' state, on platforms where they can be remapped
     /// (PC). `None` on consoles.
     fn input_info(&self) -> Option<InputInfo> {
@@ -294,16 +358,34 @@ pub trait Platform {
     }
 
     /// What `button` is bound to on `device` ("Z", "Enter", "LB"…), for a
-    /// remapping screen. `None` when unbound or not remappable.
-    fn binding_label(&self, _button: crate::Button, _device: BindDevice) -> Option<&str> {
+    /// remapping screen. `None` when unbound or not remappable. Player 0's
+    /// bindings ([`binding_label_for`](Self::binding_label_for)).
+    fn binding_label(&self, button: crate::Button, device: BindDevice) -> Option<&str> {
+        self.binding_label_for(0, button, device)
+    }
+
+    /// [`binding_label`](Self::binding_label) for local player `player`
+    /// (each player's devices use that player's bindings).
+    fn binding_label_for(
+        &self,
+        _player: u8,
+        _button: crate::Button,
+        _device: BindDevice,
+    ) -> Option<&str> {
         None
     }
 
     /// Bind `button` on `device` to the next key or pad button pressed (PC;
     /// a no-op elsewhere). The host applies it after the frame, reports it
     /// in [`input_info`](Self::input_info) while it waits, and persists the
-    /// bindings.
-    fn rebind(&mut self, _button: crate::Button, _device: BindDevice) {}
+    /// bindings. Player 0's ([`rebind_player`](Self::rebind_player)).
+    fn rebind(&mut self, button: crate::Button, device: BindDevice) {
+        self.rebind_player(0, button, device);
+    }
+
+    /// [`rebind`](Self::rebind) for local player `player`: the next press on
+    /// any device becomes that player's binding.
+    fn rebind_player(&mut self, _player: u8, _button: crate::Button, _device: BindDevice) {}
 
     /// Drop a rebind still waiting for its press.
     fn cancel_rebind(&mut self) {}

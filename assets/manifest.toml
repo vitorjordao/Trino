@@ -507,6 +507,16 @@ compression = { n64 = 1, 3ds = "lz4" }
 # scenes that `require` it (scenes/striders.scene.ron).
 [groups.strider]
 
+# Issue #67: a PC recording of castle64's bot (green hills, 731 frames, a
+# state hash every frame; `TRINO_BOT=green TRINO_RECORD=...`). The `replay`
+# self-test step plays it on every target and compares the hashes: the
+# cross-platform determinism gate. Loaded by that step only.
+[groups.replay]
+
+[blobs.replay_castle64]
+file = "replays/castle64_green.trec"
+groups = ["replay"]
+
 [groups.selftest_level]
 
 [groups.selftest_level2]
@@ -652,7 +662,10 @@ file = "sprites/selftest_fmt_etc1a4.png"
 formats = { n64 = "RGBA5551", 3ds = "ETC1A4" }
 
 # The photo-like card of the 3DS texture-formats golden, as the master and
-# in two lossy 3DS formats. The N64 never draws it (CI8 only to bake).
+# in two lossy 3DS formats. The N64 never draws it: its override
+# (`assets/n64/sprites/selftest_photo.png`) is a 4×4 white card (exact in
+# CI8, so a `min_psnr` holds), so the base N64's 4 MB don't keep three
+# 4.5 KB copies of a picture (#67, #110).
 [sprites.selftest_photo]
 file = "sprites/selftest_photo.png"
 formats = { n64 = "CI8", 3ds = "RGBA8" }

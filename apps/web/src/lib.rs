@@ -10,12 +10,20 @@
 //!   checks, the demos' bots and the golden frames, reported on the console
 //!   as `TRINO_STEP:` / `TRINO_TEST_PASS` lines and to the harness
 //!   (`globalThis.__trino`, `tools/web-test/run.mjs`);
+//! - `?net=<room>&lobby=ws://<host>:7401` (`?players=`, `?stun=`): online
+//!   play over WebRTC data channels, met through `cargo xtask net lobby`
+//!   (issue #67, `net.rs`);
+//! - `?replay=<url>` / `?record`: play a `TREC` recording back (the page
+//!   finishes with its verdict) or record the session into
+//!   `__trino.info.recording` (issue #67, `trino_platform_web::replay`);
 //! - the backend and look: `?backend=webgpu|webgl2`, `?sim=web|n64|3ds`,
 //!   `?scale=N`, `?size=WxH`, `?msaa=0`, `?quality=low|medium|high|ultra|auto`
 //!   (`trino_platform_web::WebConfig`).
 //!
 //! Off wasm32 the crate is empty (the workspace's host builds skip it).
 
+#[cfg(target_arch = "wasm32")]
+mod net;
 #[cfg(target_arch = "wasm32")]
 mod selftest;
 
@@ -92,15 +100,68 @@ mod web {
             return Ok(());
         }
         let mut game = which.make(host.screen());
+        let label = match which {
+            Which::Castle64 => "castle64",
+            Which::Showcase => "showcase",
+            Which::SolidEleven => "solid-eleven",
+        };
+        // `?replay=<url>` / `?record` (issue #67).
+        let screen = host.screen();
+        let mut session = trino_platform_web::replay::WebSession::from_query(
+            &query,
+            label,
+            (screen.x as u16, screen.y as u16),
+        )
+        .await?;
+        session.start(game.as_ref());
+        // `?net=<room>&lobby=ws://…` (issue #67): online from the first frame.
+        let mut net = crate::net::WebNet::from_query(&query, &host).await?;
         let smoke = query.get("frames").and_then(|f| f.parse::<u64>().ok());
         let mut frames = 0u64;
         run(host, move |host, dt| {
             if let Some(screen) = host.sync_size() {
                 game.resize(screen);
             }
-            let input = host.poll_input();
+            let live = host.poll_players();
+            if let Some(n) = &mut net {
+                host.pump_groups();
+                n.frame(
+                    game.as_mut(),
+                    &mut host.platform,
+                    &mut host.audio,
+                    &live.players[0],
+                );
+                host.renderer
+                    .apply_access(&trino_core::Platform::access(&host.platform));
+                game.render(&mut host.renderer);
+                host.end_frame();
+                // `?frames=N` counts the frames played online.
+                if smoke.is_some_and(|f| n.frames() >= f) {
+                    trino_platform_web::js::log(&n.line());
+                    trino_platform_web::js::trino_finish(true, None);
+                    return Flow::Stop;
+                }
+                return Flow::Continue;
+            }
+            let Some((players, dt)) = session.input(&live, dt) else {
+                // The replay ended: its verdict once, then its last frame
+                // stays on the canvas (a screenshot can take it).
+                if let Some(pass) = session.finish() {
+                    trino_platform_web::js::trino_finish(
+                        pass,
+                        (!pass).then(|| "replay diverged".to_string()),
+                    );
+                }
+                game.render(&mut host.renderer);
+                host.end_frame();
+                return Flow::Continue;
+            };
+            if session.is_replay() {
+                host.platform.players.publish_players(&players);
+            }
             host.pump_groups();
-            game.update_with(&mut host.platform, &input, &mut host.audio, dt);
+            game.update_with(&mut host.platform, &players.players[0], &mut host.audio, dt);
+            session.after(game.as_ref(), &players, dt);
             host.renderer
                 .apply_access(&trino_core::Platform::access(&host.platform));
             game.render(&mut host.renderer);
@@ -108,11 +169,7 @@ mod web {
             frames += 1;
             // `?frames=N`: a smoke run, like the PC's TRINO_SMOKE_FRAMES.
             if smoke.is_some_and(|n| frames >= n) {
-                let label = match which {
-                    Which::Castle64 => "castle64",
-                    Which::Showcase => "showcase",
-                    Which::SolidEleven => "solid-eleven",
-                };
+                session.finish();
                 trino_platform_web::js::log(&host.frame_line(label));
                 trino_platform_web::js::trino_finish(true, None);
                 return Flow::Stop;

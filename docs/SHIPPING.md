@@ -103,7 +103,7 @@ overrides it.
 
 `--smoke` copies the result outside the repository, runs it for 30 frames (writing the
 last frame to `dist/<stem>-smoke.png`), then runs it again with `TRINO_CRASH_AFTER=3`
-and checks that the deliberate panic left a crash report in the save folder.
+and checks that the deliberate panic left a crash report and its input tail (`crash-*.trec`, #67) in the save folder.
 
 ### `trino.toml`
 

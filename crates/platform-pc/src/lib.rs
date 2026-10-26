@@ -14,6 +14,7 @@
 pub mod audio;
 pub mod input;
 pub mod language;
+pub mod replay_host;
 pub mod system;
 pub mod tnl_oracle;
 

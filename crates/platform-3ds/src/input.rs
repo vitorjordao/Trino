@@ -6,13 +6,46 @@
 //! `pointer_screen = 1` (the renderer's second screen). A touch holds
 //! `PointerButton::Primary`.
 
-use trino_core::{Input, InputState, PointerButton, Vec2};
+use trino_core::{DeviceKind, Input, InputState, PlayersInput, PointerButton, Seats, Vec2};
 
 use crate::ffi;
 
-pub struct N3dsInput;
+/// The console's controls: one player ([`Input::poll_players`] reports
+/// them as port 1, issue #67; more players need two consoles).
+pub struct N3dsInput {
+    seats: Seats,
+}
+
+impl N3dsInput {
+    pub const fn new() -> N3dsInput {
+        N3dsInput {
+            seats: Seats::new(),
+        }
+    }
+
+    pub fn seats(&self) -> &Seats {
+        &self.seats
+    }
+
+    pub fn seats_mut(&mut self) -> &mut Seats {
+        &mut self.seats
+    }
+}
+
+impl Default for N3dsInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Input for N3dsInput {
+    fn poll_players(&mut self) -> PlayersInput {
+        let state = self.poll();
+        self.seats.begin();
+        self.seats.report(DeviceKind::Port, 0, None, state);
+        *self.seats.finish()
+    }
+
     fn poll(&mut self) -> InputState {
         let bits = unsafe { ffi::trino_joypad_buttons() };
         let stick = unsafe { ffi::trino_joypad_stick() };

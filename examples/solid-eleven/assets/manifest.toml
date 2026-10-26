@@ -750,3 +750,11 @@ formats = { n64 = "I4" }
 [sprites.se_confetti]
 file = "sprites/se_confetti.png"
 formats = { n64 = "I4" }
+
+# ---- issue #67: the two-player recording the hosts replay ----
+# The menus to a "P1 V P2" quick match and 20 s of both pads, recorded on
+# the PC (`cargo test -p solid-eleven write_two_player_recording --
+# --ignored`). The template's console self-tests replay it first, on the
+# fresh game, and compare every hash: 2.8 KB at boot.
+[blobs.replay_two_players]
+file = "replays/two_players.trec"

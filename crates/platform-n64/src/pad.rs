@@ -6,7 +6,7 @@
 //! y +1/-1. Z is Select. L2, R2, L3, R3 and `triggers` stay off: the N64
 //! pad has nothing left for them.
 
-use trino_core::{Button, InputState, Vec2};
+use trino_core::{Button, DeviceKind, InputState, MAX_PLAYERS, PlayersInput, Seats, Vec2};
 
 /// The buttons the shim reports (bits 0..11, at their discriminants).
 const BUTTONS: [Button; 12] = [
@@ -49,9 +49,53 @@ pub fn decode(bits: u32, stick: u32) -> InputState {
     state
 }
 
+/// One frame of the four controller ports (issue #67): `mask` is
+/// `trino_joypad_poll`'s (bit `p` = a controller in port `p`) and
+/// `read(p)` returns port `p`'s packed buttons and stick. Each plugged port
+/// is reported to `seats` as a [`DeviceKind::Port`] (port `p` is player
+/// `p` unless the game moved it); an empty port is not, so it reads
+/// disconnected.
+pub fn poll_ports(seats: &mut Seats, mask: u32, read: impl Fn(u32) -> (u32, u32)) -> PlayersInput {
+    seats.begin();
+    for port in 0..MAX_PLAYERS as u32 {
+        if mask & (1 << port) != 0 {
+            let (bits, stick) = read(port);
+            seats.report(DeviceKind::Port, port, None, decode(bits, stick));
+        }
+    }
+    *seats.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn four_ports_are_four_players_and_an_empty_port_reads_disconnected() {
+        let mut seats = Seats::new();
+        // Ports 1, 2 and 4 plugged (ares plugs all four; a console may not).
+        let read = |p: u32| match p {
+            0 => (1 << 0, 0),           // A
+            1 => (1 << 1, 85u32 << 16), // B, stick right
+            3 => (1 << 6 | C_UP, 0),    // Start, C-up
+            _ => (0xffff_ffff, 0),      // never read: port 3 is empty
+        };
+        let p = poll_ports(&mut seats, 0b1011, read);
+        assert_eq!(p.connected, 0b1011);
+        assert!(p.get(0).is_down(Button::A) && !p.get(0).is_down(Button::B));
+        assert!(p.get(1).is_down(Button::B));
+        assert_eq!(p.get(1).stick, Vec2::new(1.0, 0.0));
+        assert_eq!(*p.get(2), InputState::default());
+        assert!(p.get(3).is_down(Button::Start));
+        assert_eq!(p.get(3).right_stick, Vec2::new(0.0, 1.0));
+        // Port 1 alone: today's single player, unchanged.
+        let p = poll_ports(&mut seats, 0b0001, read);
+        assert_eq!(p.connected, 0b0001);
+        assert_eq!(*p.get(0), decode(1 << 0, 0));
+        // Nothing plugged: nobody.
+        assert_eq!(poll_ports(&mut seats, 0, read).connected, 0);
+        assert_eq!(seats.devices().len(), 3, "ports seen so far");
+    }
 
     /// What the shim packs: the C buttons keep X/Y, add the right stick.
     #[test]

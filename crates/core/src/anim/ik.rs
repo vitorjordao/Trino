@@ -247,7 +247,8 @@ pub(crate) fn solve(
             continue;
         }
         let u = to * (1.0 / len);
-        let d = len.clamp((a - b).abs() + 1e-4, a + b - 1e-4);
+        // A bone under 1e-4 crosses the bounds: no clamp then.
+        let d = crate::math::clamp_or(len, (a - b).abs() + 1e-4, a + b - 1e-4);
         // The knee bends in the plane it already bends in.
         let mut bend = (kp - hp) - u * (kp - hp).dot(u);
         if bend.dot(bend) < 1e-10 {

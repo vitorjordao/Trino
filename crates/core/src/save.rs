@@ -390,10 +390,14 @@ pub fn plan_write(
     // A damaged slot may claim a later sequence number than every intact
     // one (a torn header, bit rot): number past it, so the new save is the
     // newest and the next read reports it intact.
+    // Only while the result stays newer than the intact save: a damaged
+    // number half the circle away would make the new save read as older
+    // (the CI fuzz run found one, `fuzz/regressions/save_frame`).
     let mut seq = newest.map_or(1, |f| f.seq.wrapping_add(1));
     for d in damaged.into_iter().flatten().flatten() {
-        if !newer(seq, d) {
-            seq = d.wrapping_add(1);
+        let past = d.wrapping_add(1);
+        if !newer(seq, d) && newest.is_none_or(|f| newer(past, f.seq)) {
+            seq = past;
         }
     }
     let room = total.min(body.len());

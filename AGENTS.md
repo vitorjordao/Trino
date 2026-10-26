@@ -1675,6 +1675,10 @@ cargo test --workspace
   parent). Bound such loops by a count (`SPLIT_BUDGET` compares the existing
   `stats.splits`, 36 bytes of `tessellate_joints`; a separate counter was 196 and broke the
   I-cache guard).
+- **`f32::clamp` and `Ord::clamp` assert `lo <= hi` in release builds too** (and panic on
+  a NaN bound): a slider narrower than its knob crashed the UI draw. Where a bound comes
+  from data or geometry, use `trino_core::math::clamp_or` / `clamp_or_i32` (the same
+  result when the bounds are in order).
 - **A float loop counter stops counting past 2^24** (`c += 1.0 == c`): clip events and
   root motion looped forever on a tiny clip duration. Count cycles in integers.
 - **Size products from a header wrap on the consoles' 32-bit `usize`** (and wasm32's):

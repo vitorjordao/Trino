@@ -65,6 +65,8 @@ had round-trip and fixture tests, but no adversarial input.
 | TBND | an entry's `raw` size | the loaders allocated it (4 GB) before decoding | `Bundle::parse` refuses a `raw` the codec can't produce (stored: equal; LZ4: ≤ 255× + 16) |
 | T3AU (pipeline, 3DS shim) | samples past the data | the decoder asserted; the DSP read past the buffer | `T3au::parse` and `trino_wav_load` check the data holds the samples |
 | TUIL | two u16 paddings | the sum overflowed | summed as f32 |
+| TUIL (found by the CI run) | a slider track narrower than its knob | `f32::clamp` with crossed bounds panics in release builds too | `math::clamp_or` (`clamp` when the bounds are in order); the same at every clamp whose bounds come from data: IK bone lengths, clip durations, slider steps, stat ranges, the dynamic-resolution range, physics boxes and mesh heights |
+| saves (found by the CI run) | a damaged slot whose sequence number is half the circle from the intact one's | the next save, numbered past the damage, read as older than the intact save | the bump only applies while the result stays newer |
 | ggrs messages | a datagram from anyone | `bincode::deserialize` without a limit | `trino_net::decode_message`, 64 KB limit, one codec for UDP and WebRTC |
 | saves | see §3 | a flipped sequence number could order saves wrongly | the slot checksum covers the header |
 | N64 EEPROM (libdragon 2c3d5db) | a read or write that starts and ends inside one 8-byte block (the `save recovery` step's 1-byte flip) | `bytes_left` underflows: the read copies past `dest` and loops over the EEPROM (a hang in ares), the write would rewrite the EEPROM from memory past `src` | the `Eeprom` medium sends only whole blocks from a block's start (a read-modify-write in Rust) |

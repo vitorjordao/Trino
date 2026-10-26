@@ -45,10 +45,13 @@ pub fn settings_text(data: &[u8]) {
         system::access_settings_from_text(&system::access_settings_to_text(&a)),
         a
     );
+    // The file keeps two decimals: what the game writes reads back as it
+    // wrote it (a hand-edited 0.947 settles at 0.95 once).
     let b = audio::settings_from_text(t);
+    let written = audio::settings_to_text(&b);
     assert_eq!(
-        audio::settings_from_text(&audio::settings_to_text(&b)).to_bytes(),
-        b.to_bytes()
+        audio::settings_to_text(&audio::settings_from_text(&written)),
+        written
     );
 }
 

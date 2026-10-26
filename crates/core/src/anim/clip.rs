@@ -219,7 +219,9 @@ impl<'a> EventTrack<'a> {
                 }
             }
         } else {
-            let (from_c, to_c) = (from.clamp(0.0, duration), to.clamp(0.0, duration));
+            // A negative or NaN duration (damaged data) must not panic.
+            let c = |t: f32| crate::math::clamp_or(t, 0.0, duration);
+            let (from_c, to_c) = (c(from), c(to));
             if to_c == from_c && !first {
                 return;
             }

@@ -317,8 +317,12 @@ impl<const N: usize> Ui<N> {
                     self.fill(r, Rect::new(track.pos.x, y, filled, h), look.text);
                     let kw = scale.max(1.0) * 3.0;
                     let kh = (track.size.y * 0.8).max(h);
-                    let kx = floor(track.pos.x + filled - kw * 0.5)
-                        .clamp(track.pos.x, track.pos.x + track.size.x - kw);
+                    // A track narrower than the knob crosses the bounds.
+                    let kx = crate::math::clamp_or(
+                        floor(track.pos.x + filled - kw * 0.5),
+                        track.pos.x,
+                        track.pos.x + track.size.x - kw,
+                    );
                     let ky = floor(track.pos.y + (track.size.y - kh) * 0.5);
                     self.fill(r, Rect::new(kx, ky, kw, kh), screen.theme.accent);
                 }

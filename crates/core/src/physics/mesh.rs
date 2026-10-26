@@ -680,7 +680,8 @@ impl MeshQuery<f32> for MeshInstance<'_> {
             let y = t[0].y - (n.x * (x - t[0].x) + n.z * (z - t[0].z)) / n.y;
             let top = t[0].y.max(t[1].y).max(t[2].y);
             let low = t[0].y.min(t[1].y).min(t[2].y);
-            let y = y.clamp(low, top);
+            // NaN vertices (damaged data) give NaN bounds: no panic.
+            let y = crate::math::clamp_or(y, low, top);
             if y <= up_to
                 && best.is_none_or(|b| y > b.height || (y == b.height && (ti as u32) < b.tri))
             {

@@ -537,9 +537,10 @@ pub struct ShapeHit {
 
 fn clamp3(p: Vec3, b: &Aabb) -> Vec3 {
     Vec3::new(
-        p.x.clamp(b.min.x, b.max.x),
-        p.y.clamp(b.min.y, b.max.y),
-        p.z.clamp(b.min.z, b.max.z),
+        // A box with min past max (damaged data) must not panic.
+        crate::math::clamp_or(p.x, b.min.x, b.max.x),
+        crate::math::clamp_or(p.y, b.min.y, b.max.y),
+        crate::math::clamp_or(p.z, b.min.z, b.max.z),
     )
 }
 

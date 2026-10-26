@@ -1,0 +1,39 @@
+| Target | Round 1 (before the fixes) | Round 2 (fixes, `-a`) |
+|---|---:|---:|
+| `tscn` | 440,536 runs | 503,462 runs |
+| `tmdl` | 66,172 runs | 58,429 runs |
+| `tpfx` | 1,167,429 runs | 1,682,549 runs |
+| `tsn2` | 2,490,807 runs | 3,169,055 runs |
+| `tfnt` | 553,169 runs | 572,089 runs |
+| `timp` | 2,213,484 runs | 3,012,870 runs |
+| `bus_settings` | 3,469,555 runs | 3,421,461 runs |
+| `tuil` | 113,847 runs | 106,005 runs |
+| `tmix` | 3,107,032 runs | 2,940,395 runs |
+| `tstr` | 2,573,516 runs | 2,395,790 runs |
+| `tach` | 2,761,007 runs | 2,368,040 runs |
+| `achievement_state` | 3,260,757 runs | 2,990,529 runs |
+| `tang` | 344,419 runs — **timeout** | 1,257,305 runs |
+| `tlut` | 2,946,482 runs | 2,860,454 runs |
+| `tacc` | 2,541,481 runs | 2,547,719 runs |
+| `tcol` | 1,408,213 runs | 1,396,567 runs |
+| `tphy` | 2,818,725 runs | 2,963,673 runs |
+| `tbnd` | 1,307,647 runs | 1,423,846 runs |
+| `lz4` | 1,620,405 runs | 1,752,337 runs |
+| `ttrc` | 1,303,426 runs | 1,006,760 runs |
+| `trec` | 1,431,934 runs | 1,440,984 runs |
+| `save_lz` | 363,993 runs | 459,377 runs |
+| `save_frame` | 527,097 runs | 567,826 runs |
+| `netpad` | 3,187,783 runs | 3,449,818 runs |
+| `core_text` | 604,808 runs | 513,374 runs |
+| `access_pack` | 3,356,895 runs | 3,616,594 runs |
+| `input_text` | 54,721 runs | 52,200 runs |
+| `display_text` | 1,550,154 runs | 1,304,856 runs |
+| `settings_text` | 649,041 runs | 565,136 runs |
+| `services_text` | 625,647 runs | 572,918 runs |
+| `tpak` | 1,300,774 runs | 1,770,342 runs |
+| `tsn2_decode` | 4,821 runs | 3,460 runs |
+| `t3au` | 1,689,760 runs | 2,381,525 runs |
+| `net` | 516,499 runs | 491,757 runs |
+| `pc_asset` | 777,213 runs | 1,125,673 runs |
+| `ron` | 2,925 runs | 3,416 runs |
+| `pc_bundle` | 911,160 runs | 1,009,226 runs |

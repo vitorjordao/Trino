@@ -1040,7 +1040,7 @@ impl AnimGraphInstance {
             let t = if clip.looping && clip.duration > 0.0 {
                 x.time - floor(x.time / clip.duration) * clip.duration
             } else {
-                x.time.clamp(0.0, clip.duration)
+                crate::math::clamp_or(x.time, 0.0, clip.duration)
             };
             let f = track.at(t);
             out[0] += f[0] * x.weight;

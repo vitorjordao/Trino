@@ -1,0 +1,11 @@
+// Trino placeholder model ("fake object"). Edit and save: it hot-reloads.
+// Replace with real art by pointing the manifest `file` at a .glb —
+// the logical path (and every reference to it) stays the same.
+(
+    shape: Cylinder(radius: 0.35, height: 3.0),
+    color: (150, 150, 158, 255),
+    top_color: Some((210, 210, 216, 255)),
+    pivot: Bottom,
+    segments: 10,
+    smooth: false,
+)

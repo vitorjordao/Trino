@@ -145,8 +145,8 @@ commit, date }`: `TRINO_GAME_VERSION` (from `[pc] version`) else the crate's ver
    `depot_build_<depot>.vdf` per OS, and `dist/steam/README.txt` with the upload command
    (`steamcmd +run_app_build`) and the Auto-Cloud settings.
 2. **Steam Cloud:** Auto-Cloud with one root per OS — `WinAppDataRoaming`,
-   `MacAppSupport`, `LinuxXdgDataHome` — subdirectory `<Title>`, patterns `*.sav` and
-   `*.achievements`. Display, quality and input settings stay per machine.
+   `MacAppSupport`, `LinuxXdgDataHome` — subdirectory `<Title>`, patterns `*.sav`,
+   `*.sav.a`, `*.sav.b` (the two save slots, issue #68) and `*.achievements`. Display, quality and input settings stay per machine.
 3. **Achievements:** create them in Steamworks in the file's order (Steam's tokens
    follow creation order), then upload `achievements_loc.vdf` and the icons from
    `services export steam`. **Rich presence:** upload `rich_presence/<language>.vdf`;

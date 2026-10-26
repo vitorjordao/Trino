@@ -184,11 +184,12 @@ unsafe extern "C" {
     /// `rgba8888` first) or the left one (0). 0 = no right-eye target.
     pub fn trino_stereo_eye(eye: u32, rgba8888: u32) -> u32;
 
-    /// Save file on the SD card: returns its size (0 = none, -1 = error),
-    /// copying up to `cap` bytes into `dest`.
-    pub fn trino_save_load(dest: *mut u8, cap: u32) -> i32;
-    /// Atomically replace the save file; 0 = ok, -1 = error.
-    pub fn trino_save_store(src: *const u8, len: u32) -> i32;
+    /// Save slot file `slot` on the SD card (0 = A, 1 = B, 2 = the single
+    /// file from before the slots): returns its size (0 = none, -1 =
+    /// error), copying up to `cap` bytes into `dest`.
+    pub fn trino_save_load(slot: u32, dest: *mut u8, cap: u32) -> i32;
+    /// Atomically replace slot `slot` (0 or 1); 0 = ok, -1 = error.
+    pub fn trino_save_store(slot: u32, src: *const u8, len: u32) -> i32;
 
     // newlib, for the global allocator.
     pub fn memalign(align: usize, size: usize) -> *mut c_void;

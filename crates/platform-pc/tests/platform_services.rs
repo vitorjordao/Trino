@@ -46,14 +46,16 @@ fn save_file_round_trip_framing_and_errors() {
     let mut buf = [0u8; 64];
     assert_eq!(p.save_read(&mut buf), Ok(0), "no save yet");
 
-    // A framed save, like the consoles keep: header ‖ data.
+    // A framed save, like the consoles keep: header ‖ data. The PC keeps
+    // it in A/B slot files beside the save path (issue #68).
     let data = b"level=4;coins=17";
     let mut framed = save::header(data).to_vec();
     framed.extend_from_slice(data);
     p.save_write(&framed).unwrap();
-    assert!(path.exists(), "parent directories are created");
+    let slot_a = dir.path().join("nested/dir/game.sav.a");
+    assert!(slot_a.exists(), "parent directories are created");
     assert!(
-        !path.with_extension("tmp").exists(),
+        !dir.path().join("nested/dir/game.sav.a.tmp").exists(),
         "atomic write cleans up"
     );
     let n = p.save_read(&mut buf).unwrap();
@@ -61,23 +63,26 @@ fn save_file_round_trip_framing_and_errors() {
     let header: [u8; HEADER] = buf[..HEADER].try_into().unwrap();
     assert_eq!(save::data_len(&header), Some(data.len()));
     assert!(save::verify(&header, &buf[HEADER..n]));
+    assert_eq!(p.save_status(), trino_core::SaveStatus::Ok);
 
-    // A torn write (one flipped bit on disk) no longer verifies.
-    let mut torn = std::fs::read(&path).unwrap();
-    torn[HEADER + 2] ^= 0x10;
-    std::fs::write(&path, &torn).unwrap();
-    let n = p.save_read(&mut buf).unwrap();
-    assert!(
-        !save::verify(&header, &buf[HEADER..n]),
-        "torn save = no save"
-    );
+    // A torn write (one flipped bit on disk) with no backup: no save, said.
+    let mut torn = std::fs::read(&slot_a).unwrap();
+    torn[save::SLOT_HEADER + HEADER + 2] ^= 0x10;
+    std::fs::write(&slot_a, &torn).unwrap();
+    assert_eq!(p.save_read(&mut buf), Ok(0), "torn save = no save");
+    assert_eq!(p.save_status(), trino_core::SaveStatus::Corrupted);
+    p.save_write(&framed).unwrap();
 
     // A short buffer gets a prefix; the full length is reported.
     let mut small = [0u8; 4];
     assert_eq!(p.save_read(&mut small), Ok(n));
-    assert_eq!(&small, &torn[..4]);
+    assert_eq!(&small, &framed[..4]);
 
     // Over the N64's 16 Kbit EEPROM: rejected, the old save stays.
+    let before = (
+        std::fs::read(&slot_a).ok(),
+        std::fs::read(dir.path().join("nested/dir/game.sav.b")).ok(),
+    );
     assert_eq!(
         p.save_write(&[1u8; 2049]),
         Err(SaveError::TooLarge {
@@ -85,13 +90,18 @@ fn save_file_round_trip_framing_and_errors() {
             capacity: 2048
         })
     );
-    assert_eq!(std::fs::read(&path).unwrap(), torn);
+    let after = (
+        std::fs::read(&slot_a).ok(),
+        std::fs::read(dir.path().join("nested/dir/game.sav.b")).ok(),
+    );
+    assert_eq!(before, after);
     p.save_write(&[7u8; 2048])
         .expect("exactly the capacity fits");
 
     // A directory where the file should be: I/O errors, not panics.
     let blocked = dir.path().join("blocked");
     std::fs::create_dir_all(blocked.join("game.sav")).unwrap();
+    std::fs::create_dir_all(blocked.join("game.sav.a.tmp")).unwrap();
     let mut q = PcPlatform::new(&Caps::N64).with_save_file(blocked.join("game.sav"));
     assert_eq!(q.save_read(&mut buf), Err(SaveError::Io));
     assert_eq!(q.save_write(b"x"), Err(SaveError::Io));

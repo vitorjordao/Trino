@@ -19,6 +19,7 @@ use trino_core::{
 use crate::input::{BINDABLE, BINDINGS, InputRequest, PcInput};
 use crate::quality::{HostedQuality, QualityRequest};
 use trino_core::MAX_PLAYERS;
+use trino_core::save;
 
 pub struct PcPlatform {
     start: Instant,
@@ -27,6 +28,8 @@ pub struct PcPlatform {
     blobs: HashMap<u32, &'static [u8]>,
     save_path: Option<PathBuf>,
     save_capacity: usize,
+    /// What the last read found ([`Platform::save_status`]).
+    save_status: trino_core::SaveStatus,
     /// What the host reports ([`Platform::display`]); `None` = fixed screen.
     display: Option<DisplayInfo>,
     /// The game's last [`Platform::set_display`], for the host to apply.
@@ -86,6 +89,7 @@ impl PcPlatform {
             blobs: HashMap::new(),
             save_path: None,
             save_capacity: caps.save_bytes as usize,
+            save_status: trino_core::SaveStatus::Unknown,
             display: None,
             display_request: None,
             second_screen: None,
@@ -348,26 +352,10 @@ impl Platform for PcPlatform {
 
     fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
         let path = self.save_path.as_ref().ok_or(SaveError::Unsupported)?;
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let n = bytes.len().min(buf.len());
-                buf[..n].copy_from_slice(&bytes[..n]);
-                Ok(bytes.len())
-            }
-            // A crash between the temp file and the rename: the temp file
-            // is complete (it was flushed before the rename).
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::read(path.with_extension("tmp")) {
-                    Ok(bytes) => {
-                        let n = bytes.len().min(buf.len());
-                        buf[..n].copy_from_slice(&bytes[..n]);
-                        Ok(bytes.len())
-                    }
-                    Err(_) => Ok(0),
-                }
-            }
-            Err(_) => Err(SaveError::Io),
-        }
+        let mut scratch = vec![0u8; save::slot_file_len(self.save_capacity)];
+        let r = save::read_slot_files(&mut SaveFiles(path), buf, &mut scratch)?;
+        self.save_status = r.status;
+        Ok(r.len)
     }
 
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
@@ -381,16 +369,23 @@ impl Platform for PcPlatform {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|_| SaveError::Io)?;
         }
-        // Write + flush a temp file, then rename over the save: a crash
-        // leaves either the old file or the new one, never half of one.
-        let tmp = path.with_extension("tmp");
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp).map_err(|_| SaveError::Io)?;
-            f.write_all(data).map_err(|_| SaveError::Io)?;
-            f.sync_all().map_err(|_| SaveError::Io)?;
+        let mut scratch = vec![0u8; save::slot_file_len(self.save_capacity)];
+        let mut file = vec![0u8; save::slot_file_len(data.len())];
+        save::write_slot_files(&mut SaveFiles(path), data, &mut scratch, &mut file)?;
+        Ok(())
+    }
+
+    fn save_status(&self) -> trino_core::SaveStatus {
+        self.save_status
+    }
+
+    fn save_fault(&mut self, fault: trino_core::SaveFault) -> Result<(), SaveError> {
+        let path = self.save_path.as_ref().ok_or(SaveError::Unsupported)?;
+        let mut scratch = vec![0u8; save::slot_file_len(self.save_capacity)];
+        match save::slot_files_fault(&mut SaveFiles(path), fault, &mut scratch)? {
+            true => Ok(()),
+            false => Err(SaveError::Io),
         }
-        std::fs::rename(&tmp, path).map_err(|_| SaveError::Io)
     }
 
     fn display(&self) -> Option<DisplayInfo> {
@@ -499,6 +494,71 @@ pub fn access_settings_to_text(s: &trino_core::AccessSettings) -> String {
 /// default.
 pub fn access_settings_from_text(text: &str) -> trino_core::AccessSettings {
     trino_core::AccessSettings::parse_text(trino_core::AccessSettings::DEFAULT, text)
+}
+
+/// The PC's save slots (issue #68): `<save>.a` and `<save>.b` beside the
+/// save path, each written to a flushed temp file and renamed over the
+/// slot, so a crash leaves the old slot or the new one. The save path
+/// itself is the save from before slot files (raw bytes), read only when
+/// no slot is intact; it stays as it is.
+pub struct SaveFiles<'a>(pub &'a std::path::Path);
+
+impl SaveFiles<'_> {
+    /// Slot `slot`'s file (0 = A, 1 = B).
+    pub fn slot_path(&self, slot: u8) -> PathBuf {
+        let mut p = self.0.as_os_str().to_owned();
+        p.push(if slot == 0 { ".a" } else { ".b" });
+        PathBuf::from(p)
+    }
+
+    fn tmp_of(p: &std::path::Path) -> PathBuf {
+        let mut t = p.as_os_str().to_owned();
+        t.push(".tmp");
+        PathBuf::from(t)
+    }
+}
+
+fn read_into(path: &std::path::Path, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let n = bytes.len().min(buf.len());
+            buf[..n].copy_from_slice(&bytes[..n]);
+            Ok(Some(bytes.len()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(SaveError::Io),
+    }
+}
+
+impl save::SlotStore for SaveFiles<'_> {
+    fn read_slot(&mut self, slot: u8, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+        let p = self.slot_path(slot);
+        match read_into(&p, buf)? {
+            Some(n) => Ok(Some(n)),
+            // A crash between the flushed temp file and the rename: the
+            // temp file is complete (its checksum says so either way).
+            None => read_into(&Self::tmp_of(&p), buf),
+        }
+    }
+
+    fn write_slot(&mut self, slot: u8, bytes: &[u8]) -> Result<(), SaveError> {
+        use std::io::Write;
+        let p = self.slot_path(slot);
+        let tmp = Self::tmp_of(&p);
+        {
+            let mut f = std::fs::File::create(&tmp).map_err(|_| SaveError::Io)?;
+            f.write_all(bytes).map_err(|_| SaveError::Io)?;
+            f.sync_all().map_err(|_| SaveError::Io)?;
+        }
+        std::fs::rename(&tmp, &p).map_err(|_| SaveError::Io)
+    }
+
+    fn read_legacy(&mut self, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+        match read_into(self.0, buf)? {
+            Some(n) => Ok(Some(n)),
+            None => read_into(&self.0.with_extension("tmp"), buf),
+        }
+    }
 }
 
 /// Display settings as a small text file (`key=value` lines), so players

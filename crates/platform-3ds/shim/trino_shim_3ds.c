@@ -1213,16 +1213,21 @@ void trino_water_draw(void* mesh, const float* u, void* sheet, uint32_t flags)
 // file, then rename). Framing/checksums live on the Rust side.
 
 #define TRINO_SAVE_DIR "sdmc:/3ds/trino"
-#define TRINO_SAVE_PATH TRINO_SAVE_DIR "/save.bin"
-#define TRINO_SAVE_TMP TRINO_SAVE_DIR "/save.tmp"
+// Slot 2: the single save file from before the A/B slots (issue #68),
+// read only when neither slot is intact.
+static const char* const TRINO_SAVE_PATHS[3] = {
+    TRINO_SAVE_DIR "/save.a", TRINO_SAVE_DIR "/save.b", TRINO_SAVE_DIR "/save.bin"};
+static const char* const TRINO_SAVE_TMPS[3] = {
+    TRINO_SAVE_DIR "/save.a.tmp", TRINO_SAVE_DIR "/save.b.tmp", TRINO_SAVE_DIR "/save.tmp"};
 
-// Reads up to `cap` bytes; returns the file size, 0 if there is no save,
-// -1 on error. A power cut between store's remove() and rename() leaves
-// only the (complete) temp file: read that. The Rust side checks the frame.
-int32_t trino_save_load(uint8_t* dest, uint32_t cap)
+// Returns the slot file's size (0 = none, -1 = error), copying up to `cap`
+// bytes into `dest`. A missing file falls back to its temp file (a crash
+// between the flushed write and the rename).
+int32_t trino_save_load(uint32_t slot, uint8_t* dest, uint32_t cap)
 {
-    FILE* f = fopen(TRINO_SAVE_PATH, "rb");
-    if (!f) f = fopen(TRINO_SAVE_TMP, "rb");
+    if (slot > 2) return -1;
+    FILE* f = fopen(TRINO_SAVE_PATHS[slot], "rb");
+    if (!f) f = fopen(TRINO_SAVE_TMPS[slot], "rb");
     if (!f) return 0;
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
@@ -1234,17 +1239,19 @@ int32_t trino_save_load(uint8_t* dest, uint32_t cap)
     return (int32_t)size;
 }
 
-// Returns 0 on success, -1 on error.
-int32_t trino_save_store(const uint8_t* src, uint32_t len)
+// Replace slot `slot` (0 or 1): a temp file, then the rename. Returns 0 on
+// success, -1 on error.
+int32_t trino_save_store(uint32_t slot, const uint8_t* src, uint32_t len)
 {
+    if (slot > 1) return -1;
     mkdir("sdmc:/3ds", 0777);
     mkdir(TRINO_SAVE_DIR, 0777);
-    FILE* f = fopen(TRINO_SAVE_TMP, "wb");
+    FILE* f = fopen(TRINO_SAVE_TMPS[slot], "wb");
     if (!f) return -1;
     size_t put = fwrite(src, 1, len, f);
     if (fclose(f) != 0 || put != len) return -1;
-    remove(TRINO_SAVE_PATH);
-    return rename(TRINO_SAVE_TMP, TRINO_SAVE_PATH) == 0 ? 0 : -1;
+    remove(TRINO_SAVE_PATHS[slot]);
+    return rename(TRINO_SAVE_TMPS[slot], TRINO_SAVE_PATHS[slot]) == 0 ? 0 : -1;
 }
 
 // Wait two vblanks for the last presented frame's display transfer to land,
@@ -1514,8 +1521,13 @@ void* trino_wav_load(const char* romfs_path)
     w->stream = (h[6] & 2) && w->chunk_samples && w->nsamples &&
                 (!w->adpcm || (w->chunk_samples % 14 == 0 &&
                                w->ncontexts == (w->nsamples + w->chunk_samples - 1) / w->chunk_samples));
-    int ok = 1;
-    if (w->ncontexts) {
+    // The header must describe its own data (issue #68, the same checks as
+    // the pipeline's `T3au::parse`): the DSP reads `nsamples` from the
+    // buffer, whatever was allocated.
+    uint64_t need = w->adpcm ? ((uint64_t)w->nsamples + 13) / 14 * 8 : (uint64_t)w->nsamples * 2;
+    int ok = w->ncontexts <= (1u << 20) && (w->stream || need <= w->data_bytes) &&
+             (!w->stream || !w->adpcm || w->ncontexts > 0);
+    if (ok && w->ncontexts) {
         w->contexts = malloc(w->ncontexts * sizeof(ndspAdpcmData));
         ok = w->contexts != NULL;
         for (uint32_t i = 0; ok && i < w->ncontexts; i++) {

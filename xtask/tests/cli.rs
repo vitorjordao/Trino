@@ -87,6 +87,9 @@ fn help_and_no_arguments_list_every_command() {
         "run|test|watch n64 --expansion-pak on|off",
         "run|test|watch 3ds --new3ds on|off",
         "build|run|test|watch 3ds --speedup on|off",
+        "fuzz run <target>|all",
+        "save inspect <save>",
+        "save corrupt <save>",
     ] {
         assert!(text.contains(cmd), "help lacks `{cmd}`");
     }

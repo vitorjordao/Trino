@@ -272,6 +272,9 @@ pub enum MeshError {
     BadSection,
     /// More than [`MAX_JOINTS`] joints.
     TooManyJoints,
+    /// A triangle names a vertex past the vertex count (issue #68: the
+    /// T&L indexes vertices straight from the index buffer).
+    BadIndex,
 }
 
 #[inline]
@@ -367,14 +370,20 @@ impl<'a> Mesh<'a> {
         }
         let v = rd_u32(bytes, 4) as usize;
         let i = rd_u32(bytes, 8) as usize;
-        let pos_len = v * 12;
-        let nrm_len = v * 12;
-        let col_len = v * 4;
-        let idx_len = i * 2;
-        let end = 12 + pos_len + nrm_len + col_len + idx_len;
-        if bytes.len() < end {
+        // Checked: `usize` is 32 bits on the consoles, where a damaged
+        // count would wrap these products into small, in-bounds lengths.
+        let (Some(pos_len), Some(idx_len)) = (v.checked_mul(12), i.checked_mul(2)) else {
             return Err(MeshError::Truncated);
-        }
+        };
+        let nrm_len = pos_len;
+        let col_len = v * 4;
+        let end = pos_len
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(12 + col_len))
+            .and_then(|n| n.checked_add(idx_len));
+        let Some(end) = end.filter(|&e| e <= bytes.len()) else {
+            return Err(MeshError::Truncated);
+        };
         let pos_at = 12;
         let nrm_at = pos_at + pos_len;
         let col_at = nrm_at + nrm_len;
@@ -398,6 +407,15 @@ impl<'a> Mesh<'a> {
             max_edge2: 0.0,
             edge_box: Vec3::ZERO,
         };
+        // Every index names a vertex: the T&L reads `positions[index]`
+        // with no check of its own.
+        if mesh
+            .indices
+            .iter()
+            .any(|&b| u16::from_le_bytes(b) as usize >= v)
+        {
+            return Err(MeshError::BadIndex);
+        }
         mesh.opaque = mesh.colors.iter().all(|c| c[3] == 255);
         mesh.unit_normals = mesh.normals.iter().all(|n| {
             let n = vec3_of(n);
@@ -416,7 +434,7 @@ impl<'a> Mesh<'a> {
             let tag = &bytes[at..at + 4];
             let len = rd_u32(bytes, at + 4) as usize;
             let body_at = at + 8;
-            if bytes.len() < body_at + len {
+            if bytes.len() - body_at < len {
                 return Err(MeshError::BadSection);
             }
             let body = &bytes[body_at..body_at + len];
@@ -441,10 +459,13 @@ impl<'a> Mesh<'a> {
                             return Err(MeshError::BadSection);
                         }
                         let frames = rd_u32(body, c_at + 8) as usize;
-                        let size = CLIP_HEADER + frames * skel.joint_count * SAMPLE_BYTES;
-                        if frames == 0 || body.len() < c_at + size {
+                        let size = frames
+                            .checked_mul(skel.joint_count * SAMPLE_BYTES)
+                            .and_then(|n| n.checked_add(CLIP_HEADER));
+                        let Some(size) = size.filter(|&n| frames > 0 && n <= body.len() - c_at)
+                        else {
                             return Err(MeshError::BadSection);
-                        }
+                        };
                         c_at += size;
                     }
                     skel.clips = &body[4..];
@@ -498,7 +519,7 @@ impl<'a> Mesh<'a> {
                         .ok_or(MeshError::BadSection)?;
                 }
                 b"TXUV" => {
-                    if len < v * 8 {
+                    if len / 8 < v {
                         return Err(MeshError::BadSection);
                     }
                     mesh.uvs = Some(body[..v * 8].as_chunks().0);
@@ -508,7 +529,7 @@ impl<'a> Mesh<'a> {
                     let Some(skel) = mesh.skeleton else {
                         return Err(MeshError::BadSection);
                     };
-                    if len < v * 2
+                    if len / 2 < v
                         || body[..v * 2]
                             .as_chunks::<2>()
                             .0
@@ -647,7 +668,7 @@ impl<'a> Mesh<'a> {
             return Err(MeshError::TooManyJoints);
         }
         let joints_at = 4 + v;
-        if body.len() < joints_at + j * JOINT_BYTES {
+        if body.len() < joints_at || body.len() - joints_at < j * JOINT_BYTES {
             return Err(MeshError::BadSection);
         }
         let joint_of_vertex = &body[4..4 + v];
@@ -2397,6 +2418,15 @@ fn split_span(za: f32, zb: f32, band: Option<(f32, f32)>) -> f32 {
 }
 /// Subdivision work stack; overflow emits the triangle unsplit (graceful).
 const SPLIT_STACK: usize = 48;
+/// Most depth bisections one draw makes (issue #68). The stack bounds the
+/// pending work, not the depth: where the midpoint of an edge rounds back
+/// onto an end (a vertex a damaged model put at 1e15), the left child is
+/// its parent and the loop never ended — a frozen console. Past the budget
+/// the rest of the draw is emitted unsplit. It compares the existing
+/// `stats.splits` with a constant, so the hot loop gains no state;
+/// content's busiest draw is far below it (the goldens and the work
+/// baseline are unchanged).
+pub(crate) const SPLIT_BUDGET: u32 = 16_384;
 
 /// Deterministic work counters of [`tessellate`] — what the T&L actually did
 /// for one draw (or, summed, for a frame). Identical on every target (same
@@ -3292,7 +3322,7 @@ fn tessellate_joints<const SKINNED: bool, const SMOOTH: bool>(
                         (s20, 2)
                     }
                 };
-                if worst.0 > DEPTH_SPLIT && top + 2 <= SPLIT_STACK {
+                if worst.0 > DEPTH_SPLIT && top + 2 <= SPLIT_STACK && stats.splits < SPLIT_BUDGET {
                     // Rotate so the split edge is (a, b); bisect keeping the
                     // CCW winding: (a, m, c) + (m, b, c).
                     let (a, b, c) = match worst.1 {

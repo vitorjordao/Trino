@@ -1,0 +1,9 @@
+# Trino accessibility settings (issue #60)
+cvd=off
+text_scale=100
+high_contrast=off
+captions=off
+reduce_motion=off
+flash_guard=on
+hold_to_toggle=off
+cvd_filter=off

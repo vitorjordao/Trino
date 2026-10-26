@@ -45,6 +45,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `ci` | the GitHub Actions jobs, why they're shaped that way, replicating a job locally, debugging red runs |
 | `new-project` | `cargo xtask new` (in-repo or `--standalone`), maintaining the templates and `trino-runner-pc` |
 | `profiling` | timeline traces on every target: `zone!`/counters/frame marks, `--trace` builds, `trace collect/report/diff`, Perfetto, Tracy, the editor's Profiler; perf evidence for PRs |
+| `robustness` | fuzz targets for every parser (`cargo xtask fuzz`), adding one per new format, triaging a crash or hang, A/B save slots and `save_status`, versioned saves, `save inspect/corrupt`, Miri and ASan |
 | `shipping` | achievements/stats/presence/cloud (`assets/achievements.ron`, `services check\|export steam`), `package pc` per OS, Steam, crash reports, `deck check`, the 3DS `.cia` |
 | `netplay` | local players (`Platform::players`, seats, `Join`), input recordings and replays (`TREC`, `TRINO_RECORD/REPLAY`, `cargo xtask replay`, the `replay` self-test gate), rollback netplay (`trino-net`, `TRINO_NET`, `cargo xtask net`), determinism traps |
 
@@ -1093,6 +1094,35 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
   - **3DS local wireless:** evaluated (`rollback_cost`: 8 frames = 12.1 ms in
     Azahar), not written.
 
+- **Robustness (2026-10-26, ADR 0037, GitHub #68):** adversarial input for every parser
+  and saves that survive damage.
+  - **Fuzzing (`crates/fuzz`, `fuzz/`):** 37 targets (`trino_fuzz::TARGETS`): every
+    four-letter format, LZ4 and the save compressor, the save frame and slot files, the
+    small save forms, the PC's player files, the core's text parsers, every RON format,
+    the lobby and ggrs messages, the PC's baked files and bundles. A body uses the
+    parse (draws the mesh, lays the screen out, runs the graph). Three callers: libFuzzer
+    + ASan (`cargo xtask fuzz run`), the stable `cargo test -p trino-fuzz` (seeds in
+    `fuzz/seeds/`, reproducers in `fuzz/regressions/`, a mutation run) and `cargo xtask
+    fuzz smoke|repro|corpus|list|keep`. Guards: a target for every `…MAGIC`, a cargo-fuzz
+    binary per target.
+  - **Found and fixed:** TMDL indices and 32-bit size wraps, the T&L's endless depth
+    bisection (`SPLIT_BUDGET`), endless `c += 1.0` cycle loops in clip events and root
+    motion, the tilemap's stride, TPAK and TBND allocations from header sizes, sprite size
+    products, T3AU samples past the data (pipeline and 3DS shim), TUIL padding sums, ggrs
+    messages without a size limit; the N64 EEPROM hang on a 1-byte unaligned read
+    (libdragon), worked around with whole-block access.
+  - **Saves:** A/B slot files on the PC (`<save>.a/.b`), the Web (`<key>.a/.b`) and the 3DS
+    (`save.a/b`), the EEPROM's slots with a checksum over the header (flag 4);
+    `Platform::save_status` (`Empty`/`Ok`/`RecoveredFromBackup`/`Corrupted`),
+    `Platform::save_fault` (tests), `save::write_versioned`/`load_versioned`/`load_game`
+    with `Game::migrate_save`; the `save recovery` self-test step on PC, ares, Azahar and
+    the browsers; `cargo xtask save inspect|corrupt`.
+  - **Assets:** `load_dir_report`/`load_boot_report` load around a damaged file
+    (`AssetError`); the editor lists it in the Console with a Re-bake button; the PC
+    runner logs `TRINO_ASSET_ERROR:` and runs without it. The editor's Saves tab.
+  - **CI:** `.github/workflows/robustness.yml` nightly (Miri on trino-core, ASan on core and
+    the pipeline, six fuzz shards × 10 min per target under ASan).
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
 (see `crates/platform-pc/src/input.rs`). Gamepads (gilrs): A/B/X/Y, L = LB+LT, R = RB+RT,
@@ -1282,6 +1312,10 @@ cargo xtask net web                                               # two browser 
 cargo xtask net config [--json] | net config set players.max=2 net.mode=delay   # trino.toml [players] / [net]
 TRINO_NET=host:7300 | join:<ip>:7300 | lobby:<code>@<ip>:7400  # online play in trino-runner-pc (TRINO_NET_SIM=latency=…)
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
+cargo xtask fuzz list|smoke [<t>..] [--iters N]|corpus [--commit-seeds]|repro <file>|keep <file> [--json]   # fuzz targets on stable (issue #68)
+cargo xtask fuzz run <target>|all [--time 60]   # libFuzzer + ASan + overflow checks (nightly, cargo install cargo-fuzz)
+cargo xtask save inspect <save> [--medium] [--json]   # slots, sequence numbers, checks, recovery status (PC pair, slot file, EEPROM image)
+cargo xtask save corrupt <save> --mode flip|truncate [--slot newest|a|b|all] [--at N]   # damage a save on purpose
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
 cargo xtask new <name> --standalone <dir> --template football       # ... started from Solid Eleven (blank|castle64|showcase|football)
@@ -1629,6 +1663,37 @@ cargo test --workspace
   system temp dir** (a RAM disk on some machines). A scaffolded project's `cargo
   check` shares the engine's `target/` (`CARGO_TARGET_DIR`).
 
+- **libdragon's `eeprom_read_bytes`/`eeprom_write_bytes` break on a span that starts
+  inside a block and ends in it** (pinned commit 2c3d5db, `src/joybus/eeprom.c`):
+  `bytes_left -= EEPROM_BLOCK_SIZE - block_offset` underflows, the read copies past
+  `dest` and then loops over the EEPROM (the `save recovery` step hung in ares on
+  `read(21, 1)`), and the write would rewrite the whole EEPROM from memory past `src`.
+  The N64's `Eeprom` medium sends only whole blocks from a block's start and does the
+  read-modify-write itself; keep every EEPROM access going through it.
+- **An explicit DFS stack bounds the pending work, not the depth.** The T&L's depth
+  bisection ran forever on a vertex at ~1e15 (`(a + b) / 2 == a`: the left child is its
+  parent). Bound such loops by a count (`SPLIT_BUDGET` compares the existing
+  `stats.splits`, 36 bytes of `tessellate_joints`; a separate counter was 196 and broke the
+  I-cache guard).
+- **`f32::clamp` and `Ord::clamp` assert `lo <= hi` in release builds too** (and panic on
+  a NaN bound): a slider narrower than its knob crashed the UI draw. Where a bound comes
+  from data or geometry, use `trino_core::math::clamp_or` / `clamp_or_i32` (the same
+  result when the bounds are in order).
+- **A float loop counter stops counting past 2^24** (`c += 1.0 == c`): clip events and
+  root motion looped forever on a tiny clip duration. Count cycles in integers.
+- **Size products from a header wrap on the consoles' 32-bit `usize`** (and wasm32's):
+  `v * 12`, `w * h * 4`. Use `checked_mul`, or u64 with a checked product (`u32::MAX² · 4`
+  overflows u64 too). Release builds wrap silently: fuzz with `-a` and test in the dev
+  profile, where overflow checks are on.
+- **A header's count or size must not reach an allocation unchecked**
+  (`with_capacity(count)`, `vec![0; raw]`): bound it by the bytes that could produce it
+  (TPAK, TBND), or a damaged file asks for gigabytes.
+- **PC, Web and 3DS saves are slot files now** (`<save>.a`/`.b`, `<key>.a`/`.b`,
+  `save.a`/`save.b`): a test or harness that reads the old path reads nothing (the web
+  harness's reload check did).
+- **`cargo fuzz run` rebuilds when a source changes**, and three at once wait on one lock:
+  build once (`cargo +nightly fuzz build -O -a`), then run the binaries in
+  `fuzz/target/x86_64-unknown-linux-gnu/release/` with `-artifact_prefix=artifacts/<t>/`.
 - **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
   is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a
   pointer (ADR 0005 §6).
@@ -1747,7 +1812,8 @@ cargo test --workspace
   branches and zero-sized generics grew its static body past the N64's 16 KB I-cache
   (15.6 → 18.0 KB) and made unlit draws 10–35 % slower in ares (local lights, 2026-10-15).
   Lit draws take `render3d/lit.rs`. Check `mips64-elf-nm -S` of
-  `tessellate_joints::<false, false>` (0x3d04) after any T&L change.
+  `tessellate_joints::<false, false>` after any T&L change: `build n64` prints it and
+  fails past 16 384 bytes (16 252 on 2026-10-26, after #68's split budget; 16 216 before).
 - **N64 timings move with the code layout inside the Rust code**, which
   `TRINO_N64_TEXT_PAD` does not sample: a 4-byte field in a hot struct moved a scene
   +0.38 ms, and a feature with an unchanged hot path moved an external project +1.0 ms

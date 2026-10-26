@@ -1,0 +1,5 @@
+name=castle64
+title=Castle 64
+version=1.0.0
+assets=assets/pc
+profile=native

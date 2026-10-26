@@ -1402,7 +1402,10 @@ fn joints<
                         (s20, 2)
                     }
                 };
-                if worst.0 > DEPTH_SPLIT && top + 2 <= SPLIT_STACK {
+                if worst.0 > DEPTH_SPLIT
+                    && top + 2 <= SPLIT_STACK
+                    && stats.splits < super::SPLIT_BUDGET
+                {
                     let (a, b, c) = match worst.1 {
                         0 => (tri[0], tri[1], tri[2]),
                         1 => (tri[1], tri[2], tri[0]),

@@ -472,7 +472,7 @@ impl QualitySettings {
     /// The render scale the frame starts at (a dynamic range clamps it).
     pub fn start_scale(&self) -> f32 {
         match self.dynamic_resolution {
-            Some(d) => self.render_scale.clamp(d.min_scale, d.max_scale),
+            Some(d) => crate::math::clamp_or(self.render_scale, d.min_scale, d.max_scale),
             None => self.render_scale,
         }
     }

@@ -71,6 +71,18 @@ pub trait Game {
         false
     }
 
+    /// Turn a save an older version of the game wrote into the current
+    /// version, in place (issue #68): `data[..len]` holds version `from`'s
+    /// bytes (0 = a save from before the game tagged its versions); return
+    /// the current version's length (it may grow up to `data.len()`), or
+    /// `None` to start from defaults (the default). Called by
+    /// [`save::load_game`](crate::save::load_game), which reads the tag
+    /// [`save::write_versioned`](crate::save::write_versioned) wrote.
+    fn migrate_save(&mut self, from: u16, data: &mut [u8], len: usize) -> Option<usize> {
+        let _ = (from, data, len);
+        None
+    }
+
     /// The picture changed size (PC: window resized, fullscreen toggled,
     /// pixel scale changed). `screen` is the new internal resolution, the
     /// same space as `InputState::pointer`. Consoles never call it.

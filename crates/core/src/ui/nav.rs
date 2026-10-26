@@ -314,7 +314,7 @@ impl<const N: usize> Ui<N> {
         let step = step.max(1);
         let raw = min as f32 + t * (max - min) as f32;
         let snapped = min + (floor((raw - min as f32) / step as f32 + 0.5) as i32) * step;
-        let next = snapped.clamp(min, max);
+        let next = crate::math::clamp_or_i32(snapped, min.min(max), max.max(min));
         let now = self.values.get(node.bind, s.item).and_then(|v| v.int());
         if now == Some(next) {
             return;

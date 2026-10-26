@@ -466,9 +466,33 @@ impl T3au {
         };
         let bus = Bus::from_index(b[5] as usize).ok_or("T3AU: bus")?;
         let (data_len, ctx_count) = (u32_at(16) as usize, u32_at(24) as usize);
-        let ctx_end = T3AU_HEADER_LEN + ctx_count * 8;
-        if b.len() != ctx_end + data_len {
+        let ctx_end = ctx_count
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(T3AU_HEADER_LEN))
+            .ok_or("T3AU: length")?;
+        if ctx_end.checked_add(data_len) != Some(b.len()) {
             return Err("T3AU: length".into());
+        }
+        // The data must hold every sample the header announces, and the
+        // chunks' contexts must cover them (issue #68: `decode` asserted).
+        let samples = u32_at(12) as usize;
+        let chunk = u32_at(20) as usize;
+        let enough = match (codec, chunk) {
+            (Codec::DspAdpcm, 0) => dspadpcm::data_bytes(samples) <= data_len,
+            (Codec::DspAdpcm, c) => {
+                c % dspadpcm::SAMPLES_PER_FRAME == 0
+                    && ctx_count == samples.div_ceil(c)
+                    && (ctx_count == 0
+                        || (ctx_count - 1)
+                            * (c / dspadpcm::SAMPLES_PER_FRAME)
+                            * dspadpcm::BYTES_PER_FRAME
+                            + dspadpcm::data_bytes(samples - (ctx_count - 1) * c)
+                            <= data_len)
+            }
+            _ => samples.checked_mul(2).is_some_and(|n| n <= data_len),
+        };
+        if !enough {
+            return Err("T3AU: the data does not hold its samples".into());
         }
         let mut coefs = [0i16; 16];
         for (i, c) in coefs.iter_mut().enumerate() {

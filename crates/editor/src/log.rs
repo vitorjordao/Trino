@@ -40,6 +40,25 @@ pub struct Entry {
     pub at: Instant,
     pub level: Level,
     pub text: String,
+    /// A button beside the entry (issue #68: a damaged baked asset offers
+    /// to re-bake it).
+    pub action: Option<Action>,
+}
+
+/// What an entry's button does; the app runs it ([`Log::take_action`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// Bake the assets again (a damaged baked file is rewritten from its
+    /// master) and reload them. Names the asset that failed.
+    Rebake { logical: String },
+}
+
+impl Action {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Action::Rebake { .. } => "Re-bake",
+        }
+    }
 }
 
 struct Toast {
@@ -58,6 +77,8 @@ pub struct Log {
     pub filter: [bool; 4],
     pub search: String,
     echo: bool,
+    /// An entry's button clicked this frame.
+    clicked: Option<Action>,
 }
 
 impl Log {
@@ -68,11 +89,17 @@ impl Log {
             start: Instant::now(),
             filter: [true; 4],
             search: String::new(),
+            clicked: None,
             echo: std::env::var("TRINO_EDITOR_ECHO_LOG").is_ok_and(|v| v == "1"),
         }
     }
 
     pub fn push(&mut self, level: Level, text: impl Into<String>) {
+        self.push_with(level, text, None);
+    }
+
+    /// An entry with a button ([`Action`]).
+    pub fn push_with(&mut self, level: Level, text: impl Into<String>, action: Option<Action>) {
         let text = text.into();
         // TRINO_EDITOR_ECHO_LOG=1 mirrors the console to stderr — lets
         // scripts and AI agents observe a running editor.
@@ -86,6 +113,7 @@ impl Log {
             at: Instant::now(),
             level,
             text,
+            action,
         });
     }
 
@@ -113,6 +141,11 @@ impl Log {
             level,
             text,
         });
+    }
+
+    /// The button an entry's click asked for, once.
+    pub fn take_action(&mut self) -> Option<Action> {
+        self.clicked.take()
     }
 
     pub fn last(&self) -> Option<&Entry> {
@@ -215,6 +248,7 @@ impl Log {
         let needle = self.search.to_lowercase();
         let start = self.start;
         let filter = self.filter;
+        let mut clicked = None;
         egui::Frame::new()
             .fill(c::BG0)
             .corner_radius(CornerRadius::same(6))
@@ -247,9 +281,26 @@ impl Log {
                                     other => other.color(),
                                 };
                                 ui.label(RichText::new(&e.text).monospace().color(color));
+                                if let Some(a) = &e.action
+                                    && ui
+                                        .add(egui::Button::new(
+                                            RichText::new(format!(
+                                                "{} {}",
+                                                icon::ARROWS_CLOCKWISE,
+                                                a.label()
+                                            ))
+                                            .color(c::ACCENT),
+                                        ))
+                                        .clicked()
+                                {
+                                    clicked = Some(a.clone());
+                                }
                             });
                         }
                     });
             });
+        if clicked.is_some() {
+            self.clicked = clicked;
+        }
     }
 }

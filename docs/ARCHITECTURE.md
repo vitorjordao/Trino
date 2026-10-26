@@ -430,6 +430,22 @@ Web `performance.measure`. The `profiling` skill is the how-to.
 - **Portability.** A recording or a session runs against `replay::Neutral`: no save, the
   default settings. So nothing one machine keeps changes the sim.
 
+## Robustness: fuzzing and saves (issue #68, ADR 0037)
+
+- **Every parser has a fuzz target** (`crates/fuzz`): a body that parses and then does
+  what callers do with the result (draws the mesh, lays the screen out). libFuzzer runs
+  them nightly with ASan and overflow checks; `cargo test` replays the seeds, every crash
+  reproducer and a mutation run on every PR. Validation happens at parse (load time):
+  indices against the vertex count, every size product checked (the consoles' `usize` is
+  32 bits), allocations bounded by the bytes that could fill them. The hot paths stay as
+  they were, with one bound: `SPLIT_BUDGET` caps a draw's depth bisections.
+- **Saves never brick a game.** Every medium holds two slots (the N64 EEPROM's halves;
+  `<save>.a`/`.b` files on the PC and the 3DS; two `localStorage` keys on the Web), each
+  with a sequence number and a checksum over its header and data. A write goes to the
+  slot that doesn't hold the newest intact save; a read returns the newest intact one and
+  says what it found (`Platform::save_status`). Games version their saves
+  (`save::write_versioned`, `Game::migrate_save`).
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files

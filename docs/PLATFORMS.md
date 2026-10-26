@@ -414,8 +414,10 @@ What a browser changes:
   60 fps comes one refresh after the last), at most 2 s. The choice persists in
   `localStorage` (`trino-quality:<game>`). A frame cap skips animation frames; dynamic
   resolution follows the frame intervals. The self-test and `?frames=` runs use High.
-- **Saves** go to `localStorage` (`trino-save:<game>`, base64, at most
-  `Caps::WEB.save_bytes` = 1 MiB). A private window without storage reports
+- **Saves** go to `localStorage` as two slots (`trino-save:<game>.a` and `.b`, base64
+  slot files, issue #68; at most `Caps::WEB.save_bytes` = 1 MiB): one `setItem` per
+  slot, never over the newest intact one. The bare `trino-save:<game>` key from before
+  is read only when no slot is intact. A private window without storage reports
   `save_capacity() == 0`.
 - **Assets** come in one pack per game (`assets/trino.pak`, `assets/solid-eleven.pak`),
   fetched at boot. Textures are KTX2 (Basis Universal), transcoded at load to BC on

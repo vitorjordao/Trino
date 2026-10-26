@@ -104,7 +104,8 @@ pub use physics::{
     TriggerPhase, TriggerTracker, World,
 };
 pub use platform::{
-    BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform, SaveError,
+    BindDevice, BlobId, DisplayInfo, DisplaySettings, GamepadStatus, InputInfo, Platform,
+    SaveError, SaveFault, SaveStatus,
 };
 pub use players::{
     DeviceId, DeviceKind, HostedPlayers, InputDevice, Join, JoinEvent, MAX_DEVICES, MAX_PLAYERS,

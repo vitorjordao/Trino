@@ -29,6 +29,54 @@ pub enum SaveError {
     Io,
 }
 
+/// What the last [`Platform::save_read`] found (issue #68). Saves are the
+/// only data from outside the build — EEPROM wear, SD corruption, a player
+/// editing a file, a cloud sync — so a read never fails on damaged data: it
+/// returns the newest intact save and says which case it was.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SaveStatus {
+    /// No read yet, or a platform without slots (the trait's default).
+    #[default]
+    Unknown,
+    /// The medium holds no save: a first boot, or a blank medium.
+    Empty,
+    /// The newest save read back intact.
+    Ok,
+    /// The newest save was damaged (a torn write, bit rot, a bad sync) and
+    /// the one before it was read: the player lost their last save. Tell
+    /// them, and save again soon (the next write replaces the damaged slot).
+    RecoveredFromBackup,
+    /// Saves were found but none is intact: the read returned 0 bytes and
+    /// the game starts from its defaults. The next write repairs the medium.
+    Corrupted,
+}
+
+impl SaveStatus {
+    pub const fn label(self) -> &'static str {
+        match self {
+            SaveStatus::Unknown => "unknown",
+            SaveStatus::Empty => "empty",
+            SaveStatus::Ok => "ok",
+            SaveStatus::RecoveredFromBackup => "recovered-from-backup",
+            SaveStatus::Corrupted => "corrupted",
+        }
+    }
+}
+
+/// Damage a test does to the save medium on purpose (issue #68's `save
+/// recovery` self-test step, `cargo xtask save corrupt`), as a power cut or
+/// bit rot would. [`Platform::save_fault`] applies it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SaveFault {
+    /// Flip one bit in the newest save's body (bit rot, a bad cloud sync).
+    FlipNewest,
+    /// Cut the newest save's body in half where it lies (a write torn by a
+    /// power cut on a medium written in place).
+    TearNewest,
+    /// Flip a bit in every save on the medium.
+    FlipAll,
+}
+
 /// How a PC window shows the game. Consoles have one fixed screen and
 /// ignore it ([`Platform::display`] returns `None` there).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -150,6 +198,21 @@ pub trait Platform {
 
     /// Replace the save with `data` (atomic where the medium allows).
     fn save_write(&mut self, _data: &[u8]) -> Result<(), SaveError> {
+        Err(SaveError::Unsupported)
+    }
+
+    /// What the last [`save_read`](Self::save_read) found: an intact save,
+    /// none, a fallback to the previous save, or damage everywhere
+    /// ([`SaveStatus`]). The default (a platform without save slots) is
+    /// [`SaveStatus::Unknown`].
+    fn save_status(&self) -> SaveStatus {
+        SaveStatus::Unknown
+    }
+
+    /// Damage the save medium on purpose ([`SaveFault`]) — for recovery
+    /// tests only (the self-test's `save recovery` step). The default has
+    /// no medium to damage: [`SaveError::Unsupported`].
+    fn save_fault(&mut self, _fault: SaveFault) -> Result<(), SaveError> {
         Err(SaveError::Unsupported)
     }
 

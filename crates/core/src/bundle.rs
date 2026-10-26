@@ -313,6 +313,17 @@ impl<'a> Bundle<'a> {
             if end > limit || (!e.is_external() && e.codec == Codec::Libdragon) {
                 return Err(BundleError::BadEntry(i));
             }
+            // A loader allocates `raw` bytes before decoding: refuse sizes
+            // the codec can't produce from what is stored (issue #68: a
+            // damaged header asked for 4 GB). LZ4 expands 255:1 at most.
+            let fits = match (e.is_external(), e.codec) {
+                (true, _) => true,
+                (false, Codec::Stored) => e.raw == e.stored,
+                (false, _) => e.raw as u64 <= e.stored as u64 * 255 + 16,
+            };
+            if !fits {
+                return Err(BundleError::BadEntry(i));
+            }
             if e.is_external() && b.path(&e).is_none() {
                 return Err(BundleError::BadEntry(i));
             }

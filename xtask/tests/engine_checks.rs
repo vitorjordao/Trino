@@ -705,3 +705,121 @@ fn the_anim_graph_hash_is_pinned() {
         r.root_mm
     );
 }
+
+/// The `save recovery` step (issue #68) on a platform that saves the way
+/// the N64 does — the EEPROM's A/B slots written a block at a time, the
+/// header last — for both cartridge sizes, without an emulator.
+#[test]
+fn save_recovery_passes_on_an_eeprom_like_medium() {
+    use trino_core::save::{self, Lz, Medium, SLOT_HEADER, WritePlan};
+    use trino_core::{Platform, SaveError, SaveFault, SaveStatus};
+
+    struct Ram(Vec<u8>);
+    impl Medium for Ram {
+        fn size(&self) -> usize {
+            self.0.len()
+        }
+        fn read(&mut self, at: usize, buf: &mut [u8]) {
+            buf.copy_from_slice(&self.0[at..at + buf.len()]);
+        }
+        fn write(&mut self, at: usize, data: &[u8]) {
+            self.0[at..at + data.len()].copy_from_slice(data);
+        }
+    }
+    struct Eeprom {
+        m: Ram,
+        pending: Option<(WritePlan, Vec<u8>, usize)>,
+        status: SaveStatus,
+    }
+    impl Eeprom {
+        fn block(m: &mut Ram, p: &mut (WritePlan, Vec<u8>, usize)) -> bool {
+            let (plan, body, written) = p;
+            if *written < plan.body_len {
+                let n = 8.min(plan.body_len - *written);
+                m.write(
+                    plan.offset + SLOT_HEADER + *written,
+                    &body[*written..*written + n],
+                );
+                *written += n;
+                return false;
+            }
+            let h = *written - plan.body_len;
+            if h < SLOT_HEADER {
+                m.write(plan.offset + h, &plan.header[h..h + 8]);
+                *written += 8;
+            }
+            *written >= plan.body_len + SLOT_HEADER
+        }
+        fn plan(&mut self, data: &[u8]) -> Result<(WritePlan, Vec<u8>, usize), SaveError> {
+            let total = self.m.size();
+            let mut body = vec![0u8; total];
+            let mut scratch = vec![0u8; total];
+            let plan = save::plan_write(
+                &mut self.m,
+                data,
+                &mut body,
+                &mut scratch,
+                &mut Lz::default(),
+            )?;
+            Ok((plan, body, 0))
+        }
+    }
+    impl Platform for Eeprom {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+        fn save_capacity(&self) -> usize {
+            save::capacity(self.m.size())
+        }
+        fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
+            let mut scratch = vec![0u8; self.m.size()];
+            let (n, st) = save::read_newest_status(&mut self.m, buf, &mut scratch);
+            self.status = st;
+            Ok(n)
+        }
+        fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
+            self.pending = None;
+            let mut p = self.plan(data)?;
+            let mut steps = 0;
+            while !Eeprom::block(&mut self.m, &mut p) {
+                steps += 1;
+                assert!(steps < 1000, "a save never finished");
+            }
+            Ok(())
+        }
+        fn save_begin(&mut self, data: &[u8]) -> Result<(), SaveError> {
+            self.pending = Some(self.plan(data)?);
+            Ok(())
+        }
+        fn save_step(&mut self, _: u32) -> Result<bool, SaveError> {
+            let Some(p) = self.pending.as_mut() else {
+                return Ok(true);
+            };
+            if Eeprom::block(&mut self.m, p) {
+                self.pending = None;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        fn save_status(&self) -> SaveStatus {
+            self.status
+        }
+        fn save_fault(&mut self, fault: SaveFault) -> Result<(), SaveError> {
+            self.pending = None;
+            let mut scratch = vec![0u8; self.m.size()];
+            save::medium_fault(&mut self.m, fault, &mut scratch)
+                .then_some(())
+                .ok_or(SaveError::Io)
+        }
+    }
+    for size in [512usize, 2048] {
+        let mut p = Eeprom {
+            m: Ram(vec![0xFF; size]),
+            pending: None,
+            status: SaveStatus::Unknown,
+        };
+        castle64::selftest::save(&mut p).unwrap();
+        castle64::selftest::save_recovery(&mut p).unwrap_or_else(|e| panic!("{size} B: {e}"));
+    }
+}

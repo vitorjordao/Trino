@@ -59,7 +59,7 @@ impl ThreadSetting {
             ThreadSetting::Count(n) => n,
             ThreadSetting::AllBut(n) => available.saturating_sub(n),
         };
-        n.clamp(1, available)
+        n.clamp(1, available.max(1))
     }
 
     /// The text [`parse`](Self::parse) reads back.

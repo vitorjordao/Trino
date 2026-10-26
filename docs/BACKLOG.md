@@ -303,6 +303,27 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — robustness: fuzzing every parser, save slots and recovery, sanitizers in CI (2026-10-26, branch `feat/68-robustness`, GitHub #68, ADR 0037)
+
+| Item | Evidence |
+|---|---|
+| Phase 1 — 37 fuzz targets (`crates/fuzz`, `fuzz/`), seeds from the real bakes (`fuzz corpus`), reproducers replayed in `cargo test`, a target for every format (guard) | `crates/fuzz/tests/targets.rs` (3); libFuzzer 60 s per target, then the stable smoke at 200 000 mutations per target with overflow checks: 0 crashes after the fixes; 40 reproducers in `fuzz/regressions/` (3 from the PR's first CI fuzz run) (TMDL ×9 incl. a hang, TANG hang, tilemap ×8, TPAK ×2, TUIL, T3AU ×7, saves ×9) |
+| Found and fixed | TMDL indices past the vertex count and 32-bit size wraps (`MeshError::BadIndex`), the T&L's endless bisection (`SPLIT_BUDGET`, `tessellate_joints` 16 216 → 16 252 B), `c += 1.0` loops in clip events / root motion, the tilemap's stride, TPAK `with_capacity(count)` (100 GB), sprite size products, TBND `raw` allocations (4 GB), T3AU samples past the data (pipeline + 3DS shim), TUIL padding sums and (CI run) a slider narrower than its knob (`f32::clamp` panics: `math::clamp_or` at every data-bounded clamp), a save sequence bump half the circle away (CI run), ggrs messages without a limit; the N64 EEPROM hang on a 1-byte read inside a block (libdragon) |
+| Phase 2 — A/B slot files on the PC, the Web and the 3DS; the EEPROM's header checksum; `Platform::save_status`/`save_fault`; `save::write_versioned`/`load_versioned`/`load_game`, `Game::migrate_save`; the `save recovery` self-test step | `crates/core/tests/save_recovery.rs` (10: a power cut at every byte, a bit flip at every bit, two machines' slots, the save from before slots, versions), `save_file.rs::slots_alternate_recover_and_read_the_old_file`, `saves.rs` (Web), `engine_checks.rs::save_recovery_passes_on_an_eeprom_like_medium`; the step passes on the PC, in ares (Pak and base), Azahar (New and old), Chromium WebGL2/WebGPU and Firefox |
+| Phase 3 — `.github/workflows/robustness.yml`: Miri, ASan, six fuzz shards, corpus cached | Miri locally: 285 trino-core tests, no undefined behavior (fixed: a test assuming a 2-aligned `[u8; 32]`; `log2` vs std skipped under Miri) |
+| Phase 4 — `cargo xtask fuzz …`, `save inspect|corrupt`; `load_dir_report` + the editor's Console Re-bake and Saves tab; the PC runner's `TRINO_ASSET_ERROR`; docs, the `robustness` skill, the `engine-feature` checklist item | `xtask/tests/save_cli.rs` (4), `asset_kinds.rs::the_report_loads_around_a_damaged_asset`, `ui_tests.rs::damaged_assets_rebake_from_the_console_and_saves_decode_in_their_tab`, the layout audit's Saves tab |
+
+Deviations (ADR 0037): recovery is `SaveStatus::RecoveredFromBackup` from
+`Platform::save_status()`, not a `SaveError` (an `Err` would drop the bytes to load); the
+consoles' fault injection is the defaulted `Platform::save_fault`, not a power cut (the
+host tests cut writes at every byte, the step cuts a `save_begin` short); the 3DS shim's
+C T3AU loader got `T3au::parse`'s checks by hand, it isn't fuzzed; an older build reads a
+save with the new header checksum as damaged.
+
+Follow-ups: castle64 and Solid Eleven on `write_versioned` (Solid Eleven has its own v3
+career format); a real power cut on hardware (SummerCart64 EEPROM, a 3DS SD pulled); the
+Saves tab for an N64 EEPROM image from ares; fuzzing the C shims' readers.
+
 ## Done — local players, input recordings and replays, rollback netplay (2026-10-25, branch `feat/67-netplay`, GitHub #67, ADR 0036)
 
 | Item | Evidence |

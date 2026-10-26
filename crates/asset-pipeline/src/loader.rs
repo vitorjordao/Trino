@@ -187,8 +187,52 @@ fn read_index(out_dir: &Path) -> Result<IndexFile, String> {
 }
 
 fn load_where(out_dir: &Path, keep: impl Fn(&IndexEntry) -> bool) -> Result<LoadedAssets, String> {
+    let (assets, errors) = load_where_report(out_dir, keep)?;
+    match errors.into_iter().next() {
+        Some(e) => Err(e.message),
+        None => Ok(assets),
+    }
+}
+
+/// A baked asset that did not load (issue #68): which, where, why. The
+/// editor shows it in its Console with a re-bake action; a PC game logs it
+/// and runs without the asset (it draws nothing, like an unloaded one).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetError {
+    pub logical: String,
+    pub id: u32,
+    pub file: std::path::PathBuf,
+    pub message: String,
+}
+
+/// [`load_dir`], loading every asset that is intact and listing the ones
+/// that aren't instead of failing on the first. Only an unreadable index is
+/// an `Err`.
+pub fn load_dir_report(
+    out_dir: &Path,
+    only: Option<&[u32]>,
+) -> Result<(LoadedAssets, Vec<AssetError>), String> {
+    load_where_report(out_dir, |e| only.is_none_or(|f| f.contains(&e.id)))
+}
+
+/// [`load_boot`] that reports damaged assets instead of failing
+/// ([`load_dir_report`]).
+pub fn load_boot_report(
+    out_dir: &Path,
+    only: Option<&[u32]>,
+) -> Result<(LoadedAssets, Vec<AssetError>), String> {
+    load_where_report(out_dir, |e| {
+        e.groups.is_empty() && only.is_none_or(|f| f.contains(&e.id))
+    })
+}
+
+fn load_where_report(
+    out_dir: &Path,
+    keep: impl Fn(&IndexEntry) -> bool,
+) -> Result<(LoadedAssets, Vec<AssetError>), String> {
     let index = read_index(out_dir)?;
     let mut out = LoadedAssets::default();
+    let mut errors = Vec::new();
     let read = |file: &str| {
         let path = out_dir.join(file);
         std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
@@ -197,25 +241,35 @@ fn load_where(out_dir: &Path, keep: impl Fn(&IndexEntry) -> bool) -> Result<Load
         if !keep(&entry) {
             continue;
         }
-        let bytes = read(&entry.file)?;
-        let variants = Variants {
-            preview_3ds: entry.preview_3ds.as_deref().map(read).transpose()?,
-            compressed: entry.compressed.as_deref().map(read).transpose()?,
-            ktx2: entry.ktx2.as_deref().map(read).transpose()?,
-            graded: entry.graded.as_deref().map(read).transpose()?,
-        };
         let path = out_dir.join(&entry.file);
-        push_entry(
-            &mut out,
-            &entry.kind,
-            entry.logical,
-            entry.id,
-            bytes,
-            variants,
-            &|| path.display().to_string(),
-        )?;
+        let mut one = || -> Result<(), String> {
+            let bytes = read(&entry.file)?;
+            let variants = Variants {
+                preview_3ds: entry.preview_3ds.as_deref().map(read).transpose()?,
+                compressed: entry.compressed.as_deref().map(read).transpose()?,
+                ktx2: entry.ktx2.as_deref().map(read).transpose()?,
+                graded: entry.graded.as_deref().map(read).transpose()?,
+            };
+            push_entry(
+                &mut out,
+                &entry.kind,
+                entry.logical.clone(),
+                entry.id,
+                bytes,
+                variants,
+                &|| path.display().to_string(),
+            )
+        };
+        if let Err(message) = one() {
+            errors.push(AssetError {
+                logical: entry.logical.clone(),
+                id: entry.id,
+                file: path.clone(),
+                message,
+            });
+        }
     }
-    Ok(out)
+    Ok((out, errors))
 }
 
 /// A sprite's extra files (`preview_3ds`, `compressed`, `ktx2`), a
@@ -248,7 +302,12 @@ fn push_entry(
             let width = u32::from_le_bytes(rest[0..4].try_into().unwrap());
             let height = u32::from_le_bytes(rest[4..8].try_into().unwrap());
             let rgba = rest[8..].to_vec();
-            if rgba.len() != (width * height * 4) as usize {
+            // In u64: a damaged size must not wrap to the data's length.
+            if (width as u64)
+                .checked_mul(height as u64)
+                .and_then(|n| n.checked_mul(4))
+                != Some(rgba.len() as u64)
+            {
                 return Err(format!("{}: truncated sprite data", what()));
             }
             let preview_3ds = match variants.preview_3ds {
@@ -332,6 +391,9 @@ fn push_entry(
             if !bytes.starts_with(b"TMDL") {
                 return Err(format!("{}: bad model blob", what()));
             }
+            if let Err(e) = trino_core::render3d::Mesh::from_tmdl(&bytes) {
+                return Err(format!("{}: bad model blob ({e:?})", what()));
+            }
             if variants
                 .graded
                 .as_ref()
@@ -360,6 +422,22 @@ fn push_entry(
         other => return Err(format!("unknown asset kind `{other}`")),
     }
     Ok(())
+}
+
+/// Parse one baked asset file of `kind` as the PC's loader does (`cargo
+/// xtask fuzz`'s `pc_asset` target; the index and the variants aside).
+pub fn parse_baked(kind: &str, bytes: Vec<u8>) -> Result<LoadedAssets, String> {
+    let mut out = LoadedAssets::default();
+    push_entry(
+        &mut out,
+        kind,
+        "fuzz/asset".into(),
+        1,
+        bytes,
+        Variants::default(),
+        &|| "input".into(),
+    )?;
+    Ok(out)
 }
 
 /// Decoded bytes a [`BundleLoad::step_many`] worker must get to be worth

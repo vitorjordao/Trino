@@ -24,6 +24,8 @@ pub struct N64Platform {
     high: Cell<u64>,
     /// A save being written over frames (`save_begin`).
     pending: Option<Box<Pending>>,
+    /// What the last save read found (`Platform::save_status`).
+    save_status: trino_core::SaveStatus,
     lz: Option<Box<Lz>>,
     /// Detected at boot (`runtime::hw_tier`).
     tier: trino_core::HwTier,
@@ -48,18 +50,52 @@ struct Pending {
     written: usize,
 }
 
-/// The cartridge EEPROM as a [`Medium`].
+/// The cartridge EEPROM as a [`Medium`]. Every access reaches libdragon as
+/// whole 8-byte blocks from a block's start: its `eeprom_read_bytes` /
+/// `eeprom_write_bytes` underflow `bytes_left` on a span that starts and
+/// ends inside one block (issue #68's `save recovery` step hung in ares on
+/// `read(21, 1)`; the write would rewrite the EEPROM from memory past the
+/// source), so the rest is a read-modify-write here.
 struct Eeprom(usize);
+
+impl Eeprom {
+    /// The blocks `at..at + len` touches: (first byte, bytes).
+    fn span(at: usize, len: usize) -> (usize, usize) {
+        let start = at / BLOCK * BLOCK;
+        (start, (at + len).div_ceil(BLOCK) * BLOCK - start)
+    }
+}
 
 impl Medium for Eeprom {
     fn size(&self) -> usize {
         self.0
     }
     fn read(&mut self, at: usize, buf: &mut [u8]) {
-        unsafe { ffi::trino_save_read(buf.as_mut_ptr(), at as u32, buf.len() as u32) };
+        if buf.is_empty() {
+            return;
+        }
+        let (start, len) = Self::span(at, buf.len());
+        if start == at && len == buf.len() {
+            unsafe { ffi::trino_save_read(buf.as_mut_ptr(), at as u32, len as u32) };
+            return;
+        }
+        let mut blocks = vec![0u8; len];
+        unsafe { ffi::trino_save_read(blocks.as_mut_ptr(), start as u32, len as u32) };
+        buf.copy_from_slice(&blocks[at - start..at - start + buf.len()]);
     }
     fn write(&mut self, at: usize, data: &[u8]) {
-        unsafe { ffi::trino_save_write(data.as_ptr(), at as u32, data.len() as u32) };
+        if data.is_empty() {
+            return;
+        }
+        let (start, len) = Self::span(at, data.len());
+        if start == at && len == data.len() {
+            unsafe { ffi::trino_save_write(data.as_ptr(), at as u32, len as u32) };
+            return;
+        }
+        let mut blocks = vec![0u8; len];
+        unsafe { ffi::trino_save_read(blocks.as_mut_ptr(), start as u32, len as u32) };
+        blocks[at - start..at - start + data.len()].copy_from_slice(data);
+        unsafe { ffi::trino_save_write(blocks.as_ptr(), start as u32, len as u32) };
     }
 }
 
@@ -74,6 +110,7 @@ impl N64Platform {
             high: Cell::new(0),
             pending: None,
             lz: None,
+            save_status: trino_core::SaveStatus::Unknown,
             tier: runtime::hw_tier(),
             groups: crate::assets::Groups::new(),
             access: trino_core::HostedAccess::new(),
@@ -240,7 +277,28 @@ impl Platform for N64Platform {
         }
         let mut scratch = vec![0u8; total];
         // Blank, foreign or torn both ways: 0 = no save yet.
-        Ok(save::read_newest(&mut Eeprom(total), buf, &mut scratch))
+        let (n, status) = save::read_newest_status(&mut Eeprom(total), buf, &mut scratch);
+        self.save_status = status;
+        Ok(n)
+    }
+
+    fn save_status(&self) -> trino_core::SaveStatus {
+        self.save_status
+    }
+
+    /// The EEPROM's A/B slots damaged in place (`save::medium_fault`); an
+    /// unfinished `save_begin` is dropped first (the power cut it models).
+    fn save_fault(&mut self, fault: trino_core::SaveFault) -> Result<(), SaveError> {
+        let total = self.eeprom_bytes();
+        if total < 2 * SLOT_HEADER {
+            return Err(SaveError::Unsupported);
+        }
+        self.pending = None;
+        let mut scratch = vec![0u8; total];
+        match save::medium_fault(&mut Eeprom(total), fault, &mut scratch) {
+            true => Ok(()),
+            false => Err(SaveError::Io),
+        }
     }
 
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {

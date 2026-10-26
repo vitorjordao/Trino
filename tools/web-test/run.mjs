@@ -170,14 +170,17 @@ for (const run of plan) {
     if (r.pass) {
       // 2) The save the self-test wrote is still there after a reload,
       // and the game reads it (castle64 boots with it).
-      const saved = await page.evaluate(() => localStorage.getItem("trino-save:selftest"));
+      // The save's A/B slots (issue #68: `<key>.a`, `<key>.b`).
+      const slots = () =>
+        ["a", "b"].map((s) => localStorage.getItem(`trino-save:selftest.${s}`)).join("|");
+      const saved = await page.evaluate(slots);
       const game = smoke ? "" : "game=castle64&";
       await page.goto(`${base}?${game}backend=${run.backend}&size=640x480`);
       await page.waitForFunction(() => globalThis.__trino && globalThis.__trino.info.frames > 5, null, {
         timeout: 120000,
       });
-      const after = await page.evaluate(() => localStorage.getItem("trino-save:selftest"));
-      r.save_persisted = smoke || (saved !== null && saved === after);
+      const after = await page.evaluate(slots);
+      r.save_persisted = smoke || (saved !== "|" && saved === after);
 
       // 3) Audio: suspended until a gesture, running after a click.
       r.audio_before = await page.evaluate(() => globalThis.__trino.info.audio);

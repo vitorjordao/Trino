@@ -85,6 +85,11 @@ be half-written: a link failing with `undefined hidden symbol: anon.…` is that
   scaffolded project end to end (minutes: fat LTO).
 
 - Content: `cargo xtask scene check` (scenes/prefabs/materials resolve cleanly).
+- Robustness (issue #68, the `robustness` skill): `cargo test -p trino-fuzz` already runs
+  in the workspace suite (every fuzz target over its seeds, its reproducers and 400
+  mutations; `TRINO_FUZZ_ITERS=20000` for a harder run); `cargo xtask fuzz smoke --iters
+  200000` (about 15 min, overflow checks on) and `cargo xtask fuzz run all --time 60`
+  (nightly + cargo-fuzz) before touching a parser; Miri and ASan as in the skill.
 - Console type-check without the toolchains (catches `no_std`/target breakage in
   `crates/platform-{n64,3ds}` and game crates, which are cfg-gated on the host):
   ```

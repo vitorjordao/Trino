@@ -1,0 +1,36 @@
+[package]
+name = "trino-fuzz"
+description = "Fuzz target bodies for every Trino binary format, save frame and player file (issue #68): one function per parser, called by the cargo-fuzz targets in fuzz/, by the stable regression and mutation tests here, and by `cargo xtask fuzz`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["host"]
+# The parsers that live outside trino-core: PC/Web player files, the RON
+# formats, the asset pipeline's T3AU and the network messages. Without it
+# the crate is trino-core only (what the Miri and sanitizer jobs build).
+host = [
+    "dep:trino-platform-pc",
+    "dep:trino-platform-web",
+    "dep:trino-runner-pc",
+    "dep:trino-scene",
+    "dep:trino-asset-pipeline",
+    "dep:trino-net",
+]
+
+[dependencies]
+trino-core = { workspace = true }
+trino-platform-pc = { workspace = true, optional = true }
+trino-platform-web = { workspace = true, optional = true }
+trino-runner-pc = { workspace = true, optional = true }
+trino-scene = { workspace = true, optional = true }
+trino-asset-pipeline = { workspace = true, optional = true }
+trino-net = { workspace = true, optional = true }
+
+[[bin]]
+name = "trino-fuzz"
+path = "src/main.rs"
+required-features = ["host"]

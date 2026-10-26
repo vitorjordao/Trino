@@ -1,0 +1,44 @@
+// Solid Eleven's pause menu (issue #58), drawn over the match. Shipped as
+// static Rust (no blob: the menu tests run without a bake):
+//   cargo xtask ui export examples/solid-eleven/ui/pause.ui.ron examples/solid-eleven/src/ui/pause_gen.rs
+// The keys are read through the game's own tables (`ui::i18n::tr`).
+(
+    version: 1,
+    name: "se_pause",
+    scaling: Snap,
+    focus: "resume",
+    on_back: "resume",
+    theme: (
+        font: "fonts/se_ui",
+        text: Some((236, 240, 255, 255)),
+        dim: Some((150, 160, 196, 255)),
+        panel: Some((16, 20, 46, 230)),
+        button: Some((16, 20, 46, 230)),
+        button_text: Some((236, 240, 255, 255)),
+        focus: Some((30, 60, 130, 240)),
+        focus_text: Some((236, 240, 255, 255)),
+        accent: Some((40, 210, 255, 255)),
+        pressed: Some((50, 110, 240, 255)),
+    ),
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 120))),
+            (
+                kind: Rect(border: 1, border_color: Some((40, 210, 255, 255))),
+                anchor: Center,
+                padding: (10, 4, 10, 10),
+                children: [
+                    (
+                        kind: Stack(gap: 6, align: Center),
+                        children: [
+                            (kind: Text, key: "pause.title", text: "PAUSED", color: Some((40, 210, 255, 255))),
+                            (kind: Button, id: "resume", key: "pause.resume", text: "RESUME", on_click: "resume", min: (120, 20), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "substitute", key: "pause.substitute", text: "SUBSTITUTE", on_click: "substitute", min: (120, 20), padding: (6, 3, 6, 3)),
+                            (kind: Button, id: "quit", key: "pause.quit", text: "QUIT MATCH", on_click: "quit", min: (120, 20), padding: (6, 3, 6, 3)),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

@@ -370,7 +370,17 @@ pub fn upload_assets(
     only: Option<&[u32]>,
 ) -> Result<(), String> {
     use trino_core::bundle::MemoryCategory as C;
-    let assets = trino_asset_pipeline::load_boot(baked_dir, only)?;
+    // A damaged baked file (a disk error, a mod) is logged and left out: the
+    // game runs without that asset, which draws nothing (issue #68).
+    let (assets, damaged) = trino_asset_pipeline::load_boot_report(baked_dir, only)?;
+    for e in &damaged {
+        eprintln!(
+            "TRINO_ASSET_ERROR: {} ({}): {}",
+            e.logical,
+            e.file.display(),
+            e.message
+        );
+    }
     let target = sprite_platform(renderer);
     let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
     // A re-upload replaces: take the old bytes off, count the new.

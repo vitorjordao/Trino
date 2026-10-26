@@ -17,3 +17,8 @@
 *.wav binary
 *.glb binary
 *.ttf binary
+# Fuzz inputs (issue #68) are bytes, replayed byte for byte: never touch
+# their line endings.
+fuzz/seeds/** -text
+fuzz/regressions/** -text
+fuzz/corpus/** -text

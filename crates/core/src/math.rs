@@ -5,6 +5,21 @@
 
 use core::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
+/// `v.clamp(lo, hi)` that never panics (issue #68): `f32::clamp` asserts
+/// `lo <= hi` even in release builds, and bounds from data (a damaged blob,
+/// a zero-length bone) can cross or be NaN. The same result as `clamp`
+/// whenever `lo <= hi`; `v` otherwise.
+#[inline]
+pub fn clamp_or(v: f32, lo: f32, hi: f32) -> f32 {
+    if lo <= hi { v.clamp(lo, hi) } else { v }
+}
+
+/// [`clamp_or`] for integers (`Ord::clamp` asserts `lo <= hi` too).
+#[inline]
+pub fn clamp_or_i32(v: i32, lo: i32, hi: i32) -> i32 {
+    if lo <= hi { v.clamp(lo, hi) } else { v }
+}
+
 /// 2D vector, `f32`. Screen space is X-right, Y-down, origin top-left.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Vec2 {
@@ -228,6 +243,21 @@ impl Default for Color {
 
 #[cfg(test)]
 mod tests {
+
+    /// Issue #68: `f32::clamp` panics on crossed or NaN bounds in release
+    /// builds too; `clamp_or` is `clamp` when the bounds are in order.
+    #[test]
+    fn clamp_or_is_clamp_in_order_and_never_panics() {
+        for v in [-3.0f32, 0.0, 0.5, 2.0, f32::NAN] {
+            let want = v.clamp(0.0, 1.0);
+            let got = clamp_or(v, 0.0, 1.0);
+            assert!(got == want || (got.is_nan() && want.is_nan()), "{v}");
+        }
+        assert_eq!(clamp_or(5.0, 112.0, 110.0), 5.0, "crossed bounds");
+        assert_eq!(clamp_or(5.0, f32::NAN, 1.0), 5.0, "NaN bound");
+        assert_eq!(clamp_or_i32(7, 1, 3), 3);
+        assert_eq!(clamp_or_i32(7, 9, 3), 7);
+    }
     use super::*;
 
     #[test]

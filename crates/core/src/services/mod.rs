@@ -459,7 +459,7 @@ impl HostedServices {
             return 0;
         };
         let old = self.state.stat(info.index);
-        let mut v = value.clamp(info.min, info.max);
+        let mut v = crate::math::clamp_or_i32(value, info.min, info.max);
         if info.increment_only && v < old {
             v = old;
         }
@@ -502,7 +502,7 @@ impl HostedServices {
             } else {
                 then
             };
-            let v = v.clamp(s.min, s.max);
+            let v = crate::math::clamp_or_i32(v, s.min, s.max);
             if v != now {
                 self.state.set_stat(s.index, v);
                 self.pending.stats |= 1 << s.index;

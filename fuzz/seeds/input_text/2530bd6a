@@ -1,0 +1,16 @@
+A = Z | South
+B = X | East
+X = C | West
+Y = V | North
+L = Q | LeftTrigger LeftTrigger2
+R = E | RightTrigger RightTrigger2
+Start = ENTER | Start Mode
+Select = RSHIFT | Select LeftThumb
+DpadUp = UP | DPadUp
+DpadDown = DOWN | DPadDown
+DpadLeft = LEFT | DPadLeft
+DpadRight = RIGHT | DPadRight
+L2 = - | LeftTrigger2
+R2 = - | RightTrigger2
+L3 = - | LeftThumb
+R3 = - | RightThumb

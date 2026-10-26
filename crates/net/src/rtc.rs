@@ -385,7 +385,7 @@ impl Meeting {
 impl NonBlockingSocket<PeerAddr> for RtcSocket {
     fn send_to(&mut self, msg: &Message, addr: &PeerAddr) {
         let PeerAddr::Rtc(seat) = addr else { return };
-        let Ok(bytes) = bincode::serialize(msg) else {
+        let Some(bytes) = crate::encode_message(msg) else {
             return;
         };
         if let Some(dc) = self.shared.borrow().channels.get(&(*seat as usize)) {
@@ -398,7 +398,7 @@ impl NonBlockingSocket<PeerAddr> for RtcSocket {
         s.inbox
             .drain(..)
             .filter_map(|(seat, b)| {
-                let m = bincode::deserialize::<Message>(&b).ok()?;
+                let m = crate::decode_message(&b)?;
                 Some((PeerAddr::Rtc(seat as u16), m))
             })
             .collect()

@@ -40,5 +40,31 @@ pub mod rtc;
 pub mod udp;
 
 pub use config::{NetConfig, NetMode};
+
+/// Largest ggrs message a socket decodes (issue #68): a datagram from
+/// anyone on the network can't make the decoder reserve more.
+pub const MAX_MESSAGE: u64 = 64 * 1024;
+
+fn message_options() -> impl bincode::Options {
+    use bincode::Options;
+    // `bincode::serialize`'s own encoding, with a size limit.
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+        .with_limit(MAX_MESSAGE)
+}
+
+/// A ggrs message as the sockets send it.
+pub fn encode_message(msg: &ggrs::Message) -> Option<Vec<u8>> {
+    use bincode::Options;
+    message_options().serialize(msg).ok()
+}
+
+/// A ggrs message off a socket; `None` for anything malformed or larger
+/// than [`MAX_MESSAGE`].
+pub fn decode_message(bytes: &[u8]) -> Option<ggrs::Message> {
+    use bincode::Options;
+    message_options().deserialize(bytes).ok()
+}
 pub use session::{NetSession, NetState, NetStats, PeerAddr, SyncTest};
 pub use sim::{Conditions, SimNet, SimSocket};

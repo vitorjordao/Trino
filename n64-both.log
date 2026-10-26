@@ -1,0 +1,730 @@
+[n64] compiling C shim + RSP overlay...
+      text       data        bss      total filename
+      2380        680       2288       5348 rsp_trino.elf
+      text       data        bss      total filename
+      2604        744       2336       5684 rsp_trino_color.elf
+      text       data        bss      total filename
+      2740        744       2608       6092 rsp_trino_tex.elf
+      text       data        bss      total filename
+      4028        704       3280       8012 rsp_trino_water.elf
+[n64] baking assets in container...
+[n64] group replay: 1 entries, 15 KB raw, 14 KB stored (libdragon level 1)
+[n64] group selftest_level: 3 entries, 2 KB raw, 1 KB stored (libdragon level 1)
+[n64] group selftest_level2: 3 entries, 5 KB raw, 5 KB stored (libdragon level 2)
+[n64] group strider: 1 entries, 17 KB raw, 5 KB stored (libdragon level 1)
+[n64] building Rust (nightly, build-std)...
+   Compiling trino-platform-n64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/crates/platform-n64)
+warning: dropping unsupported crate type `dylib` for target `mips-nintendo64-none-14744949856826316735`
+
+warning: `castle64` (lib) generated 1 warning
+warning: `showcase` (lib) generated 1 warning (1 duplicate)
+   Compiling trino-app-n64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/apps/n64)
+warning: unused attribute
+   --> apps/n64/src/n64/micro.rs:232:1
+    |
+232 | #[inline(never)]
+    | ^^^^^^^^^^^^^^^^ help: remove this attribute
+    |
+note: attribute also specified here
+   --> apps/n64/src/n64/micro.rs:227:1
+    |
+227 | #[inline(never)]
+    | ^^^^^^^^^^^^^^^^
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: `trino-app-n64` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 14.05s
+[n64] linking + packing ROM...
+      text       data        bss      total filename
+   1654872     210212      11284    1876368 target/n64/trino.elf
+[n64] hot code: trino_core::render3d::tessellate_joints::<false, false> 16216 bytes (I-cache 16384); trace recorder absent
+[n64] ROM: /home/v/Documents/projects/Trino-wt/net67/target/n64/trino.z64
+[n64] booting test ROM in ares with the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] OpenGL Version: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4, GLSL: 4.50
+[ares] OpenGL: Failed to load librashader: shaders will be disabled
+[ares] Loaded trino
+[ares] Vulkan Enabled: using paraLLEl-RDP
+[ares] TRINO_HW n64 ram=8M tier=expanded
+[ares] TRINO_BOOT
+[ares] TRINO_MEM: ram=8388608 heap_total=6446064 before_assets=803760 boot_assets=544664
+[ares] [WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 12848.303 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 10864.463 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 365847.141 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 19340.268 us (mode: sync, success: yes).
+[ares] TRINO_STEP:text
+[ares] TRINO_STEP:blob
+[ares] TRINO_STEP:save
+[ares] [WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 27666.351 us (mode: sync, success: yes).
+[ares] TRINO_STEP:textured_3d
+[ares] TRINO_STEP:textured_3d probed 4 quadrants
+[ares] TRINO_STEP:texture filter and detail
+[ares] TRINO_STEP:texture filter and detail probed
+[ares] TRINO_STEP:texture formats
+[ares] TRINO_STEP:texture formats probed 9 formats
+[ares] TRINO_STEP:billboards
+[ares] TRINO_STEP:billboards probed
+[ares] TRINO_STEP:occlusion
+[ares] TRINO_STEP:occlusion probed
+[ares] TRINO_STEP:fill rect
+[ares] TRINO_STEP:fill rect probed
+[ares] TRINO_STEP:ui layout
+[ares] TRINO_STEP:ui layout probed focus, pad and touch
+[ares] TRINO_STEP:i18n
+[ares] TRINO_STEP:i18n probed 3 languages
+[ares] TRINO_STEP:dual screen
+[ares] TRINO_STEP:dual screen single screen (collapsed)
+[ares] TRINO_STEP:stereo
+[ares] TRINO_STEP:stereo mono target (no stereo screen)
+[ares] TRINO_STEP:smooth skin
+[ares] TRINO_STEP:palette
+[ares] TRINO_STEP:palette probed 3 slots
+[ares] TRINO_STEP:instancing
+[ares] TRINO_STEP:instancing probed
+[ares] TRINO_STEP:local lights
+[ares] TRINO_STEP:local lights probed
+[ares] TRINO_STEP:ambient occlusion
+[ares] TRINO_STEP:ambient occlusion probed
+[ares] TRINO_STEP:post
+[ares] TRINO_STEP:post probed grading and glow
+[ares] TRINO_STEP:shadows
+[ares] TRINO_SHADOWS: tier=blob blobs=1 planar=1 mapped=0 tris=8 post=156->66 ball=165->99 open=156->156
+[ares] TRINO_STEP:shadows probed
+[ares] TRINO_STEP:water
+[ares] TRINO_STEP:water probed
+[ares] TRINO_STEP:impostor
+[ares] TRINO_STEP:impostor probed
+[ares] TRINO_STEP:particles
+[ares] TRINO_STEP:particles cap 8
+[ares] TRINO_STEP:portals
+[ares] TRINO_STEP:physics
+[ares] TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[ares] TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+[ares] TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=116281 rays_grid_us=6628 steps=16 steps_scan_us=12063 steps_grid_us=2326 hub_solids=17 hub_scan_us=164 hub_grid_us=166
+[ares] TRINO_STEP:accessibility
+[ares] TRINO_STEP:accessibility probed palette swap, outline, captions and contrast
+[ares] TRINO_STEP:services
+[ares] TRINO_STEP:services probed list and toast
+[ares] TRINO_STEP:hw tier
+[ares] TRINO_STEP:hw tier expanded ram=8M cores=1 data=expanded sparks=6
+[ares] TRINO_STEP:quality
+[ares] TRINO_STEP:quality low fixed lod=100 particles=8
+[ares] TRINO_STEP:trace
+[ares] TRINO_STEP:trace events=7 instrumented=0
+[ares] TRINO_STEP:shader precompile
+[ares] TRINO_STEP:shader precompile built ahead
+[ares] TRINO_STEP:engine ok
+[ares] TRINO_STACK:52888 bytes t=4428ms
+[ares] TRINO_STEP:asset groups
+[ares] TRINO_STEP:asset groups ok load_frames=2 level_bytes=2407 heap_baseline=1743584 heap_drift=1512 cycles=333 soak_frames=1000
+[ares] TRINO_STEP:asset groups took 17013ms
+[ares] TRINO_STEP:audio
+[ares] TRINO_STEP:audio codecs
+[ares] TRINO_AUDIO: voices=1 streams=1 resident_bytes=12120 stream_bytes=48032 underruns=0 streamed_frames=954668
+[ares] TRINO_STEP:audio cost
+[ares] TRINO_AUDIO_COST:idle us_per_s=30446 rsp_us_per_s=28474 voices=0 buffers=26
+[ares] TRINO_AUDIO_COST:vadpcm-1 us_per_s=46720 rsp_us_per_s=37412 voices=1 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-3 us_per_s=66924 rsp_us_per_s=51103 voices=3 buffers=25
+[ares] TRINO_AUDIO_COST:opus-1 us_per_s=311840 rsp_us_per_s=64816 voices=1 buffers=12
+[ares] TRINO_STEP:ui cost
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=28147 draw_us=31588
+[ares] TRINO_STEP:input
+[ares] TRINO_STEP:players
+[ares] TRINO_STEP:players connected=1111 players=4
+[ares] TRINO_STEP:showcase demo
+[ares] TRINO_STEP:baked scene
+[ares] TRINO_STEP:golden frame
+[ares] TRINO_STACK:52888 bytes after the showcase steps
+[ares] TRINO_PERF_SCENE:hub frames=4 update=472 render=16318 begin=4180 tnl=2763 sort=89 submit=1372 sprites=829 end=1968 game=5115 vblanks=4 verts=24 tris_in=12 clipped=4 splits=0 backfaced=8 emitted=5 culled=0 draws=25 rsp_draws=24 rsp_tris=581
+[ares] TRINO_PERF_MODEL:hub model=cef562e8 calls=1 us=977 verts=24 tris_in=12 emitted=5 splits=0
+[ares] TRINO_PERF_MODEL:hub model=d016924b calls=7 us=424 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=628a58de calls=3 us=276 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=518de348 calls=3 us=200 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=9378c0e0 calls=2 us=187 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=158d530a calls=2 us=140 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=114 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=e9c6f6a0 calls=1 us=113 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=dba14f84 calls=1 us=98 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=ce3cd9ad calls=1 us=44 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=e2d8d1f0 calls=1 us=40 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF:castle64 hub frame update=472us render=16318us total=16790us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_PERF_SCENE:green-hills frames=4 update=408 render=14120 begin=7005 tnl=1131 sort=66 submit=1053 sprites=756 end=528 game=3579 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=2 draws=15 rsp_draws=13 rsp_tris=292
+[ares] TRINO_PERF_MODEL:green-hills model=cef562e8 calls=7 us=329 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=dba14f84 calls=2 us=193 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=9378c0e0 calls=2 us=174 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=158d530a calls=2 us=171 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=ce3cd9ad calls=1 us=58 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=e9c6f6a0 calls=1 us=55 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:lava-land frames=4 update=435 render=15157 begin=7423 tnl=1367 sort=50 submit=1086 sprites=705 end=689 game=3835 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=15 rsp_draws=15 rsp_tris=314
+[ares] TRINO_PERF_MODEL:lava-land model=e7a13a77 calls=7 us=410 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=9378c0e0 calls=2 us=197 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=158d530a calls=2 us=183 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=bdbd5f04 calls=1 us=167 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=e9c6f6a0 calls=1 us=107 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=dba14f84 calls=1 us=95 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=ce3cd9ad calls=1 us=51 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:sky-tower frames=4 update=432 render=14329 begin=7515 tnl=1164 sort=33 submit=760 sprites=726 end=364 game=3765 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=7 draws=18 rsp_draws=11 rsp_tris=268
+[ares] TRINO_PERF_MODEL:sky-tower model=d016924b calls=8 us=255 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=158d530a calls=2 us=204 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=dba14f84 calls=2 us=190 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=9378c0e0 calls=2 us=177 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=e7a13a77 calls=2 us=84 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=ce3cd9ad calls=1 us=52 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=e9c6f6a0 calls=1 us=49 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:throne frames=4 update=392 render=25596 begin=7915 tnl=7220 sort=307 submit=1973 sprites=776 end=1156 game=6247 vblanks=7 verts=150 tris_in=70 clipped=12 splits=0 backfaced=47 emitted=25 culled=0 draws=27 rsp_draws=21 rsp_tris=434
+[ares] TRINO_PERF_MODEL:throne model=628a58de calls=5 us=4147 verts=120 tris_in=60 emitted=21 splits=0
+[ares] TRINO_PERF_MODEL:throne model=e9c6f6a0 calls=1 us=1054 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_PERF_MODEL:throne model=ae6a2877 calls=8 us=657 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=f6dc7d6b calls=4 us=410 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=9da9b5a2 calls=4 us=344 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=9378c0e0 calls=2 us=216 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=158d530a calls=2 us=180 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=ce3cd9ad calls=1 us=62 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:cpu-hub frames=4 update=444 render=48757 begin=5103 tnl=27324 sort=2420 submit=8530 sprites=787 end=216 game=4375 vblanks=12 verts=1205 tris_in=593 clipped=16 splits=0 backfaced=290 emitted=306 culled=0 draws=25 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=e2dd959e calls=3 us=5328 verts=264 tris_in=132 emitted=72 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=d016924b calls=7 us=4791 verts=168 tris_in=84 emitted=42 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=dba14f84 calls=1 us=3407 verts=140 tris_in=70 emitted=46 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=e2d8d1f0 calls=1 us=3399 verts=159 tris_in=75 emitted=51 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=158d530a calls=2 us=1773 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=518de348 calls=3 us=1757 verts=72 tris_in=36 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=9378c0e0 calls=2 us=1726 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=628a58de calls=3 us=1722 verts=72 tris_in=36 emitted=10 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=ce3cd9ad calls=1 us=1666 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=cef562e8 calls=1 us=982 verts=24 tris_in=12 emitted=5 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=e9c6f6a0 calls=1 us=626 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_PERF:castle64 hub frame update=444us render=48757us total=49201us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_PERF_SCENE:cpu-green-hills frames=4 update=393 render=29774 begin=8485 tnl=12193 sort=1056 submit=4083 sprites=780 end=238 game=2937 vblanks=8 verts=584 tris_in=292 clipped=6 splits=0 backfaced=166 emitted=126 culled=2 draws=15 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=cef562e8 calls=7 us=4226 verts=168 tris_in=84 emitted=34 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=dba14f84 calls=2 us=2594 verts=140 tris_in=70 emitted=32 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=158d530a calls=2 us=1836 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=9378c0e0 calls=2 us=1677 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=ce3cd9ad calls=1 us=1636 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=e9c6f6a0 calls=1 us=65 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:cpu-lava-land frames=4 update=418 render=26951 begin=3979 tnl=13317 sort=1161 submit=4602 sprites=767 end=238 game=2885 vblanks=7 verts=638 tris_in=314 clipped=4 splits=0 backfaced=172 emitted=145 culled=0 draws=15 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=e7a13a77 calls=7 us=3680 verts=168 tris_in=84 emitted=36 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=dba14f84 calls=1 us=2597 verts=140 tris_in=70 emitted=38 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=158d530a calls=2 us=1869 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=ce3cd9ad calls=1 us=1666 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=9378c0e0 calls=2 us=1653 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=bdbd5f04 calls=1 us=1035 verts=24 tris_in=12 emitted=7 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=e9c6f6a0 calls=1 us=662 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_PERF_SCENE:cpu-sky-tower frames=4 update=430 render=25729 begin=5355 tnl=11563 sort=1031 submit=3785 sprites=740 end=276 game=2978 vblanks=7 verts=536 tris_in=268 clipped=6 splits=0 backfaced=144 emitted=124 culled=7 draws=18 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=d016924b calls=8 us=2791 verts=96 tris_in=48 emitted=22 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=dba14f84 calls=2 us=2757 verts=140 tris_in=70 emitted=38 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=158d530a calls=2 us=1814 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=9378c0e0 calls=2 us=1705 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=ce3cd9ad calls=1 us=1620 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=e7a13a77 calls=2 us=666 verts=24 tris_in=12 emitted=4 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=e9c6f6a0 calls=1 us=52 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:cpu-throne frames=4 update=375 render=42485 begin=6969 tnl=21531 sort=1852 submit=6544 sprites=748 end=292 game=4547 vblanks=11 verts=1014 tris_in=504 clipped=12 splits=0 backfaced=283 emitted=223 culled=0 draws=27 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=ae6a2877 calls=8 us=5970 verts=344 tris_in=160 emitted=80 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=628a58de calls=5 us=4103 verts=120 tris_in=60 emitted=21 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=f6dc7d6b calls=4 us=3324 verts=160 tris_in=96 emitted=48 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=158d530a calls=2 us=1922 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=9378c0e0 calls=2 us=1734 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=ce3cd9ad calls=1 us=1715 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=9da9b5a2 calls=4 us=1521 verts=84 tris_in=40 emitted=10 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=e9c6f6a0 calls=1 us=1085 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_RSP:hub frame, RSP vs CPU T&L: 2 of 1200 samples differ
+[ares] TRINO_STEP:castle64 golden frame
+[ares] TRINO_HEAP:1994800/6446064 top=4314896 before the micro scenes
+[ares] TRINO_RSP:test triangle ok Color { r: 132, g: 66, b: 66, a: 255 }
+[ares] TRINO_RSP:oracle rotated: 32 vertices: xy 1/4 px, z 1/32767, color 1/255
+[ares] TRINO_RSP:oracle gouraud: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle unlit tinted: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle colored emissive: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle double-sided back: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle fog: 32 vertices: xy 1/4 px, z 1/32767, color 1/255
+[ares] TRINO_RSP:oracle flat squashed: 30 vertices: xy 1/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle textured: 24 vertices: xy 0/4 px, z 0/32767, color 1/255, st 0/32 texel, w 7/1000
+[ares] TRINO_RSP:pixels gouraud: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 123, g: 82, b: 132, a: 255 } rsp Color { r: 123, g: 82, b: 132, a: 255 })
+[ares] TRINO_RSP:pixels colored emissive: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 115, g: 41, b: 148, a: 255 } rsp Color { r: 115, g: 41, b: 148, a: 255 })
+[ares] TRINO_RSP:pixels double-sided back: 144 pixels, mean diff 0.33/255, 0 far (cpu Color { r: 66, g: 41, b: 74, a: 255 } rsp Color { r: 66, g: 41, b: 74, a: 255 })
+[ares] TRINO_RSP:pixels fog: 144 pixels, mean diff 1.50/255, 1 far (cpu Color { r: 132, g: 173, b: 222, a: 255 } rsp Color { r: 132, g: 173, b: 222, a: 255 })
+[ares] TRINO_RSP:pixels flat squashed: 144 pixels, mean diff 0.04/255, 0 far (cpu Color { r: 16, g: 90, b: 156, a: 255 } rsp Color { r: 16, g: 90, b: 156, a: 255 })
+[ares] TRINO_RSP:pixels textured: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 0, g: 255, b: 0, a: 255 } rsp Color { r: 0, g: 255, b: 0, a: 255 })
+[ares] TRINO_RSP:pixels rigid parts: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 107, g: 57, b: 132, a: 255 } rsp Color { r: 107, g: 57, b: 132, a: 255 })
+[ares] TRINO_RSP:oracle water swell: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_RSP:oracle water ripple: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_PERF_SCENE:micro-draws frames=4 update=0 render=18338 begin=3873 tnl=9485 sort=111 submit=1460 sprites=0 end=98 game=3308 vblanks=4 verts=192 tris_in=64 clipped=0 splits=0 backfaced=0 emitted=64 culled=0 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-draws model=b52e1995 calls=64 us=9485 verts=192 tris_in=64 emitted=64 splits=0
+[ares] TRINO_PERF_SCENE:micro-culled frames=4 update=0 render=13836 begin=9601 tnl=2541 sort=0 submit=0 sprites=0 end=79 game=1614 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=64 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-culled model=b52e1995 calls=64 us=2541 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-trs frames=4 update=0 render=19089 begin=4165 tnl=9954 sort=111 submit=1448 sprites=0 end=115 game=3294 vblanks=4 verts=192 tris_in=64 clipped=0 splits=0 backfaced=0 emitted=64 culled=0 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-trs model=b52e1995 calls=64 us=9954 verts=192 tris_in=64 emitted=64 splits=0
+[ares] TRINO_PERF_SCENE:micro-yaw frames=4 update=0 render=16625 begin=785 tnl=9912 sort=111 submit=1450 sprites=0 end=99 game=4266 vblanks=4 verts=192 tris_in=64 clipped=0 splits=0 backfaced=0 emitted=64 culled=0 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-yaw model=b52e1995 calls=64 us=9912 verts=192 tris_in=64 emitted=64 splits=0
+[ares] TRINO_PERF_SCENE:micro-gouraud frames=4 update=0 render=31959 begin=3979 tnl=16324 sort=977 submit=10278 sprites=0 end=93 game=306 vblanks=7 verts=256 tris_in=450 clipped=0 splits=0 backfaced=0 emitted=450 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-gouraud model=75e9d58c calls=1 us=16324 verts=256 tris_in=450 emitted=450 splits=0
+[ares] TRINO_PERF_SCENE:micro-unlit frames=4 update=0 render=32675 begin=6452 tnl=14529 sort=931 submit=10370 sprites=0 end=88 game=305 vblanks=8 verts=256 tris_in=450 clipped=0 splits=0 backfaced=0 emitted=450 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-unlit model=75e9d58c calls=1 us=14529 verts=256 tris_in=450 emitted=450 splits=0
+[ares] TRINO_PERF_SCENE:micro-flat frames=4 update=0 render=48178 begin=11893 tnl=24608 sort=928 submit=10365 sprites=0 end=91 game=291 vblanks=12 verts=256 tris_in=450 clipped=0 splits=0 backfaced=0 emitted=450 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-flat model=75e9d58c calls=1 us=24608 verts=256 tris_in=450 emitted=450 splits=0
+[ares] TRINO_PERF_SCENE:micro-tris frames=4 update=0 render=66124 begin=14655 tnl=28234 sort=2377 submit=20452 sprites=0 end=129 game=276 vblanks=16 verts=256 tris_in=900 clipped=0 splits=0 backfaced=0 emitted=900 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-tris model=5d1b7a1a calls=1 us=28234 verts=256 tris_in=900 emitted=900 splits=0
+[ares] TRINO_PERF_SCENE:micro-draws-rsp frames=4 update=0 render=17657 begin=8989 tnl=3038 sort=0 submit=725 sprites=0 end=385 game=4518 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=64 rsp_draws=64 rsp_tris=64
+[ares] TRINO_PERF_MODEL:micro-draws-rsp model=b52e1995 calls=64 us=3038 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-culled-rsp frames=4 update=0 render=15489 begin=11119 tnl=696 sort=0 submit=0 sprites=0 end=92 game=3581 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=64 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-culled-rsp model=b52e1995 calls=64 us=696 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-trs-rsp frames=4 update=0 render=17465 begin=8325 tnl=2889 sort=0 submit=730 sprites=0 end=414 game=5106 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=64 rsp_draws=64 rsp_tris=64
+[ares] TRINO_PERF_MODEL:micro-trs-rsp model=b52e1995 calls=64 us=2889 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-yaw-rsp frames=4 update=0 render=20613 begin=11204 tnl=3052 sort=0 submit=748 sprites=0 end=397 game=5210 vblanks=5 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=64 rsp_draws=64 rsp_tris=64
+[ares] TRINO_PERF_MODEL:micro-yaw-rsp model=b52e1995 calls=64 us=3052 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-gouraud-rsp frames=4 update=0 render=15339 begin=12808 tnl=64 sort=0 submit=53 sprites=0 end=2171 game=242 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=450
+[ares] TRINO_PERF_MODEL:micro-gouraud-rsp model=75e9d58c calls=1 us=64 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-unlit-rsp frames=4 update=0 render=16427 begin=13925 tnl=63 sort=0 submit=44 sprites=0 end=2167 game=227 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=450
+[ares] TRINO_PERF_MODEL:micro-unlit-rsp model=75e9d58c calls=1 us=63 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-flat-rsp frames=4 update=0 render=16825 begin=12748 tnl=64 sort=0 submit=47 sprites=0 end=3710 game=255 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=450
+[ares] TRINO_PERF_MODEL:micro-flat-rsp model=75e9d58c calls=1 us=64 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-tris-rsp frames=4 update=0 render=16343 begin=12629 tnl=51 sort=0 submit=44 sprites=0 end=3373 game=244 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=900
+[ares] TRINO_PERF_MODEL:micro-tris-rsp model=5d1b7a1a calls=1 us=51 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-river frames=4 update=26 render=15516 begin=13792 tnl=833 sort=0 submit=11 sprites=0 end=371 game=507 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=3 draws=6 rsp_draws=3 rsp_tris=92
+[ares] TRINO_PERF_MODEL:micro-river model=10c14ce7 calls=1 us=567 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=4d1583d2 calls=1 us=101 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=ab5a393c calls=1 us=92 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=24b6ee08 calls=1 us=28 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=334f3b54 calls=1 us=22 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=eb506450 calls=1 us=22 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:showcase-river frames=4 update=1784 render=26967 begin=2207 tnl=12557 sort=50 submit=1045 sprites=956 end=329 game=9822 vblanks=8 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=26 draws=113 rsp_draws=87 rsp_tris=4302
+[ares] TRINO_PERF_MODEL:showcase-river model=67d1722a calls=1 us=258 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=14c7d939 calls=1 us=140 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=714cbe8c calls=1 us=57 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=8537702a calls=1 us=51 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=3a44168e calls=1 us=46 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=db28c432 calls=1 us=45 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=80463156 calls=1 us=41 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=f40f2526 calls=1 us=39 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=03d14153 calls=1 us=22 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=206470ce calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=58247a68 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=1f9db24e calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=8bf322cc calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=e452a74d calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=4fcfc607 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=1a12adc1 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=b5d39c4d calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=b83fb31e calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=6ff9ace1 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=5f5cf269 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=ebc2837f calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=ecf0eef4 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=9803c4b7 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=dd0f19af calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=00000000 calls=89 us=11853 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_STEP:river golden frame
+[ares] TRINO_STEP:shadows golden frame
+[ares] TRINO_STEP:shadow cost
+[ares] TRINO_SHADOW_COST: casters=22 blobs=22 frame_us=11108->13336 blob_us=101 tnl_us_per_blob=96 submit_us_per_blob=214
+[ares] TRINO_STACK:52888 bytes after the bot and the perf scenes
+[ares] TRINO_HEAP:2112616/6446064 peak=2112616 top=4235688 after the bot and the perf scenes
+[ares] TRINO_STEP:anim graph
+[ares] TRINO_STEP:anim graph data=0x5dd683cb transitions=2 events=9 root_mm=2542 probed
+[ares] TRINO_STEP:foot ik
+[ares] TRINO_STEP:foot ik tier=off forced=200,0 probed
+[ares] TRINO_IK_COST: us_per_draw=380
+[ares] TRINO_STEP:anim steps heap before=2112616 loaded=2142424 after=2112616
+[ares] TRINO_STEP:replay
+[ares] TRINO_STEP:replay ok frames=731 checked=731 hash=0x1f43636b3dddc909 load_frames=2
+[ares] TRINO_STEP:replay took 593ms fcr31=0x01800e04
+[ares] TRINO_TEST_PASS
+[n64] hardware tier: ram=8M tier=expanded
+[n64] tier data: expanded ram=8M cores=1 data=expanded sparks=6
+[n64] quality: low fixed lod=100 particles=8
+[n64] players: connected=1111 players=4
+[n64] replay: frames=731 checked=731 hash=0x1f43636b3dddc909 load_frames=2
+[n64] re-recording: 15268 bytes identical to the PC's
+[n64] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net67/target/traces/n64.json
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/shadows_far.png matches
+[n64] perf (emulated us per frame):
+scene         frame_us (ceiling)   tnl_us (model est)  sort_us  submit_us
+hub              12610 (   15900)     2763 (    561)       89       1372
+green-hills       7523 (    9800)     1131 (    367)       66       1053
+lava-land         8169 (   10600)     1367 (      0)       50       1086
+sky-tower         7246 (    9500)     1164 (   1286)       33        760
+throne           18073 (   23200)     7220 (   3378)      307       1973
+micro-river       1750 (    2700)      833 (    551)        0         11
+showcase-river    26544 (   31500)    12557 (   4778)       50       1045
+
+[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):
+scene         frame cpu   frame rsp         tnl cpu  tnl rsp  submit cpu  submit rsp  rsp draws
+hub               44098       12610 ( -71%)    27324     2763        8530        1372         24
+green-hills       21682        7523 ( -65%)    12193     1131        4083        1053         13
+lava-land         23390        8169 ( -65%)    13317     1367        4602        1086         15
+sky-tower         20804        7246 ( -65%)    11563     1164        3785         760         11
+throne            35891       18073 ( -50%)    21531     7220        6544        1973         21
+
+[n64] T&L fixed costs (micro scenes, ungated):
+  culled draw, tnl (B/64)                          39.7 us    3722 cycles
+  culled draw, outside tnl                         25.2 us    2364 cycles
+  visible 1-tri draw, tnl (A/64)                  148.2 us   13894 cycles
+  visible 1-tri draw, outside tnl                  51.7 us    4846 cycles
+  visible draw setup, tnl (fit d)                  70.8 us    6641 cycles
+  draw_model zero rotation vs matrix (+)           -0.2 us     -21 cycles
+  draw_model yaw vs matrix (+)                     15.0 us    1403 cycles
+  per vertex, Gouraud (fit v)                      17.0 us    1591 cycles
+  per vertex, Unlit                                10.0 us     933 cycles
+  per source triangle, front, unclipped (fit t)     26.5 us    2481 cycles
+  per triangle all-in, Flat (256 v, 450 t)         54.5 us    5112 cycles
+  sort per emitted, batch of 64                     1.7 us     163 cycles
+  submit per emitted, batch of 64                  22.8 us    2139 cycles
+  sort per emitted, batch of 900                    2.6 us     248 cycles
+  submit per emitted, batch of 900                 22.7 us    2130 cycles
+  CPU vs RSP T&L (same ROM)        frame cpu   frame rsp   tnl cpu   tnl rsp
+  micro-draws                         14465        8668      9485      3038  (-40%)
+  micro-culled                         4235        4370      2541       696  (+3%)
+  micro-trs                           14924        9140      9954      2889  (-39%)
+  micro-yaw                           15840        9409      9912      3052  (-41%)
+  micro-gouraud                       27980        2531     16324        64  (-91%)
+  micro-unlit                         26223        2502     14529        63  (-90%)
+  micro-flat                          36285        4077     24608        64  (-89%)
+  micro-tris                          51469        3714     28234        51  (-93%)
+  raw tnl us: draws 9485 culled 2541 trs 9954 yaw 9912 gouraud 16324 unlit 14529 flat 24608 tris 28234
+
+[n64] TEST PASS (with the Expansion Pak)
+[n64] booting test ROM in ares without the Expansion Pak (300s timeout, 120s idle limit)...
+[ares] OpenGL Version: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4, GLSL: 4.50
+[ares] OpenGL: Failed to load librashader: shaders will be disabled
+[ares] Loaded trino
+[ares] Vulkan Enabled: using paraLLEl-RDP
+[ares] TRINO_HW n64 ram=4M tier=base
+[ares] TRINO_BOOT
+[ares] TRINO_MEM: ram=4194304 heap_total=2251760 before_assets=725936 boot_assets=540928
+[ares] [WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 6840.979 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 8609.345 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 257658.021 us (mode: sync, success: yes).
+[ares] [WARN]: Stalled compile (compute, 0054f40525fc0024): thread 0 - 16817.447 us (mode: sync, success: yes).
+[ares] TRINO_STEP:text
+[ares] TRINO_STEP:blob
+[ares] TRINO_STEP:save
+[ares] [WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 10927.422 us (mode: sync, success: yes).
+[ares] TRINO_STEP:textured_3d
+[ares] TRINO_STEP:textured_3d probed 4 quadrants
+[ares] TRINO_STEP:texture filter and detail
+[ares] TRINO_STEP:texture filter and detail probed
+[ares] TRINO_STEP:texture formats
+[ares] TRINO_STEP:texture formats probed 9 formats
+[ares] TRINO_STEP:billboards
+[ares] TRINO_STEP:billboards probed
+[ares] TRINO_STEP:occlusion
+[ares] TRINO_STEP:occlusion probed
+[ares] TRINO_STEP:fill rect
+[ares] TRINO_STEP:fill rect probed
+[ares] TRINO_STEP:ui layout
+[ares] TRINO_STEP:ui layout probed focus, pad and touch
+[ares] TRINO_STEP:i18n
+[ares] TRINO_STEP:i18n probed 3 languages
+[ares] TRINO_STEP:dual screen
+[ares] TRINO_STEP:dual screen single screen (collapsed)
+[ares] TRINO_STEP:stereo
+[ares] TRINO_STEP:stereo mono target (no stereo screen)
+[ares] TRINO_STEP:smooth skin
+[ares] TRINO_STEP:palette
+[ares] TRINO_STEP:palette probed 3 slots
+[ares] TRINO_STEP:instancing
+[ares] TRINO_STEP:instancing probed
+[ares] TRINO_STEP:local lights
+[ares] TRINO_STEP:local lights probed
+[ares] TRINO_STEP:ambient occlusion
+[ares] TRINO_STEP:ambient occlusion probed
+[ares] TRINO_STEP:post
+[ares] TRINO_STEP:post probed grading and glow
+[ares] TRINO_STEP:shadows
+[ares] TRINO_SHADOWS: tier=blob blobs=1 planar=1 mapped=0 tris=8 post=156->66 ball=165->99 open=156->156
+[ares] TRINO_STEP:shadows probed
+[ares] TRINO_STEP:water
+[ares] TRINO_STEP:water probed
+[ares] TRINO_STEP:impostor
+[ares] TRINO_STEP:impostor probed
+[ares] TRINO_STEP:particles
+[ares] TRINO_STEP:particles cap 8
+[ares] TRINO_STEP:portals
+[ares] TRINO_STEP:physics
+[ares] TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[ares] TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+[ares] TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=116243 rays_grid_us=6555 steps=16 steps_scan_us=12092 steps_grid_us=2393 hub_solids=17 hub_scan_us=164 hub_grid_us=166
+[ares] TRINO_STEP:accessibility
+[ares] TRINO_STEP:accessibility probed palette swap, outline, captions and contrast
+[ares] TRINO_STEP:services
+[ares] TRINO_STEP:services probed list and toast
+[ares] TRINO_STEP:hw tier
+[ares] TRINO_STEP:hw tier base ram=4M cores=1 data=base sparks=4
+[ares] TRINO_STEP:quality
+[ares] TRINO_STEP:quality low fixed lod=100 particles=8
+[ares] TRINO_STEP:trace
+[ares] TRINO_STEP:trace events=7 instrumented=0
+[ares] TRINO_STEP:shader precompile
+[ares] TRINO_STEP:shader precompile built ahead
+[ares] TRINO_STEP:engine ok
+[ares] TRINO_STACK:53008 bytes t=4386ms
+[ares] TRINO_STEP:asset groups
+[ares] TRINO_STEP:asset groups ok load_frames=2 level_bytes=2415 heap_baseline=1664064 heap_drift=2920 cycles=486 soak_frames=1000
+[ares] TRINO_STEP:asset groups took 16996ms
+[ares] TRINO_STEP:audio
+[ares] TRINO_STEP:audio codecs
+[ares] TRINO_AUDIO: voices=1 streams=1 resident_bytes=12120 stream_bytes=48032 underruns=0 streamed_frames=954668
+[ares] TRINO_STEP:audio cost
+[ares] TRINO_AUDIO_COST:idle us_per_s=30610 rsp_us_per_s=28485 voices=0 buffers=26
+[ares] TRINO_AUDIO_COST:vadpcm-1 us_per_s=46743 rsp_us_per_s=37405 voices=1 buffers=25
+[ares] TRINO_AUDIO_COST:vadpcm-3 us_per_s=66950 rsp_us_per_s=51089 voices=3 buffers=25
+[ares] TRINO_AUDIO_COST:opus-1 us_per_s=311713 rsp_us_per_s=64797 voices=1 buffers=12
+[ares] TRINO_STEP:ui cost
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=29129 draw_us=30651
+[ares] TRINO_STEP:input
+[ares] TRINO_STEP:players
+[ares] TRINO_STEP:players connected=1111 players=4
+[ares] TRINO_STEP:showcase demo
+[ares] TRINO_STEP:baked scene
+[ares] TRINO_STEP:golden frame
+[ares] TRINO_STACK:53008 bytes after the showcase steps
+[ares] TRINO_PERF_SCENE:hub frames=4 update=497 render=16173 begin=4742 tnl=2589 sort=66 submit=1513 sprites=675 end=1973 game=4613 vblanks=4 verts=24 tris_in=12 clipped=4 splits=0 backfaced=8 emitted=5 culled=0 draws=25 rsp_draws=24 rsp_tris=581
+[ares] TRINO_PERF_MODEL:hub model=cef562e8 calls=1 us=982 verts=24 tris_in=12 emitted=5 splits=0
+[ares] TRINO_PERF_MODEL:hub model=d016924b calls=7 us=321 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=628a58de calls=3 us=229 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=518de348 calls=3 us=227 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=9378c0e0 calls=2 us=179 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=e2dd959e calls=3 us=130 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=e9c6f6a0 calls=1 us=103 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=dba14f84 calls=1 us=92 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=158d530a calls=2 us=81 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=e2d8d1f0 calls=1 us=50 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:hub model=ce3cd9ad calls=1 us=46 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF:castle64 hub frame update=497us render=16173us total=16670us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_PERF_SCENE:green-hills frames=4 update=454 render=14290 begin=7125 tnl=1189 sort=66 submit=1039 sprites=711 end=615 game=3543 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=2 draws=15 rsp_draws=13 rsp_tris=292
+[ares] TRINO_PERF_MODEL:green-hills model=cef562e8 calls=7 us=371 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=9378c0e0 calls=2 us=204 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=dba14f84 calls=2 us=183 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=158d530a calls=2 us=166 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=e9c6f6a0 calls=1 us=58 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:green-hills model=ce3cd9ad calls=1 us=53 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:lava-land frames=4 update=467 render=10904 begin=3364 tnl=1290 sort=66 submit=1040 sprites=714 end=679 game=3747 vblanks=3 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=15 rsp_draws=15 rsp_tris=314
+[ares] TRINO_PERF_MODEL:lava-land model=e7a13a77 calls=7 us=410 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=9378c0e0 calls=2 us=176 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=bdbd5f04 calls=1 us=162 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=158d530a calls=2 us=155 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=e9c6f6a0 calls=1 us=101 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=dba14f84 calls=1 us=85 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:lava-land model=ce3cd9ad calls=1 us=52 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:sky-tower frames=4 update=458 render=13975 begin=7604 tnl=968 sort=34 submit=757 sprites=699 end=513 game=3399 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=7 draws=18 rsp_draws=11 rsp_tris=268
+[ares] TRINO_PERF_MODEL:sky-tower model=d016924b calls=8 us=284 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=dba14f84 calls=2 us=184 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=9378c0e0 calls=2 us=95 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=158d530a calls=2 us=84 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=e7a13a77 calls=2 us=65 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=e9c6f6a0 calls=1 us=58 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:sky-tower model=ce3cd9ad calls=1 us=52 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:throne frames=4 update=410 render=21901 begin=5455 tnl=6639 sort=313 submit=1857 sprites=735 end=1235 game=5664 vblanks=6 verts=150 tris_in=70 clipped=12 splits=0 backfaced=47 emitted=25 culled=0 draws=27 rsp_draws=21 rsp_tris=434
+[ares] TRINO_PERF_MODEL:throne model=628a58de calls=5 us=3938 verts=120 tris_in=60 emitted=21 splits=0
+[ares] TRINO_PERF_MODEL:throne model=e9c6f6a0 calls=1 us=1045 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_PERF_MODEL:throne model=ae6a2877 calls=8 us=650 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=f6dc7d6b calls=4 us=436 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=9da9b5a2 calls=4 us=163 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=158d530a calls=2 us=104 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=9378c0e0 calls=2 us=78 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:throne model=ce3cd9ad calls=1 us=75 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:cpu-hub frames=4 update=489 render=44980 begin=1276 tnl=27192 sort=2517 submit=8565 sprites=691 end=383 game=4354 vblanks=11 verts=1205 tris_in=593 clipped=16 splits=0 backfaced=290 emitted=306 culled=0 draws=25 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=e2dd959e calls=3 us=5479 verts=264 tris_in=132 emitted=72 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=d016924b calls=7 us=4577 verts=168 tris_in=84 emitted=42 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=e2d8d1f0 calls=1 us=3384 verts=159 tris_in=75 emitted=51 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=dba14f84 calls=1 us=3363 verts=140 tris_in=70 emitted=46 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=9378c0e0 calls=2 us=1932 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=158d530a calls=2 us=1824 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=ce3cd9ad calls=1 us=1728 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=518de348 calls=3 us=1618 verts=72 tris_in=36 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=628a58de calls=3 us=1577 verts=72 tris_in=36 emitted=10 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=cef562e8 calls=1 us=961 verts=24 tris_in=12 emitted=5 splits=0
+[ares] TRINO_PERF_MODEL:cpu-hub model=e9c6f6a0 calls=1 us=590 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_PERF:castle64 hub frame update=489us render=44980us total=45469us (emulated N64 time; 60 fps = 16667us, 30 fps = 33333us)
+[ares] TRINO_PERF_SCENE:cpu-green-hills frames=4 update=448 render=25520 begin=4016 tnl=12317 sort=911 submit=4179 sprites=693 end=386 game=3015 vblanks=7 verts=584 tris_in=292 clipped=6 splits=0 backfaced=166 emitted=126 culled=2 draws=15 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=cef562e8 calls=7 us=4074 verts=168 tris_in=84 emitted=34 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=dba14f84 calls=2 us=2614 verts=140 tris_in=70 emitted=32 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=9378c0e0 calls=2 us=1916 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=158d530a calls=2 us=1804 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=ce3cd9ad calls=1 us=1688 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-green-hills model=e9c6f6a0 calls=1 us=70 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:cpu-lava-land frames=4 update=458 render=27478 begin=4023 tnl=13896 sort=1100 submit=4598 sprites=712 end=227 game=2919 vblanks=7 verts=638 tris_in=314 clipped=4 splits=0 backfaced=172 emitted=145 culled=0 draws=15 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=e7a13a77 calls=7 us=4067 verts=168 tris_in=84 emitted=36 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=dba14f84 calls=1 us=2614 verts=140 tris_in=70 emitted=38 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=9378c0e0 calls=2 us=1872 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=ce3cd9ad calls=1 us=1819 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=158d530a calls=2 us=1764 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=bdbd5f04 calls=1 us=1024 verts=24 tris_in=12 emitted=7 splits=0
+[ares] TRINO_PERF_MODEL:cpu-lava-land model=e9c6f6a0 calls=1 us=586 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_PERF_SCENE:cpu-sky-tower frames=4 update=482 render=25624 begin=5132 tnl=11769 sort=866 submit=3816 sprites=727 end=312 game=3000 vblanks=7 verts=536 tris_in=268 clipped=6 splits=0 backfaced=144 emitted=124 culled=7 draws=18 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=dba14f84 calls=2 us=2753 verts=140 tris_in=70 emitted=38 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=d016924b calls=8 us=2699 verts=96 tris_in=48 emitted=22 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=9378c0e0 calls=2 us=1902 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=158d530a calls=2 us=1814 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=ce3cd9ad calls=1 us=1722 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=e7a13a77 calls=2 us=669 verts=24 tris_in=12 emitted=4 splits=0
+[ares] TRINO_PERF_MODEL:cpu-sky-tower model=e9c6f6a0 calls=1 us=51 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:cpu-throne frames=4 update=414 render=42412 begin=6860 tnl=21743 sort=1621 submit=6651 sprites=719 end=237 game=4577 vblanks=11 verts=1014 tris_in=504 clipped=12 splits=0 backfaced=283 emitted=223 culled=0 draws=27 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=ae6a2877 calls=8 us=6218 verts=344 tris_in=160 emitted=80 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=628a58de calls=5 us=3935 verts=120 tris_in=60 emitted=21 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=f6dc7d6b calls=4 us=3281 verts=160 tris_in=96 emitted=48 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=9378c0e0 calls=2 us=1964 verts=88 tris_in=44 emitted=20 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=158d530a calls=2 us=1848 verts=88 tris_in=44 emitted=24 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=ce3cd9ad calls=1 us=1780 verts=100 tris_in=50 emitted=16 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=9da9b5a2 calls=4 us=1470 verts=84 tris_in=40 emitted=10 splits=0
+[ares] TRINO_PERF_MODEL:cpu-throne model=e9c6f6a0 calls=1 us=1095 verts=30 tris_in=10 emitted=4 splits=0
+[ares] TRINO_RSP:hub frame, RSP vs CPU T&L: 2 of 1200 samples differ
+[ares] TRINO_STEP:castle64 golden frame
+[ares] TRINO_HEAP:1915272/2251760 top=199184 before the micro scenes
+[ares] TRINO_RSP:test triangle ok Color { r: 132, g: 66, b: 66, a: 255 }
+[ares] TRINO_RSP:oracle rotated: 32 vertices: xy 1/4 px, z 1/32767, color 1/255
+[ares] TRINO_RSP:oracle gouraud: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle unlit tinted: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle colored emissive: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle double-sided back: 32 vertices: xy 0/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle fog: 32 vertices: xy 1/4 px, z 1/32767, color 1/255
+[ares] TRINO_RSP:oracle flat squashed: 30 vertices: xy 1/4 px, z 0/32767, color 1/255
+[ares] TRINO_RSP:oracle textured: 24 vertices: xy 0/4 px, z 0/32767, color 1/255, st 0/32 texel, w 7/1000
+[ares] TRINO_RSP:pixels gouraud: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 123, g: 82, b: 132, a: 255 } rsp Color { r: 123, g: 82, b: 132, a: 255 })
+[ares] TRINO_RSP:pixels colored emissive: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 115, g: 41, b: 148, a: 255 } rsp Color { r: 115, g: 41, b: 148, a: 255 })
+[ares] TRINO_RSP:pixels double-sided back: 144 pixels, mean diff 0.33/255, 0 far (cpu Color { r: 66, g: 41, b: 74, a: 255 } rsp Color { r: 66, g: 41, b: 74, a: 255 })
+[ares] TRINO_RSP:pixels fog: 144 pixels, mean diff 1.50/255, 1 far (cpu Color { r: 132, g: 173, b: 222, a: 255 } rsp Color { r: 132, g: 173, b: 222, a: 255 })
+[ares] TRINO_RSP:pixels flat squashed: 144 pixels, mean diff 0.04/255, 0 far (cpu Color { r: 16, g: 90, b: 156, a: 255 } rsp Color { r: 16, g: 90, b: 156, a: 255 })
+[ares] TRINO_RSP:pixels textured: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 0, g: 255, b: 0, a: 255 } rsp Color { r: 0, g: 255, b: 0, a: 255 })
+[ares] TRINO_RSP:pixels rigid parts: 144 pixels, mean diff 0.00/255, 0 far (cpu Color { r: 107, g: 57, b: 132, a: 255 } rsp Color { r: 107, g: 57, b: 132, a: 255 })
+[ares] TRINO_RSP:oracle water swell: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_RSP:oracle water ripple: 32 vertices: xy 2/4 px, z 1/32767, color 3/255, st 1/32 texel (vertex 10: got [247, 199, 171, 161], want [250, 200, 171, 161])
+[ares] TRINO_PERF_SCENE:micro-draws frames=4 update=0 render=18386 begin=3732 tnl=9775 sort=127 submit=1478 sprites=0 end=112 game=3160 vblanks=4 verts=192 tris_in=64 clipped=0 splits=0 backfaced=0 emitted=64 culled=0 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-draws model=b52e1995 calls=64 us=9775 verts=192 tris_in=64 emitted=64 splits=0
+[ares] TRINO_PERF_SCENE:micro-culled frames=4 update=0 render=13935 begin=9108 tnl=1704 sort=0 submit=0 sprites=0 end=88 game=3035 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=64 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-culled model=b52e1995 calls=64 us=1704 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-trs frames=4 update=0 render=18979 begin=3889 tnl=10037 sort=127 submit=1452 sprites=0 end=168 game=3303 vblanks=4 verts=192 tris_in=64 clipped=0 splits=0 backfaced=0 emitted=64 culled=0 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-trs model=b52e1995 calls=64 us=10037 verts=192 tris_in=64 emitted=64 splits=0
+[ares] TRINO_PERF_SCENE:micro-yaw frames=4 update=0 render=16616 begin=593 tnl=10093 sort=133 submit=1466 sprites=0 end=156 game=4173 vblanks=4 verts=192 tris_in=64 clipped=0 splits=0 backfaced=0 emitted=64 culled=0 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-yaw model=b52e1995 calls=64 us=10093 verts=192 tris_in=64 emitted=64 splits=0
+[ares] TRINO_PERF_SCENE:micro-gouraud frames=4 update=0 render=31921 begin=3833 tnl=16411 sort=993 submit=10276 sprites=0 end=133 game=272 vblanks=7 verts=256 tris_in=450 clipped=0 splits=0 backfaced=0 emitted=450 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-gouraud model=75e9d58c calls=1 us=16411 verts=256 tris_in=450 emitted=450 splits=0
+[ares] TRINO_PERF_SCENE:micro-unlit frames=4 update=0 render=32686 begin=6319 tnl=14658 sort=950 submit=10354 sprites=0 end=132 game=271 vblanks=8 verts=256 tris_in=450 clipped=0 splits=0 backfaced=0 emitted=450 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-unlit model=75e9d58c calls=1 us=14658 verts=256 tris_in=450 emitted=450 splits=0
+[ares] TRINO_PERF_SCENE:micro-flat frames=4 update=0 render=48231 begin=11555 tnl=24966 sort=927 submit=10356 sprites=0 end=133 game=293 vblanks=12 verts=256 tris_in=450 clipped=0 splits=0 backfaced=0 emitted=450 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-flat model=75e9d58c calls=1 us=24966 verts=256 tris_in=450 emitted=450 splits=0
+[ares] TRINO_PERF_SCENE:micro-tris frames=4 update=0 render=66056 begin=14451 tnl=28355 sort=2371 submit=20474 sprites=0 end=115 game=288 vblanks=16 verts=256 tris_in=900 clipped=0 splits=0 backfaced=0 emitted=900 culled=0 draws=1 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-tris model=5d1b7a1a calls=1 us=28355 verts=256 tris_in=900 emitted=900 splits=0
+[ares] TRINO_PERF_SCENE:micro-draws-rsp frames=4 update=0 render=21614 begin=13246 tnl=2962 sort=0 submit=720 sprites=0 end=391 game=4293 vblanks=5 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=64 rsp_draws=64 rsp_tris=64
+[ares] TRINO_PERF_MODEL:micro-draws-rsp model=b52e1995 calls=64 us=2962 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-culled-rsp frames=4 update=0 render=15472 begin=11498 tnl=533 sort=0 submit=0 sprites=0 end=102 game=3338 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=64 draws=64 rsp_draws=0 rsp_tris=0
+[ares] TRINO_PERF_MODEL:micro-culled-rsp model=b52e1995 calls=64 us=533 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-trs-rsp frames=4 update=0 render=21539 begin=13056 tnl=2751 sort=0 submit=765 sprites=0 end=383 game=4583 vblanks=5 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=64 rsp_draws=64 rsp_tris=64
+[ares] TRINO_PERF_MODEL:micro-trs-rsp model=b52e1995 calls=64 us=2751 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-yaw-rsp frames=4 update=0 render=21064 begin=10871 tnl=3297 sort=0 submit=762 sprites=0 end=357 game=5776 vblanks=5 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=64 rsp_draws=64 rsp_tris=64
+[ares] TRINO_PERF_MODEL:micro-yaw-rsp model=b52e1995 calls=64 us=3297 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-gouraud-rsp frames=4 update=0 render=15140 begin=12637 tnl=62 sort=0 submit=43 sprites=0 end=2158 game=238 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=450
+[ares] TRINO_PERF_MODEL:micro-gouraud-rsp model=75e9d58c calls=1 us=62 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-unlit-rsp frames=4 update=0 render=16413 begin=13915 tnl=62 sort=0 submit=27 sprites=0 end=2165 game=242 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=450
+[ares] TRINO_PERF_MODEL:micro-unlit-rsp model=75e9d58c calls=1 us=62 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-flat-rsp frames=4 update=0 render=16797 begin=12735 tnl=57 sort=0 submit=34 sprites=0 end=3713 game=256 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=450
+[ares] TRINO_PERF_MODEL:micro-flat-rsp model=75e9d58c calls=1 us=57 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-tris-rsp frames=4 update=0 render=16330 begin=12626 tnl=51 sort=0 submit=44 sprites=0 end=3379 game=228 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=0 draws=1 rsp_draws=1 rsp_tris=900
+[ares] TRINO_PERF_MODEL:micro-tris-rsp model=5d1b7a1a calls=1 us=51 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:micro-river frames=4 update=16 render=15525 begin=13770 tnl=907 sort=0 submit=16 sprites=0 end=391 game=439 vblanks=4 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=3 draws=6 rsp_draws=3 rsp_tris=92
+[ares] TRINO_PERF_MODEL:micro-river model=10c14ce7 calls=1 us=580 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=4d1583d2 calls=1 us=121 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=ab5a393c calls=1 us=111 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=24b6ee08 calls=1 us=44 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=334f3b54 calls=1 us=28 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:micro-river model=eb506450 calls=1 us=22 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_SCENE:showcase-river frames=4 update=1760 render=27754 begin=2723 tnl=11775 sort=50 submit=1039 sprites=1046 end=268 game=10851 vblanks=8 verts=0 tris_in=0 clipped=0 splits=0 backfaced=0 emitted=0 culled=26 draws=113 rsp_draws=87 rsp_tris=4302
+[ares] TRINO_PERF_MODEL:showcase-river model=80463156 calls=1 us=173 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=14c7d939 calls=1 us=111 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=67d1722a calls=1 us=75 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=f40f2526 calls=1 us=54 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=8537702a calls=1 us=48 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=714cbe8c calls=1 us=46 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=b83fb31e calls=1 us=45 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=3a44168e calls=1 us=41 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=58247a68 calls=1 us=28 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=db28c432 calls=1 us=22 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=03d14153 calls=1 us=22 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=206470ce calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=1f9db24e calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=8bf322cc calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=e452a74d calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=4fcfc607 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=1a12adc1 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=b5d39c4d calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=6ff9ace1 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=5f5cf269 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=ebc2837f calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=ecf0eef4 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=9803c4b7 calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=dd0f19af calls=1 us=0 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_PERF_MODEL:showcase-river model=00000000 calls=89 us=11106 verts=0 tris_in=0 emitted=0 splits=0
+[ares] TRINO_STEP:river golden frame
+[ares] TRINO_STEP:shadows golden frame
+[ares] TRINO_STEP:shadow cost
+[ares] TRINO_SHADOW_COST: casters=22 blobs=22 frame_us=11452->13577 blob_us=96 tnl_us_per_blob=93 submit_us_per_blob=201
+[ares] TRINO_STACK:53008 bytes after the bot and the perf scenes
+[ares] TRINO_HEAP:2033096/2251760 peak=2033096 top=119976 after the bot and the perf scenes
+[ares] TRINO_STEP:anim graph
+[ares] TRINO_STEP:anim graph data=0x5dd683cb transitions=2 events=9 root_mm=2542 probed
+[ares] TRINO_STEP:foot ik
+[ares] TRINO_STEP:foot ik tier=off forced=200,0 probed
+[ares] TRINO_IK_COST: us_per_draw=361
+[ares] TRINO_STEP:anim steps heap before=2033096 loaded=2062904 after=2033096
+[ares] TRINO_STEP:replay
+[ares] TRINO_STEP:replay ok frames=731 checked=731 hash=0x1f43636b3dddc909 load_frames=2
+[ares] TRINO_STEP:replay took 591ms fcr31=0x01800e04
+[ares] TRINO_TEST_PASS
+[n64] hardware tier: ram=4M tier=base
+[n64] tier data: base ram=4M cores=1 data=base sparks=4
+[n64] quality: low fixed lod=100 particles=8
+[n64] players: connected=1111 players=4
+[n64] replay: frames=731 checked=731 hash=0x1f43636b3dddc909 load_frames=2
+[n64] re-recording: 15268 bytes identical to the PC's
+[n64] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net67/target/traces/n64.json
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/net67/tests/golden/n64/shadows_far.png matches
+[n64] perf (emulated us per frame):
+scene         frame_us (ceiling)   tnl_us (model est)  sort_us  submit_us
+hub              11928 (   15900)     2589 (    561)       66       1513
+green-hills       7619 (    9800)     1189 (    367)       66       1039
+lava-land         8007 (   10600)     1290 (      0)       66       1040
+sky-tower         6829 (    9500)      968 (   1286)       34        757
+throne           16856 (   23200)     6639 (   3378)      313       1857
+micro-river       1771 (    2700)      907 (    551)        0         16
+showcase-river    26791 (   31500)    11775 (   4778)       50       1039
+
+[n64] castle64, RSP T&L vs CPU T&L (same ROM, emulated us per frame):
+scene         frame cpu   frame rsp         tnl cpu  tnl rsp  submit cpu  submit rsp  rsp draws
+hub               44193       11928 ( -73%)    27192     2589        8565        1513         24
+green-hills       21952        7619 ( -65%)    12317     1189        4179        1039         13
+lava-land         23913        8007 ( -67%)    13896     1290        4598        1040         15
+sky-tower         20974        6829 ( -67%)    11769      968        3816         757         11
+throne            35966       16856 ( -53%)    21743     6639        6651        1857         21
+
+[n64] T&L fixed costs (micro scenes, ungated):
+  culled draw, tnl (B/64)                          26.6 us    2496 cycles
+  culled draw, outside tnl                         47.4 us    4446 cycles
+  visible 1-tri draw, tnl (A/64)                  152.7 us   14319 cycles
+  visible 1-tri draw, outside tnl                  49.4 us    4629 cycles
+  visible draw setup, tnl (fit d)                  74.7 us    7005 cycles
+  draw_model zero rotation vs matrix (+)            2.2 us     209 cycles
+  draw_model yaw vs matrix (+)                     15.8 us    1484 cycles
+  per vertex, Gouraud (fit v)                      17.2 us    1609 cycles
+  per vertex, Unlit                                10.3 us     967 cycles
+  per source triangle, front, unclipped (fit t)     26.5 us    2488 cycles
+  per triangle all-in, Flat (256 v, 450 t)         55.3 us    5186 cycles
+  sort per emitted, batch of 64                     2.0 us     186 cycles
+  submit per emitted, batch of 64                  23.1 us    2165 cycles
+  sort per emitted, batch of 900                    2.6 us     247 cycles
+  submit per emitted, batch of 900                 22.7 us    2133 cycles
+  CPU vs RSP T&L (same ROM)        frame cpu   frame rsp   tnl cpu   tnl rsp
+  micro-draws                         14654        8368      9775      2962  (-43%)
+  micro-culled                         4827        3974      1704       533  (-18%)
+  micro-trs                           15090        8483     10037      2751  (-44%)
+  micro-yaw                           16023       10193     10093      3297  (-36%)
+  micro-gouraud                       28088        2503     16411        62  (-91%)
+  micro-unlit                         26367        2498     14658        62  (-91%)
+  micro-flat                          36676        4062     24966        57  (-89%)
+  micro-tris                          51605        3704     28355        51  (-93%)
+  raw tnl us: draws 9775 culled 1704 trs 10037 yaw 10093 gouraud 16411 unlit 14658 flat 24966 tris 28355
+
+[n64] TEST PASS (without the Expansion Pak)

@@ -1,0 +1,24 @@
+{
+  "room": "R16446",
+  "pages": [
+    {
+      "name": "first",
+      "pass": true,
+      "error": null,
+      "seat": 1,
+      "hash": "0xaeadc42f3bbe07f9",
+      "net": "Running seat=0 rollbacks=0 desyncs=0",
+      "lines": []
+    },
+    {
+      "name": "second",
+      "pass": true,
+      "error": null,
+      "seat": 2,
+      "hash": "0xaeadc42f3bbe07f9",
+      "net": "Running seat=1 rollbacks=0 desyncs=0",
+      "lines": []
+    }
+  ],
+  "same": true
+}

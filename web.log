@@ -1,0 +1,52 @@
+[web] /home/v/Documents/projects/Trino-wt/net67/target/web/assets/trino.replay.tbnd: 14288 bytes
+[web] /home/v/Documents/projects/Trino-wt/net67/target/web/assets/trino.selftest_level.tbnd: 676 bytes
+[web] /home/v/Documents/projects/Trino-wt/net67/target/web/assets/trino.selftest_level2.tbnd: 4380 bytes
+[web] /home/v/Documents/projects/Trino-wt/net67/target/web/assets/trino.strider.tbnd: 4520 bytes
+[web] assets/trino.pak: 575785 bytes
+[web] assets/solid-eleven.pak: 2348624 bytes
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/crates/core)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/crates/game-api)
+   Compiling trino-render-wgpu v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/crates/render-wgpu)
+   Compiling trino-net v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/crates/net)
+   Compiling trino-platform-web v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/crates/platform-web)
+   Compiling showcase v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/examples/showcase)
+warning: dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`
+
+   Compiling solid-eleven v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/examples/solid-eleven)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/examples/castle64)
+warning: `showcase` (lib) generated 1 warning
+warning: `castle64` (lib) generated 1 warning (1 duplicate)
+warning: `solid-eleven` (lib) generated 1 warning (1 duplicate)
+   Compiling trino-app-web v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/net67/apps/web)
+    Finished `release` profile [optimized] target(s) in 23.27s
+[web] trino.wasm: 7625593 bytes (release)
+[web-test] chromium-webgl2 (153.0.8010.12): PASS in 34.3 s · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (Gl) · textures BC
+[web-test] chromium-webgl2: audio codecs ok, 156 frames in 2583 ms (longest gap 17 ms), audio clock 10.667 s: rate=48000 streamed_frames=100636 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=4 streams=1 stream_bytes=232704 underruns=6 streamed_frames=430609
+[web-test] chromium-webgpu (153.0.8010.12): PASS in 40.2 s · browser adapter (BrowserWebGpu) · textures BC
+[web-test] chromium-webgpu: audio codecs ok, 156 frames in 2583 ms (longest gap 16 ms), audio clock 12.853 s: rate=48000 streamed_frames=101106 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] chromium-webgpu: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=3 streams=1 stream_bytes=199168 underruns=3 streamed_frames=378679
+[web-test] firefox-webgl2 (155.0): PASS in 16.1 s · Radeon HD 3200 Graphics, or similar (Gl) · textures BC
+[web-test] firefox-webgl2: audio codecs ok, 156 frames in 2583 ms (longest gap 17 ms), audio clock 9.717 s: rate=48000 streamed_frames=101106 stream_bytes=199936 resident_bytes=815468 underruns=0
+[web-test] firefox-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=815468 voices=0 streams=0 stream_bytes=0 underruns=0 streamed_frames=115556
+[web-test] firefox-webgl2: TRINO_AUDIO: state=running rate=48000 resident_bytes=1442194 voices=7 streams=2 stream_bytes=218056 underruns=0 streamed_frames=153559
+[web-test] webkit-webgl2 (?): FAIL in 0.2 s · browserType.launch: 
+[web] chromium-webgl2: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgl2: re-recording: 15268 bytes identical to the PC's
+[web] chromium-webgl2: trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net67/target/traces/web-chromium-webgl2.json
+[web] chromium-webgpu: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/showcase.png: mean diff 0.05, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[web] chromium-webgpu: re-recording: 15268 bytes identical to the PC's
+[web] chromium-webgpu: trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net67/target/traces/web-chromium-webgpu.json
+[web] firefox-webgl2: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/showcase.png: mean diff 0.10, 0.03% far pixels (limits 3, 2.0%)
+[web] firefox-webgl2: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/castle64_hub.png: mean diff 0.05, 0.02% far pixels (limits 3, 2.0%)
+[web] firefox-webgl2: /home/v/Documents/projects/Trino-wt/net67/tests/golden/web/texture_formats.png: mean diff 0.09, 0.02% far pixels (limits 3, 2.0%)
+[web] firefox-webgl2: re-recording: 15268 bytes identical to the PC's
+[web] firefox-webgl2: trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net67/target/traces/web-firefox-webgl2.json
+[web] failures:
+  webkit-webgl2: browserType.launch: 

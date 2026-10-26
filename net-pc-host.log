@@ -1,0 +1,15 @@
+TRINO_QUALITY: preset=high source=forced scale=1.00 gpu=integrated adapter=AMD Radeon Graphics (RADV RENOIR) (Vulkan)
+TRINO_NET: hosting on UDP 7311, waiting for 1 player(s)
+TRINO_NET: player 1 of 2, rollback mode, rollback 8 input delay 2, simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+TRINO_NET: state=Running seat=0 frames=195 confirmed=193 rollbacks=12 resimulated=17 stalls=13 ping_ms=133 desyncs=0
+TRINO_NET: state=Running seat=0 frames=459 confirmed=456 rollbacks=30 resimulated=44 stalls=13 ping_ms=117 desyncs=0
+TRINO_NET: state=Running seat=0 frames=758 confirmed=754 rollbacks=46 resimulated=75 stalls=13 ping_ms=99 desyncs=0
+TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+TRINO_FRAME:solid-eleven profile=native avg_us=18439 max_us=50703 frames=900 fps=54 draws=126 tris=14079 pc_gpu_draws=126 pc_gpu_tris=14060 instanced=0 off_pc_gpu=offscreen:1 heap=10685083/10910805 low1_us=37046 low1_fps=26 pipes=2 quality=high scale=1.00 quality_from=forced detected=- gpu_us=16688
+TRINO_TEXTURES: textures=8 bytes=111780 bc=6 bc_bytes=107680 bc_supported=true
+TRINO_AUDIO: rate=48000 resident_bytes=1140518 voices=1 streams=1 stream_bytes=96000 underruns=0 streamed_frames=765440
+TRINO_SCREENSHOT: target/net-e2e/host.png
+TRINO_NET: state=Running seat=0 frames=853 confirmed=850 rollbacks=46 resimulated=75 stalls=13 ping_ms=100 desyncs=0
+TRINO_RUN_OK frames=900
+[trino] pipeline cache: No such file or directory (os error 2)
+TRINO_NET: state=Running seat=0 frames=853 confirmed=850 rollbacks=46 resimulated=75 stalls=13 ping_ms=100 desyncs=0

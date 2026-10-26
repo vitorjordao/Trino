@@ -143,7 +143,7 @@ impl UdpSocket {
 impl NonBlockingSocket<PeerAddr> for UdpSocket {
     fn send_to(&mut self, msg: &Message, addr: &PeerAddr) {
         let PeerAddr::Udp(to) = addr else { return };
-        let Ok(body) = bincode::serialize(msg) else {
+        let Some(body) = crate::encode_message(msg) else {
             return;
         };
         let mut d = Vec::with_capacity(body.len() + 1);
@@ -156,7 +156,7 @@ impl NonBlockingSocket<PeerAddr> for UdpSocket {
         self.pump()
             .into_iter()
             .filter_map(|(from, body)| {
-                let m = bincode::deserialize::<Message>(&body).ok()?;
+                let m = crate::decode_message(&body)?;
                 Some((PeerAddr::Udp(from), m))
             })
             .collect()

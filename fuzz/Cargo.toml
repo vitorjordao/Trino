@@ -1,0 +1,282 @@
+# cargo-fuzz targets (issue #68): one libFuzzer binary per parser, each a
+# one-liner over `trino_fuzz` (crates/fuzz), whose stable tests replay the
+# same bodies on every PR. Run through `cargo xtask fuzz run <target>`
+# (nightly + cargo-fuzz); `crates/fuzz/tests/targets.rs` holds this list to
+# `trino_fuzz::TARGETS`. Its own workspace: never part of the engine's.
+[package]
+name = "trino-fuzz-targets"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+trino-fuzz = { path = "../crates/fuzz" }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "tmdl"
+path = "fuzz_targets/tmdl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tscn"
+path = "fuzz_targets/tscn.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tpfx"
+path = "fuzz_targets/tpfx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "timp"
+path = "fuzz_targets/timp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tfnt"
+path = "fuzz_targets/tfnt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tsn2"
+path = "fuzz_targets/tsn2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tmix"
+path = "fuzz_targets/tmix.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bus_settings"
+path = "fuzz_targets/bus_settings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tuil"
+path = "fuzz_targets/tuil.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tstr"
+path = "fuzz_targets/tstr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tach"
+path = "fuzz_targets/tach.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "achievement_state"
+path = "fuzz_targets/achievement_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tacc"
+path = "fuzz_targets/tacc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tang"
+path = "fuzz_targets/tang.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tlut"
+path = "fuzz_targets/tlut.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tcol"
+path = "fuzz_targets/tcol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tphy"
+path = "fuzz_targets/tphy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tbnd"
+path = "fuzz_targets/tbnd.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz4"
+path = "fuzz_targets/lz4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trec"
+path = "fuzz_targets/trec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ttrc"
+path = "fuzz_targets/ttrc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netpad"
+path = "fuzz_targets/netpad.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "save_frame"
+path = "fuzz_targets/save_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "save_lz"
+path = "fuzz_targets/save_lz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "core_text"
+path = "fuzz_targets/core_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "access_pack"
+path = "fuzz_targets/access_pack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "input_text"
+path = "fuzz_targets/input_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "display_text"
+path = "fuzz_targets/display_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settings_text"
+path = "fuzz_targets/settings_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "services_text"
+path = "fuzz_targets/services_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tpak"
+path = "fuzz_targets/tpak.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tsn2_decode"
+path = "fuzz_targets/tsn2_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "t3au"
+path = "fuzz_targets/t3au.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ron"
+path = "fuzz_targets/ron.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net"
+path = "fuzz_targets/net.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pc_asset"
+path = "fuzz_targets/pc_asset.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pc_bundle"
+path = "fuzz_targets/pc_bundle.rs"
+test = false
+doc = false
+bench = false

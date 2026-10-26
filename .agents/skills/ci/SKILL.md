@@ -27,6 +27,17 @@ same scaffold in the booting job: the goldens and the `trino.toml` come from it.
 `target/` with the last green run's project in it, and `new` refuses a non-empty folder
 (the second CI run failed that way).
 
+`robustness.yml` (issue #68, the `robustness` skill) runs nightly at 03:17 UTC, by hand
+(`workflow_dispatch`, `fuzz_seconds`) and on a PR that touches it, `fuzz/` or
+`crates/fuzz/` (45 s per target there, 600 nightly): `miri` (trino-core's unit tests,
+`-Zmiri-strict-provenance -Zmiri-ignore-leaks`), `asan` (`-Zsanitizer=address
+-Zbuild-std` over trino-core and the asset pipeline) and six `fuzz` shards
+(target `i` runs in shard `i % 6`, `cargo xtask fuzz run`, the corpus cached per shard
+with `actions/cache`, crash inputs uploaded as `fuzz-artifacts-<shard>`). `schedule` only
+fires on the default branch: the PR trigger is how a change to the workflow is proven
+before it lands. The per-PR half is `cargo test -p trino-fuzz` inside `cargo test
+--workspace` (seeds, regressions, mutations).
+
 `release.yml` tags new workspace versions on main and publishes editor binaries, demo
 ROMs and SHA256SUMS. A version with a pre-release part (`0.2.0-dev.1`) publishes a GitHub
 pre-release; `docs/releases/v<version>.md`, when present, is the release body (GitHub's

@@ -1,0 +1,7 @@
+# Trino audio: bus volume (0..1), `muted` when muted
+master 1.00
+music 1.00
+sfx 1.00
+voice 1.00
+ambience 1.00
+ui 1.00

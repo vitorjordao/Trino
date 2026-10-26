@@ -15,6 +15,7 @@ pub mod particles;
 pub mod platforms;
 pub mod profiler;
 pub mod quality;
+pub mod saves;
 pub mod shipping;
 pub mod texture;
 pub mod ui_screens;

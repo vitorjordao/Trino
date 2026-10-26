@@ -16,6 +16,7 @@ mod deck;
 mod emulators;
 mod fbgolden;
 mod font_assets;
+mod fuzz;
 mod hardware;
 mod hwtier;
 mod i18n;
@@ -35,6 +36,7 @@ mod project;
 mod quality;
 mod replay;
 mod river_assets;
+mod save_cmd;
 mod scene;
 mod services;
 mod showcase_assets;
@@ -101,6 +103,18 @@ commands:
   replay record <out.trec> --platform n64|3ds
                        play in the emulator; its input comes back over the
                        debug channel (TRINO_REC lines) into out.trec
+  fuzz list|smoke|corpus|repro|keep [--json]
+                       the parser fuzz targets (issue #68, crates/fuzz):
+                       smoke = the stable mutation run, corpus = seeds from
+                       the real bakes (--commit-seeds), repro <file>
+  fuzz run <target>|all [--time S] [--jobs N]
+                       libFuzzer + ASan through cargo-fuzz (nightly)
+  save inspect <save> [--medium] [--json]
+                       a save as the engine reads it: slots, sequence
+                       numbers, checks, recovery status (PC slot files,
+                       an N64 EEPROM image)
+  save corrupt <save> --mode flip|truncate [--slot newest|a|b|all] [--at N]
+                       damage a save on purpose to try a game's recovery
   net lobby [--udp 7400] [--ws 7401]
                        the lobby online players meet at by room code (PC:
                        TRINO_NET=lobby:<code>@<ip>:7400; Web: ?net=<code>
@@ -671,6 +685,19 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             trace::run(&project.root, &rest)
+        }
+        (Some("fuzz"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            fuzz::run(&repo_root(), &rest)
+        }
+        (Some("save"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            save_cmd::run(&rest)
         }
         (Some("net"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

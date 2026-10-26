@@ -807,3 +807,55 @@ fn a_model_bakes_only_for_the_platforms_it_names() {
     let err = Manifest::load(&assets.join("manifest.toml")).unwrap_err();
     assert!(err.contains("unknown platform `gba`"), "{err}");
 }
+
+/// Issue #68: a damaged baked file is one error with its asset and path,
+/// and every other asset still loads (`load_dir_report`); `load_dir`
+/// stays strict. A TMDL whose index names a missing vertex is refused at
+/// load, before a renderer reads it.
+#[test]
+fn the_report_loads_around_a_damaged_asset() {
+    let dir = tempfile::tempdir().unwrap();
+    let assets = project(dir.path());
+    let out = dir.path().join("baked");
+    bake_all(&assets, Platform::Pc, &out).unwrap();
+    let (all, errors) = trino_asset_pipeline::load_dir_report(&out, None).unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    let model = asset_id("models/tri");
+    let file = std::fs::read_dir(&out)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(&format!("{model:08x}"))
+        })
+        .unwrap();
+    let mut bad = std::fs::read(&file).unwrap();
+    // The last index points past the vertex count.
+    let v = u32::from_le_bytes(bad[4..8].try_into().unwrap()) as usize;
+    let i = u32::from_le_bytes(bad[8..12].try_into().unwrap()) as usize;
+    let last = 12 + v * 28 + (i - 1) * 2;
+    bad[last..last + 2].copy_from_slice(&(v as u16).to_le_bytes());
+    std::fs::write(&file, &bad).unwrap();
+    let (some, errors) = trino_asset_pipeline::load_dir_report(&out, None).unwrap();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].logical, "models/tri");
+    assert_eq!(errors[0].file, file);
+    assert!(
+        errors[0].message.contains("BadIndex"),
+        "{}",
+        errors[0].message
+    );
+    assert_eq!(some.models.len(), all.models.len() - 1);
+    assert_eq!(some.sprites.len(), all.sprites.len());
+    assert_eq!(some.sounds.len(), all.sounds.len());
+    assert!(
+        load_dir(&out, None).is_err(),
+        "the strict loader still fails"
+    );
+    // Only the boot group, the same way.
+    let (_, boot_errors) = trino_asset_pipeline::load_boot_report(&out, None).unwrap();
+    assert_eq!(boot_errors.len(), 1);
+}

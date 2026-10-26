@@ -62,39 +62,48 @@ impl<'a> Tilemap<'a> {
         let mut height = 0usize;
         let mut current = 0usize;
         // Bytes per row including the terminator(s): width+1 for LF levels,
-        // width+2 for CRLF. Uniform line endings make it constant.
+        // width+2 for CRLF. Every row must have it (the tile lookups index
+        // `row * stride`), so a blank first line, mixed line endings or a
+        // `\r` inside a row are refused, not read past the text (#68).
         let mut stride = 0usize;
+        let mut line_start = 0usize;
+        let bad = |height, width, found| TilemapError::NotRectangular {
+            row: height,
+            expected: width,
+            found,
+        };
         for (i, &b) in bytes.iter().enumerate() {
             if b == b'\n' {
-                if width == 0 {
+                let len = i + 1 - line_start;
+                if height == 0 {
+                    if current == 0 {
+                        return Err(TilemapError::Empty);
+                    }
                     width = current;
-                    stride = i + 1;
-                } else if current != width {
-                    return Err(TilemapError::NotRectangular {
-                        row: height,
-                        expected: width,
-                        found: current,
-                    });
+                    stride = len;
+                } else if current != width || len != stride {
+                    return Err(bad(height, width, current));
                 }
                 height += 1;
                 current = 0;
+                line_start = i + 1;
             } else if b == b'\r' {
-                // Tolerated (Windows checkouts); not counted as a tile.
+                // Tolerated right before the newline (Windows checkouts);
+                // not counted as a tile.
+                if bytes.get(i + 1).is_some_and(|&n| n != b'\n') {
+                    return Err(bad(height, width, current));
+                }
             } else {
                 current += 1;
             }
         }
         // Last line without a trailing newline.
         if current > 0 {
-            if width == 0 {
+            if height == 0 {
                 width = current;
                 stride = width + 1;
             } else if current != width {
-                return Err(TilemapError::NotRectangular {
-                    row: height,
-                    expected: width,
-                    found: current,
-                });
+                return Err(bad(height, width, current));
             }
             height += 1;
         }
@@ -209,6 +218,17 @@ mod tests {
                 found: 2
             })
         ));
+    }
+
+    /// Fuzz finds (issue #68): rows whose byte length differs from the
+    /// first row's made `cells()` index past the text.
+    #[test]
+    fn rows_of_another_byte_length_are_refused() {
+        for level in ["\nok\n", "ab\r\ncd\n", "ab\ncd\r\n", "a\rb\ncd\n", "\n\nab"] {
+            assert!(Tilemap::parse(level).is_err(), "{level:?}");
+        }
+        let ok = Tilemap::parse("ab\r\ncd\r\nef").unwrap();
+        assert_eq!(ok.cells().count(), 6);
     }
 
     #[test]

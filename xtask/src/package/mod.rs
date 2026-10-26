@@ -1014,7 +1014,8 @@ fn steam_layout(
          (an absolute path to the script; it reads ../content/<os> relative to itself).\n\n\
          Launch option for {os}: {launch}\n\n\
          Steam Auto-Cloud (Steamworks > Application > Steam Cloud): one root per OS, all with\n\
-         subdirectory \"{save}\" and patterns *.sav and *.achievements:\n\
+         subdirectory \"{save}\" and patterns *.sav, *.sav.a, *.sav.b (the two save\n\
+         slots, issue #68) and *.achievements:\n\
          - Windows: WinAppDataRoaming\n- macOS: MacAppSupport\n- Linux: LinuxXdgDataHome\n\
          (the folder trino-runner-pc saves to in a package; display, quality and input\n\
          settings stay per machine, crash reports are never synced).\n",

@@ -226,12 +226,15 @@ pub fn pending(dir: &Path) -> Vec<PathBuf> {
 /// The player's answer from `<save>.crash` (`upload=ask|yes|no`).
 pub fn load_consent(file: &Path) -> CrashConsent {
     std::fs::read_to_string(file)
-        .ok()
-        .and_then(|t| {
-            t.lines()
-                .find_map(|l| l.trim().strip_prefix("upload="))
-                .and_then(CrashConsent::parse)
-        })
+        .map(|t| consent_from_text(&t))
+        .unwrap_or(CrashConsent::Ask)
+}
+
+/// The answer in a `<save>.crash` file's text (`Ask` when it has none).
+pub fn consent_from_text(text: &str) -> CrashConsent {
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("upload="))
+        .and_then(CrashConsent::parse)
         .unwrap_or(CrashConsent::Ask)
 }
 

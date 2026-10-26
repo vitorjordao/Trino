@@ -27,6 +27,8 @@ pub struct N3dsPlatform {
     services: trino_core::HostedServices,
     /// The one player (issue #67), published by the host before each update.
     pub players: trino_core::HostedPlayers,
+    /// What the last save read found (`Platform::save_status`).
+    save_status: trino_core::SaveStatus,
 }
 
 impl N3dsPlatform {
@@ -39,6 +41,7 @@ impl N3dsPlatform {
             access: trino_core::HostedAccess::new(),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
             players: trino_core::HostedPlayers::new(),
+            save_status: trino_core::SaveStatus::Unknown,
         }
     }
 
@@ -152,27 +155,14 @@ impl Platform for N3dsPlatform {
     }
 
     fn save_capacity(&self) -> usize {
-        Caps::N3DS.save_bytes as usize - HEADER
+        Caps::N3DS.save_bytes as usize - save::SLOT_HEADER
     }
 
     fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
-        let mut file = vec![0u8; Caps::N3DS.save_bytes as usize];
-        let size = unsafe { ffi::trino_save_load(file.as_mut_ptr(), file.len() as u32) };
-        if size < 0 {
-            return Err(SaveError::Io);
-        }
-        let size = (size as usize).min(file.len());
-        if size < HEADER {
-            return Ok(0);
-        }
-        let header: [u8; HEADER] = file[..HEADER].try_into().expect("HEADER bytes");
-        let data = &file[HEADER..size];
-        if !save::verify(&header, data) {
-            return Ok(0); // foreign or torn file: no save
-        }
-        let n = data.len().min(buf.len());
-        buf[..n].copy_from_slice(&data[..n]);
-        Ok(data.len())
+        let mut scratch = vec![0u8; Caps::N3DS.save_bytes as usize];
+        let r = save::read_slot_files(&mut SdSlots, buf, &mut scratch)?;
+        self.save_status = r.status;
+        Ok(r.len)
     }
 
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
@@ -183,12 +173,66 @@ impl Platform for N3dsPlatform {
                 capacity,
             });
         }
-        let mut file = Vec::with_capacity(HEADER + data.len());
-        file.extend_from_slice(&save::header(data));
-        file.extend_from_slice(data);
-        match unsafe { ffi::trino_save_store(file.as_ptr(), file.len() as u32) } {
+        let mut scratch = vec![0u8; Caps::N3DS.save_bytes as usize];
+        let mut file = vec![0u8; save::slot_file_len(data.len())];
+        save::write_slot_files(&mut SdSlots, data, &mut scratch, &mut file)?;
+        Ok(())
+    }
+
+    fn save_status(&self) -> trino_core::SaveStatus {
+        self.save_status
+    }
+
+    fn save_fault(&mut self, fault: trino_core::SaveFault) -> Result<(), SaveError> {
+        let mut scratch = vec![0u8; Caps::N3DS.save_bytes as usize];
+        match save::slot_files_fault(&mut SdSlots, fault, &mut scratch)? {
+            true => Ok(()),
+            false => Err(SaveError::Io),
+        }
+    }
+}
+
+/// The SD card's save slots (`sdmc:/3ds/trino/save.a`, `save.b`; issue #68),
+/// and `save.bin`, the `"TS"`-framed save from before them.
+struct SdSlots;
+
+fn load(slot: u32, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+    match unsafe { ffi::trino_save_load(slot, buf.as_mut_ptr(), buf.len() as u32) } {
+        n if n < 0 => Err(SaveError::Io),
+        0 => Ok(None),
+        n => Ok(Some(n as usize)),
+    }
+}
+
+impl save::SlotStore for SdSlots {
+    fn read_slot(&mut self, slot: u8, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+        load(slot as u32, buf)
+    }
+
+    fn write_slot(&mut self, slot: u8, bytes: &[u8]) -> Result<(), SaveError> {
+        match unsafe { ffi::trino_save_store(slot as u32, bytes.as_ptr(), bytes.len() as u32) } {
             0 => Ok(()),
             _ => Err(SaveError::Io),
         }
+    }
+
+    fn read_legacy(&mut self, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+        let mut file = vec![0u8; Caps::N3DS.save_bytes as usize];
+        let Some(size) = load(2, &mut file)? else {
+            return Ok(None);
+        };
+        let size = size.min(file.len());
+        if size < HEADER {
+            return Ok(None);
+        }
+        let mut header = [0u8; HEADER];
+        header.copy_from_slice(&file[..HEADER]);
+        let data = &file[HEADER..size];
+        if !save::verify(&header, data) {
+            return Ok(None); // foreign or torn file: no save
+        }
+        let n = data.len().min(buf.len());
+        buf[..n].copy_from_slice(&data[..n]);
+        Ok(Some(data.len()))
     }
 }

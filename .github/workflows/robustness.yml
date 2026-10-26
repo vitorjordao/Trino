@@ -1,0 +1,128 @@
+name: Robustness
+
+# Issue #68: the slow half of the parser and save robustness work, nightly
+# (not per PR): Miri over trino-core's unit tests, AddressSanitizer over
+# trino-core's and the asset pipeline's tests, and libFuzzer on every fuzz
+# target (crates/fuzz, fuzz/) with the corpus cached between runs. The fast
+# half runs on every PR in `cargo test --workspace`: each target over its
+# seeds, its crash reproducers (fuzz/regressions/) and a deterministic
+# mutation run (crates/fuzz/tests/targets.rs).
+#
+# A PR that touches this file or the fuzz crates runs it too, with short
+# budgets, so the workflow is proven before it lands on main.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: Seconds per fuzz target
+        default: "600"
+  pull_request:
+    paths:
+      - .github/workflows/robustness.yml
+      - fuzz/**
+      - crates/fuzz/**
+
+env:
+  CARGO_TERM_COLOR: always
+  # A PR proves the jobs; the nightly run fuzzes 10 minutes per target.
+  FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '45' || inputs.fuzz_seconds || '600' }}
+  # basis_universal's transcoder is linked through two crates, and ASan
+  # reports its duplicated globals as an ODR violation (not a memory bug).
+  ASAN_OPTIONS: detect_odr_violation=0
+
+jobs:
+  miri:
+    name: Miri (trino-core)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      # The unit tests of the no_std core: the parsers, the save slots, the
+      # T&L's raw buffers (`as_chunks`, the scratch stacks). Tests Miri
+      # can't finish in reasonable time are `cfg_attr(miri, ignore)`.
+      - run: cargo miri test -p trino-core --lib
+        env:
+          # Tests leak 'static blobs on purpose (BakedScene borrows 'static).
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-ignore-leaks
+
+  asan:
+    name: AddressSanitizer (core + asset pipeline)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: asan
+      - name: Install Linux system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      # build-std: the standard library instrumented too, so a bad read
+      # through a slice the core hands to std is caught.
+      # (The fuzz targets run under ASan in the `fuzz` job.)
+      - run: >
+          cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p trino-core -p trino-asset-pipeline --no-fail-fast
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+          # Tests leak 'static blobs on purpose; leaks aren't what this job
+          # looks for (out-of-bounds and use-after-free are).
+          ASAN_OPTIONS: detect_odr_violation=0:detect_leaks=0
+
+  fuzz:
+    name: Fuzz (shard ${{ matrix.shard }}/6)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz
+          workspaces: |
+            . -> target
+            fuzz -> target
+      - name: Install Linux system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+      # The corpus grows run after run: each shard keeps its own.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.shard }}-
+      - name: Seed the corpus (first run)
+        run: test -d fuzz/corpus/tmdl || cargo xtask fuzz corpus
+      - name: Fuzz this shard's targets
+        run: |
+          targets=$(grep -A1 '^\[\[bin\]\]' fuzz/Cargo.toml | sed -n 's/^name = "\(.*\)"/\1/p')
+          i=0; failed=""
+          for t in $targets; do
+            if [ $((i % 6)) -eq ${{ matrix.shard }} ]; then
+              cargo xtask fuzz run "$t" --time "$FUZZ_SECONDS" || failed="$failed $t"
+            fi
+            i=$((i + 1))
+          done
+          if [ -n "$failed" ]; then echo "crashes in:$failed"; exit 1; fi
+      # A crash's input, for `cargo xtask fuzz repro <file>` and then
+      # `fuzz keep <file>` beside the fix.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts-${{ matrix.shard }}
+          path: fuzz/artifacts/

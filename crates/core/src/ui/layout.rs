@@ -414,9 +414,10 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
 
     fn measure_outer(&self, i: usize, item: u16, avail: Vec2, depth: usize) -> Vec2 {
         let n = self.screen.node_at(i);
+        // Summed as f32: two u16 paddings from a damaged blob overflowed.
         let pad = Vec2::new(
-            (n.padding[0] + n.padding[2]) as f32,
-            (n.padding[1] + n.padding[3]) as f32,
+            n.padding[0] as f32 + n.padding[2] as f32,
+            n.padding[1] as f32 + n.padding[3] as f32,
         );
         let clamp = |v: f32, min: u16, max: u16| {
             let v = v.max(min as f32);

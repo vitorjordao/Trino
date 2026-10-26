@@ -43,6 +43,7 @@ pub mod particles;
 pub mod primitive;
 pub mod quality;
 pub mod resolve;
+pub mod saves;
 pub mod services;
 pub mod ship;
 pub mod texture;
@@ -57,8 +58,8 @@ pub use bake::{decode_master, decode_png};
 pub use font::{BakedFont, FontDecl, bake_font};
 pub use groups::{BundleBuilder, Compression, GroupDecl};
 pub use loader::{
-    BundleLoad, CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel, LoadedSound,
-    LoadedSprite, load_boot, load_dir,
+    AssetError, BundleLoad, CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel,
+    LoadedSound, LoadedSprite, load_boot, load_boot_report, load_dir, load_dir_report, parse_baked,
 };
 pub use manifest::{Manifest, Platform};
 pub use model::{

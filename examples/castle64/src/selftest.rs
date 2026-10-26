@@ -37,6 +37,9 @@ pub fn engine_checks(
     blob(platform)?;
     platform.log("TRINO_STEP:save\n");
     save(platform)?;
+    platform.log("TRINO_STEP:save recovery\n");
+    save_recovery(platform)?;
+    platform.log("TRINO_STEP:save recovery passed\n");
     platform.log("TRINO_STEP:textured_3d\n");
     if textured_3d(renderer)? {
         platform.log("TRINO_STEP:textured_3d probed 4 quadrants\n");
@@ -1717,6 +1720,124 @@ pub fn save(platform: &mut dyn Platform) -> Result<(), &'static str> {
     let n = platform.save_read(&mut back).map_err(|_| "save read")?;
     if n != data.len() || &back[..n] != data {
         return Err("save read-back mismatch");
+    }
+    Ok(())
+}
+
+/// Saves survive damage (issue #68), through the real medium (the N64
+/// EEPROM's A/B slots, the 3DS's SD slot files, the PC's files, the Web's
+/// `localStorage` keys): bit rot in the newest save falls back to the one
+/// before it and says so, a torn rewrite too, a save cut short by a power
+/// cut leaves the previous one readable, a medium damaged everywhere reads
+/// as no save and the next write repairs it, and versioned saves migrate.
+/// Leaves an intact save behind.
+pub fn save_recovery(platform: &mut dyn Platform) -> Result<(), &'static str> {
+    use trino_core::save;
+    use trino_core::{SaveFault, SaveStatus};
+    if platform.save_capacity() < 64 {
+        return Err("save recovery: no save medium");
+    }
+    let mut buf = [0u8; 64];
+    let read =
+        |p: &mut dyn Platform, buf: &mut [u8; 64]| -> Result<(usize, SaveStatus), &'static str> {
+            let n = p.save_read(buf).map_err(|_| "save recovery: read")?;
+            Ok((n.min(64), p.save_status()))
+        };
+    let write =
+        |p: &mut dyn Platform, d: &[u8]| p.save_write(d).map_err(|_| "save recovery: write");
+    platform.log("TRINO_STEP:save recovery 1/7\n");
+    // 1. Two saves: both slots hold one, the newest reads back.
+    write(platform, b"recovery-1")?;
+    write(platform, b"recovery-2")?;
+    let (n, st) = read(platform, &mut buf)?;
+    if &buf[..n] != b"recovery-2" || st != SaveStatus::Ok {
+        return Err("save recovery: the newest save did not read back intact");
+    }
+    platform.log("TRINO_STEP:save recovery 2/7\n");
+    // 2. Bit rot in the newest: the previous save, reported.
+    platform
+        .save_fault(SaveFault::FlipNewest)
+        .map_err(|_| "save recovery: no fault hook")?;
+    let (n, st) = read(platform, &mut buf)?;
+    if &buf[..n] != b"recovery-1" || st != SaveStatus::RecoveredFromBackup {
+        return Err("save recovery: a flipped bit did not fall back to the previous save");
+    }
+    platform.log("TRINO_STEP:save recovery 3/7\n");
+    // 3. The next save replaces the damaged slot.
+    write(platform, b"recovery-3")?;
+    let (n, st) = read(platform, &mut buf)?;
+    if &buf[..n] != b"recovery-3" || st != SaveStatus::Ok {
+        return Err("save recovery: the save after a recovery did not read back");
+    }
+    platform.log("TRINO_STEP:save recovery 4/7\n");
+    // 4. A save started and cut short (the N64 writes one EEPROM block a
+    //    step; the files finish at once): the previous save or the new one,
+    //    never a mix.
+    platform
+        .save_begin(b"recovery-4")
+        .map_err(|_| "save recovery: begin")?;
+    let _ = platform.save_step(0);
+    let (n, st) = read(platform, &mut buf)?;
+    if !(&buf[..n] == b"recovery-3" || &buf[..n] == b"recovery-4") || st != SaveStatus::Ok {
+        return Err("save recovery: a save cut short broke the previous one");
+    }
+    platform.log("TRINO_STEP:save recovery 5/7\n");
+    // 5. A rewrite torn in place: the save before it.
+    write(platform, b"recovery-5")?;
+    platform
+        .save_fault(SaveFault::TearNewest)
+        .map_err(|_| "save recovery: no fault hook")?;
+    let (n, st) = read(platform, &mut buf)?;
+    let prev = &buf[..n] == b"recovery-3" || &buf[..n] == b"recovery-4";
+    if !prev || st != SaveStatus::RecoveredFromBackup {
+        return Err("save recovery: a torn save did not fall back to the previous save");
+    }
+    platform.log("TRINO_STEP:save recovery 6/7\n");
+    // 6. Damage everywhere: none of these saves (the 3DS and the PC may
+    //    still hold a save from before slot files, reported as recovered),
+    //    then a write repairs the medium.
+    platform
+        .save_fault(SaveFault::FlipAll)
+        .map_err(|_| "save recovery: no fault hook")?;
+    let (n, st) = read(platform, &mut buf)?;
+    if buf[..n].starts_with(b"recovery-")
+        || !matches!(st, SaveStatus::Corrupted | SaveStatus::RecoveredFromBackup)
+    {
+        return Err("save recovery: a medium damaged everywhere still read a save");
+    }
+    platform.log("TRINO_STEP:save recovery 7/7\n");
+    // 7. Versioned saves: an older version migrates, a newer one is refused.
+    let mut v = [0u8; 32];
+    let k = save::write_versioned(1, b"coins=7", &mut v).ok_or("save recovery: version tag")?;
+    write(platform, &v[..k])?;
+    let mut migrate = |from: u16, d: &mut [u8], len: usize| {
+        // Version 2 added a lives counter after the coins.
+        (from == 1 && len + 8 <= d.len()).then(|| {
+            d[len..len + 8].copy_from_slice(b";lives=3");
+            len + 8
+        })
+    };
+    let l = save::load_versioned(platform, &mut buf, 2, &mut migrate)
+        .map_err(|_| "save recovery: load")?;
+    if !l.migrated
+        || l.from != 1
+        || &buf[..l.len] != b"coins=7;lives=3"
+        || l.status != SaveStatus::Ok
+    {
+        return Err("save recovery: a version 1 save did not migrate to version 2");
+    }
+    let k = save::write_versioned(9, b"future", &mut v).ok_or("save recovery: version tag")?;
+    write(platform, &v[..k])?;
+    let l = save::load_versioned(platform, &mut buf, 2, &mut migrate)
+        .map_err(|_| "save recovery: load")?;
+    if l.len != 0 || l.from != 9 {
+        return Err("save recovery: a save from a newer version loaded");
+    }
+    // Leave an intact save behind (the next steps and runs read it).
+    write(platform, b"trino-save-v1")?;
+    let (n, st) = read(platform, &mut buf)?;
+    if &buf[..n] != b"trino-save-v1" || st != SaveStatus::Ok {
+        return Err("save recovery: the medium was not repaired");
     }
     Ok(())
 }

@@ -249,13 +249,16 @@ pub fn load(root: &Path) -> Result<Option<AchievementsDef>, String> {
 /// The locked order (`assets/achievements.lock`), or `None`.
 pub fn load_lock(root: &Path) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(lock_path(root)).ok()?;
-    Some(
-        text.lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(String::from)
-            .collect(),
-    )
+    Some(lock_from_text(&text))
+}
+
+/// The ids of a lock file's text, in order (comments and blanks skipped).
+pub fn lock_from_text(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(String::from)
+        .collect()
 }
 
 /// Write the current order as the lock.

@@ -4460,6 +4460,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "trino-fuzz"
+version = "0.2.0-dev.1"
+dependencies = [
+ "trino-asset-pipeline",
+ "trino-core",
+ "trino-net",
+ "trino-platform-pc",
+ "trino-platform-web",
+ "trino-runner-pc",
+ "trino-scene",
+]
+
+[[package]]
 name = "trino-game-api"
 version = "0.2.0-dev.1"
 dependencies = [

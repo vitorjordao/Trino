@@ -70,7 +70,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project\|profiler\|net` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab; `profiler`: the Profiler tab; `net`: the Net tab, opened on demand) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project\|profiler\|net\|saves` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab; `profiler`: the Profiler tab; `net`: the Net tab, `saves`: the Saves tab, both opened on demand) |
 | `TRINO_EDITOR_REPLAY=<file.trec>` | Play here replays it in the Game view (`TRINO_EDITOR_REPLAY_FRAME=N`: seeks there, paused); `TRINO_EDITOR_PLAY=record` starts recording; `TRINO_EDITOR_PLAYERS=1..4` simulated local seats (issue #67) |
 | `TRINO_EDITOR_TRACE=<file>[@session]` | the Profiler tab opens that trace (relative to the project, e.g. `target/traces/n64-trace.json@n64-hub`) as trace A on that session, and comes to front |
 | `TRINO_EDITOR_TRACE_B=<file>[@session]` | …and that one as trace B (compare); without `@session` B pairs with A's session (`pair_sessions`) |
@@ -531,6 +531,21 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
 - **Proof:** `play_here_records_replays_and_the_net_tab_writes_trino_toml`
   (`--ignored --test-threads=1`) and the layout audit's "Net tab", "Play here recording"
   and "Play here replay".
+
+## Damaged assets and the Saves tab (issue #68, ADR 0037)
+
+- **`Project::reload` uses `load_dir_report`**: every intact asset loads, each damaged
+  one is in `Project::load_errors` (logical path, file, message). `app::log_load_errors`
+  turns each into a Console error with a **Re-bake** button (`log::Action::Rebake`,
+  `Log::push_with`, `Log::take_action`), once per message. `App::rebake` bakes everything
+  again (the bake rewrites a file whose bytes differ, so a damaged one is replaced from
+  its master), re-uploads every sprite and model to both views and toasts the result.
+- **The Saves tab** (`panels/saves.rs`, `Tab::Saves`, palette "Go to Saves view",
+  `TRINO_EDITOR_TAB=saves`): the saves in `<project>/target/save/` (a slot pair counts
+  once by its base path), decoded read-only by `trino_asset_pipeline::saves::inspect`,
+  the same report as `cargo xtask save inspect --json`. Rescan after a Play.
+- Flows: `ui_tests.rs::damaged_assets_rebake_from_the_console_and_saves_decode_in_their_tab`
+  and the layout audit's "Saves tab".
 
 ## Rules when changing the editor
 

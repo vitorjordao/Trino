@@ -334,8 +334,12 @@ mod tests {
 
     #[test]
     fn arena_over_borrowed_memory() {
-        let mut mem = [MaybeUninit::<u8>::uninit(); 32];
-        let mut a = Arena::new(&mut mem);
+        // Aligned: a bare `[u8; 32]` may start at an odd address (Miri
+        // places it so), and 16 `u16`s then don't fit after the padding.
+        #[repr(align(8))]
+        struct Mem([MaybeUninit<u8>; 32]);
+        let mut mem = Mem([MaybeUninit::<u8>::uninit(); 32]);
+        let mut a = Arena::new(&mut mem.0);
         assert_eq!(a.alloc_slice(8, 1u16).unwrap().len(), 8);
         assert!(a.alloc_slice(16, 1u16).is_none());
         a.reset();

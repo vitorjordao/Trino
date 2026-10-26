@@ -520,6 +520,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri adds error to std's float functions on purpose")]
     fn log2_exp2_and_pow_match_std() {
         for x in [1e-6f32, 0.001, 0.18, 0.5, 1.0, 1.5, 2.0, 7.3, 100.0, 4000.0] {
             assert!((log2(x) - x.log2()).abs() < 2e-6, "log2 {x}");

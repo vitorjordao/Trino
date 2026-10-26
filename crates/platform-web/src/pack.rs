@@ -114,14 +114,23 @@ pub fn parse_versioned(pack: &[u8]) -> Result<(u32, Vec<Entry<'_>>), String> {
     }
     let count = u32_at(8)? as usize;
     let mut at = 12;
+    // Every entry takes at least 9 bytes: a count past that is a damaged
+    // pack, not a reason to reserve gigabytes (issue #68's fuzzing).
+    if count > (pack.len() - at) / 9 {
+        return Err(format!(
+            "asset pack claims {count} assets in {} bytes",
+            pack.len()
+        ));
+    }
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let kind = *pack.get(at).ok_or("truncated asset pack")?;
         let kind = Kind::from_u8(kind).ok_or_else(|| format!("unknown asset kind {kind}"))?;
         let id = u32_at(at + 1)?;
         let len = u32_at(at + 5)? as usize;
-        let bytes = pack
-            .get(at + 9..at + 9 + len)
+        let bytes = (at + 9)
+            .checked_add(len)
+            .and_then(|end| pack.get(at + 9..end))
             .ok_or("truncated asset pack")?;
         if kind == Kind::Mixer && version < 2 {
             return Err(format!("a mixer entry in a version {version} pack"));
@@ -180,9 +189,9 @@ pub fn read_sound16(blob: &[u8]) -> Result<(u32, Vec<f32>), String> {
         return Err("bad TS16 sound".into());
     }
     let rate = u32::from_le_bytes(blob[4..8].try_into().unwrap());
-    let count = u32::from_le_bytes(blob[8..12].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(blob[8..12].try_into().unwrap()) as u64;
     let data = &blob[12..];
-    if data.len() != count * 2 {
+    if data.len() as u64 != count * 2 {
         return Err("truncated TS16 sound".into());
     }
     let samples = data
@@ -209,7 +218,12 @@ pub fn read_sprite(blob: &[u8]) -> Result<(u32, u32, &[u8]), String> {
     let w = u32::from_le_bytes(blob[4..8].try_into().unwrap());
     let h = u32::from_le_bytes(blob[8..12].try_into().unwrap());
     let px = &blob[12..];
-    if px.len() != (w * h * 4) as usize {
+    // In u64: on wasm32 `usize` is 32 bits, and a damaged size wrapped.
+    if (w as u64)
+        .checked_mul(h as u64)
+        .and_then(|n| n.checked_mul(4))
+        != Some(px.len() as u64)
+    {
         return Err("truncated sprite blob".into());
     }
     Ok((w, h, px))

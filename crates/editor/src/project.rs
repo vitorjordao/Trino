@@ -87,6 +87,9 @@ impl ModelAsset {
 
 pub struct Project {
     pub root: PathBuf,
+    /// Baked assets that did not load (issue #68), newest reload's: the
+    /// Console lists each with a re-bake button.
+    pub load_errors: Vec<pipeline::AssetError>,
     pub sprites: BTreeMap<String, SpriteAsset>,
     pub models: BTreeMap<String, ModelAsset>,
     pub sounds: Vec<String>,
@@ -124,6 +127,7 @@ impl Project {
             bake_grading: Vec::new(),
             collision: BTreeMap::new(),
             generation: 0,
+            load_errors: Vec::new(),
         }
     }
 
@@ -184,7 +188,14 @@ impl Project {
 
     /// (Re)load baked assets — all, or only `ids`. Returns how many loaded.
     pub fn reload(&mut self, ids: Option<&[u32]>) -> Result<usize, String> {
-        let assets = pipeline::load_dir(&self.baked_dir(), ids)?;
+        let (assets, errors) = pipeline::load_dir_report(&self.baked_dir(), ids)?;
+        match ids {
+            None => self.load_errors = errors,
+            Some(ids) => {
+                self.load_errors.retain(|e| !ids.contains(&e.id));
+                self.load_errors.extend(errors);
+            }
+        }
         let manifest = Manifest::load(&self.manifest_path()).ok();
         let mut n = 0;
         for s in assets.sprites {

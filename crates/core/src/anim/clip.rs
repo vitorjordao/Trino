@@ -207,14 +207,16 @@ impl<'a> EventTrack<'a> {
             // At most a few cycles per update (a long hitch).
             let c0 = floor(from / duration);
             let c1 = floor(to / duration).min(c0 + 4.0);
-            let mut c = c0;
-            while c <= c1 {
-                let base = c * duration;
+            // Counted in integers: past 2^24 cycles `c + 1.0 == c`, and a
+            // tiny duration from damaged data looped forever (issue #68).
+            // A NaN span (an infinite cycle count) visits one cycle.
+            let cycles = if c1 >= c0 { (c1 - c0) as u32 } else { 0 };
+            for k in 0..=cycles.min(4) {
+                let base = (c0 + k as f32) * duration;
                 for i in 0..self.len() {
                     let local = self.get(i).0;
                     emit(base + local, local, i);
                 }
-                c += 1.0;
             }
         } else {
             let (from_c, to_c) = (from.clamp(0.0, duration), to.clamp(0.0, duration));
@@ -454,10 +456,11 @@ impl<'a> RootTrack<'a> {
             // To the end of the first cycle, whole cycles, then into the last.
             let cycle = self.at(duration);
             d = d.then(cycle);
-            let mut k = c0 + 1.0;
-            while k < c1 && k < c0 + 4.0 {
+            // Whole cycles between, at most three (a long hitch), counted in
+            // integers: near 2^24 `k + 1.0 == k` looped forever (issue #68).
+            let whole = (c1 - c0 - 1.0).clamp(0.0, 3.0) as u32;
+            for _ in 0..whole {
                 d = d.then(cycle);
-                k += 1.0;
             }
         }
         RootDelta::from_pose(d.then(p1))

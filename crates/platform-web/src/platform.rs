@@ -3,6 +3,7 @@
 //! (`crate::groups`, issue #56) and a save in `localStorage`.
 
 use std::collections::HashMap;
+use trino_core::save;
 
 use trino_core::mem::HeapStats;
 use trino_core::{
@@ -19,6 +20,7 @@ pub struct WebPlatform {
     /// The `localStorage` key of the save (`trino-save:<name>`).
     save_key: String,
     save_capacity: usize,
+    save_status: trino_core::SaveStatus,
     pub(crate) display: Option<DisplayInfo>,
     pub(crate) display_request: Option<DisplaySettings>,
     pub(crate) input: Option<InputInfo>,
@@ -49,6 +51,7 @@ impl WebPlatform {
             blobs: HashMap::new(),
             save_key: format!("trino-save:{save_name}"),
             save_capacity: caps.save_bytes as usize,
+            save_status: trino_core::SaveStatus::Unknown,
             display: None,
             display_request: None,
             input: None,
@@ -121,21 +124,15 @@ impl Platform for WebPlatform {
     }
 
     fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
-        let storage = Self::storage()?;
-        let Some(text) = storage
-            .get_item(&self.save_key)
-            .map_err(|_| SaveError::Io)?
-        else {
-            return Ok(0);
+        let mut kv = LocalStorage(Self::storage()?);
+        let mut scratch = vec![0u8; save::slot_file_len(self.save_capacity)];
+        let mut slots = crate::saves::Slots {
+            kv: &mut kv,
+            key: &self.save_key,
         };
-        // A damaged value reads as no save (the game's own framing would
-        // reject it anyway).
-        let Some(bytes) = crate::b64::decode(&text) else {
-            return Ok(0);
-        };
-        let n = bytes.len().min(buf.len());
-        buf[..n].copy_from_slice(&bytes[..n]);
-        Ok(bytes.len())
+        let r = save::read_slot_files(&mut slots, buf, &mut scratch)?;
+        self.save_status = r.status;
+        Ok(r.len)
     }
 
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
@@ -145,12 +142,32 @@ impl Platform for WebPlatform {
                 capacity: self.save_capacity,
             });
         }
-        let storage = Self::storage()?;
-        // One `setItem`: the browser replaces the value atomically (a
-        // quota error leaves the old save).
-        storage
-            .set_item(&self.save_key, &crate::b64::encode(data))
-            .map_err(|_| SaveError::Io)
+        let mut kv = LocalStorage(Self::storage()?);
+        let mut scratch = vec![0u8; save::slot_file_len(self.save_capacity)];
+        let mut file = vec![0u8; save::slot_file_len(data.len())];
+        let mut slots = crate::saves::Slots {
+            kv: &mut kv,
+            key: &self.save_key,
+        };
+        save::write_slot_files(&mut slots, data, &mut scratch, &mut file)?;
+        Ok(())
+    }
+
+    fn save_status(&self) -> trino_core::SaveStatus {
+        self.save_status
+    }
+
+    fn save_fault(&mut self, fault: trino_core::SaveFault) -> Result<(), SaveError> {
+        let mut kv = LocalStorage(Self::storage()?);
+        let mut scratch = vec![0u8; save::slot_file_len(self.save_capacity)];
+        let mut slots = crate::saves::Slots {
+            kv: &mut kv,
+            key: &self.save_key,
+        };
+        match save::slot_files_fault(&mut slots, fault, &mut scratch)? {
+            true => Ok(()),
+            false => Err(SaveError::Io),
+        }
     }
 
     fn load_group(&mut self, group: GroupId) -> LoadState {
@@ -288,5 +305,19 @@ impl Platform for WebPlatform {
             BindDevice::Keyboard => key,
             BindDevice::Gamepad => pad,
         })
+    }
+}
+
+/// `localStorage` as the save slots' string store.
+struct LocalStorage(web_sys::Storage);
+
+impl crate::saves::KeyValue for LocalStorage {
+    fn get(&self, key: &str) -> Result<Option<String>, SaveError> {
+        self.0.get_item(key).map_err(|_| SaveError::Io)
+    }
+    fn set(&mut self, key: &str, value: &str) -> Result<(), SaveError> {
+        // One `setItem`: the browser replaces the value atomically (a
+        // quota error leaves the old slot).
+        self.0.set_item(key, value).map_err(|_| SaveError::Io)
     }
 }

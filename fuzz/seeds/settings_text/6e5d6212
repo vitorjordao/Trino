@@ -1,0 +1,4 @@
+render_scale=0.75
+msaa=4
+frame_limit=60
+shadows=high

@@ -49,7 +49,8 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   branches: the static body grew 15.6 → 18.0 KB, past the I-cache, and every unlit draw
   got 10–35 % slower in ares. `tessellate_with` dispatches a draw to the lit copy only
   when the feature applies. After a T&L change, compare `mips64-elf-nm -S` of
-  `tessellate_joints::<false, false>` (0x3d04 today) and the `micro-*` scenes with the
+  `tessellate_joints::<false, false>` (16 252 bytes on 2026-10-26; `build n64` fails it
+  past 16 384) and the `micro-*` scenes with the
   main branch's ROM.
 - **A new surface or light feature must reach the N64's RSP path too.** Most N64 draws
   skip `tessellate` and run on `rsp_trino.S` (ADR 0007), which ignores whatever it
@@ -288,6 +289,11 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
 | Pixels | PC goldens (`--bless` only if intended); N64 golden through `test n64` | perf-only changes must leave goldens byte-identical |
 | Editor | `crates/editor/src/ui_tests.rs` for new panel flows | `widget_info` on hand-painted widgets |
 
+- **A new binary format or player file gets a fuzz target** in the same PR (the
+  `robustness` skill › Adding a format): `crates/fuzz/tests/targets.rs::
+  every_binary_format_has_a_target` fails on a `…MAGIC` no target names. Validate at
+  parse (load time), never in the hot path, and use checked arithmetic for every size
+  product: the consoles' `usize` is 32 bits.
 - A self-test step must **assert** what the feature does: probe pixels, read back
   bytes, compare counts. A step that only calls the API and prints proves nothing.
   Then break the feature on purpose (one line in the PC backend) and make sure the

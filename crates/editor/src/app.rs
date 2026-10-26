@@ -60,6 +60,9 @@ pub enum Tab {
     /// Local players and network play (issue #67): `[players]` / `[net]`,
     /// a simulated network, two local instances online, the lobby.
     Net,
+    /// The project's PC saves decoded read-only (issue #68): slots,
+    /// sequence numbers, checks, the version tag.
+    Saves,
 }
 
 impl Tab {
@@ -82,6 +85,7 @@ impl Tab {
             Tab::Project => (icon::TROPHY, "Project"),
             Tab::Profiler => (icon::PULSE, "Profiler"),
             Tab::Net => (icon::WIFI_HIGH, "Net"),
+            Tab::Saves => (icon::FLOPPY_DISK, "Saves"),
         };
         format!("{glyph}  {name}")
     }
@@ -355,6 +359,7 @@ pub struct App {
     pub profiler: crate::profiler::ProfilerState,
     /// The Net tab (issue #67).
     pub net: crate::net::NetPanel,
+    pub saves: crate::panels::saves::SavesPanel,
     /// Its overlay preview (the engine's list and popup).
     pub shipping_preview: Option<crate::preview::Preview>,
     /// The scene's frame from its camera on every target (variants, LOD and
@@ -400,6 +405,7 @@ impl App {
                 Err(e) => log.error(e),
             }
         }
+        log_load_errors(&mut log, &project);
         let mut lib = Library::load(&root);
         lib.model_bounds = project.model_bounds();
         lib.impostors = pipeline::impostor::baked(&project.assets_dir());
@@ -727,6 +733,7 @@ impl App {
                 Ok("project") => Some(Tab::Project),
                 Ok("profiler") => Some(Tab::Profiler),
                 Ok("net") => Some(Tab::Net),
+                Ok("saves") => Some(Tab::Saves),
                 _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
                 _ if std::env::var_os("TRINO_EDITOR_TRACE").is_some() => Some(Tab::Profiler),
                 _ => None,
@@ -805,6 +812,7 @@ impl App {
             shipping: crate::shipping::ShippingState::load(&root),
             profiler: crate::profiler::ProfilerState::new(&root),
             net: crate::net::NetPanel::new(&root),
+            saves: Default::default(),
             shipping_preview: None,
             // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
             // id>]]] opens the UI tab on that screen.
@@ -969,6 +977,45 @@ impl App {
         }
     }
 
+    /// Bake every asset again and reload them all (a Console entry's
+    /// Re-bake): a damaged baked file is rewritten from its master.
+    pub(crate) fn rebake(&mut self, logical: &str) {
+        self.log.info(format!("re-baking (asked for {logical})"));
+        for line in self.project.bake_and_load() {
+            match line {
+                Ok(l) => self.log.info(l),
+                Err(e) => self.log.error(e),
+            }
+        }
+        let all: Vec<String> = self
+            .project
+            .sprites
+            .keys()
+            .chain(self.project.models.keys())
+            .cloned()
+            .collect();
+        self.scene_view.upload(&self.project, &all);
+        self.game_view.upload(&self.project, &all);
+        self.lib.model_bounds = self.project.model_bounds();
+        if self
+            .project
+            .load_errors
+            .iter()
+            .any(|e| e.logical == logical)
+        {
+            self.log.toast(
+                Level::Error,
+                format!("{logical} is still damaged after a bake"),
+            );
+        } else {
+            self.log.toast(
+                Level::Ok,
+                format!("{} re-baked {logical}", icon::ARROWS_CLOCKWISE),
+            );
+        }
+        log_load_errors(&mut self.log, &self.project);
+    }
+
     pub(crate) fn write_echo(&mut self, path: PathBuf, text: String) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1021,6 +1068,10 @@ impl App {
                     .log
                     .toast(Level::Error, format!("asset reload failed: {e}")),
             }
+            log_load_errors(&mut self.log, &self.project);
+        }
+        if let Some(crate::log::Action::Rebake { logical }) = self.log.take_action() {
+            self.rebake(&logical);
         }
 
         // Text files.
@@ -2695,6 +2746,7 @@ impl App {
             (Tab::Project, "Project"),
             (Tab::Profiler, "Profiler"),
             (Tab::Net, "Net"),
+            (Tab::Saves, "Saves"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
         }
@@ -3865,7 +3917,8 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Localization
             | Tab::Project
             | Tab::Profiler
-            | Tab::Net => [false, false],
+            | Tab::Net
+            | Tab::Saves => [false, false],
             _ => [false, true],
         }
     }
@@ -4011,6 +4064,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Project => crate::panels::shipping::ui(app, ui),
             Tab::Profiler => crate::panels::profiler::ui(app, ui),
             Tab::Net => crate::panels::net::ui(app, ui),
+            Tab::Saves => crate::panels::saves::ui(app, ui),
         }
     }
 }
@@ -4045,6 +4099,25 @@ pub fn ripple_point(
         }
     }
     best.map(|(_, c)| c)
+}
+
+/// One Console error per baked asset that did not load, with its file and
+/// a Re-bake button (issue #68). An asset already listed since the last
+/// reload is not listed again.
+pub(crate) fn log_load_errors(log: &mut Log, project: &Project) {
+    for e in &project.load_errors {
+        let text = format!("asset {} did not load: {}", e.logical, e.message);
+        if log.entries.iter().rev().take(200).any(|x| x.text == text) {
+            continue;
+        }
+        log.push_with(
+            Level::Error,
+            text,
+            Some(crate::log::Action::Rebake {
+                logical: e.logical.clone(),
+            }),
+        );
+    }
 }
 
 #[cfg(test)]

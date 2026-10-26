@@ -1128,6 +1128,12 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Net));
         h.run_steps(4);
         crate::layout_audit::assert_clean(&h, size, true, &what("Net tab"));
+        // The Saves tab (issue #68), with a damaged slot pair.
+        save_fixtures(&std::env::current_dir().unwrap().join("target/save"));
+        h.state_mut().saves = Default::default();
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Saves));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Saves tab"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.state_mut().record_play_here();
         h.run_steps(30);
@@ -1150,6 +1156,106 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.run_steps(2);
         leave_temp_project(&repo);
     }
+}
+
+/// With `TRINO_EVIDENCE_DIR` set, write the window as `<dir>/<name>` (PR
+/// evidence; nothing otherwise).
+fn evidence(h: &mut Harness<'static, App>, name: &str) {
+    let Ok(dir) = std::env::var("TRINO_EVIDENCE_DIR") else {
+        return;
+    };
+    let Ok(img) = h.render() else { return };
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = std::fs::File::create(std::path::Path::new(&dir).join(name)).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), img.width(), img.height());
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .unwrap()
+        .write_image_data(img.as_raw())
+        .unwrap();
+}
+
+/// Two saves of a game, the newest damaged (bit rot): what the Saves tab
+/// and `cargo xtask save inspect` show as recovered from the backup.
+fn save_fixtures(dir: &std::path::Path) {
+    use trino_core::save;
+    std::fs::create_dir_all(dir).unwrap();
+    let mut a = vec![0u8; 64];
+    let n = save::encode_slot(1, b"coins=3", &mut a).unwrap();
+    std::fs::write(dir.join("game.sav.a"), &a[..n]).unwrap();
+    let mut b = vec![0u8; 64];
+    let n = save::encode_slot(2, b"coins=9", &mut b).unwrap();
+    b[n - 2] ^= 0x10;
+    std::fs::write(dir.join("game.sav.b"), &b[..n]).unwrap();
+}
+
+/// Damage the editor surfaces instead of crashing (issue #68): a baked
+/// model whose bytes broke (a bad bake, a disk error) is a Console error
+/// with its path and a Re-bake button that rewrites it from its master; the
+/// Saves tab decodes a damaged slot pair as the engine reads it.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn damaged_assets_rebake_from_the_console_and_saves_decode_in_their_tab() {
+    use crate::app::{Cmd, Tab};
+    let Some((mut h, tmp, repo)) = temp_project_app_with(egui::vec2(1600.0, 1000.0), |_, _| {})
+    else {
+        return;
+    };
+    let logical = "models/selftest_card";
+    let id = h.state_mut().project.models[logical].id;
+    let file = tmp
+        .path()
+        .join(crate::project::BAKED)
+        .join(format!("{id:08x}.model"));
+    let good = std::fs::read(&file).unwrap();
+    // Indices past the vertex count: the T&L would read out of bounds.
+    let mut bad = good.clone();
+    let at = bad.len() - 2;
+    bad[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    bad.truncate(at);
+    std::fs::write(&file, &bad).unwrap();
+    {
+        let app = h.state_mut();
+        app.project.reload(None).unwrap();
+        crate::app::log_load_errors(&mut app.log, &app.project);
+        assert!(app.project.load_errors.iter().any(|e| e.logical == logical));
+    }
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Console));
+    h.run_steps(4);
+    // In the Console (and the status bar, which shows the last entry).
+    assert!(
+        h.query_all_by_label_contains("asset models/selftest_card did not load")
+            .count()
+            >= 1
+    );
+    evidence(&mut h, "console-damaged-asset.png");
+    click(&mut h, "Re-bake");
+    h.run_steps(6);
+    evidence(&mut h, "console-rebaked.png");
+    assert!(
+        h.state_mut().project.load_errors.is_empty(),
+        "{:?}",
+        h.state_mut().project.load_errors
+    );
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        good,
+        "the bake rewrote the damaged file"
+    );
+    assert!(h.state_mut().project.models.contains_key(logical));
+
+    save_fixtures(&tmp.path().join("target/save"));
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Saves));
+    h.run_steps(4);
+    assert!(h.query_by_label("game.sav").is_some());
+    assert!(h.query_by_label("recovered-from-backup").is_some());
+    assert!(
+        h.query_by_label_contains("Reads 7 bytes from game.sav.a")
+            .is_some()
+    );
+    evidence(&mut h, "saves-tab.png");
+    leave_temp_project(&repo);
 }
 
 /// Play here records and replays (issue #67): Rec restarts the scene and

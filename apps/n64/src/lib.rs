@@ -20,7 +20,7 @@ mod n64 {
     mod micro;
 
     use alloc::format;
-    use trino_core::{Button, Game, Input, InputState, Vec2};
+    use trino_core::{Button, Game, InputState, Vec2};
     use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
 
     #[unsafe(no_mangle)]
@@ -30,7 +30,7 @@ mod n64 {
 
         let mut renderer = N64Renderer::new();
         let mut audio = N64Audio::new();
-        let mut input = N64Input;
+        let input = N64Input::new();
         let mut platform = N64Platform::new();
         N64Assets::load_all(&mut renderer, &mut audio, &mut platform);
 
@@ -40,28 +40,15 @@ mod n64 {
             run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
         }
 
-        let mut last = runtime::now_us();
-        // `run n64 --trace`: the play loop's zones every 60 frames.
-        let mut trace = runtime::TraceLoop::start("n64-castle64");
-        loop {
-            let now = runtime::now_us();
-            let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
-            last = now;
-
-            let state = input.poll();
-            N64Assets::pump(&mut renderer, &mut audio, &mut platform);
-            let zone = trino_core::trace::Zone::begin("update");
-            game.update_with(&mut platform, &state, &mut audio, dt);
-            zone.end();
-            let zone = trino_core::trace::Zone::begin("render");
-            game.render(&mut renderer);
-            zone.end();
-            let zone = trino_core::trace::Zone::begin("audio");
-            audio.poll();
-            zone.end();
-            platform.sample_heap();
-            trace.frame();
-        }
+        // Play (or replay / record, issue #67) through the engine's host
+        // loop; `run n64 --trace` names the session after castle64.
+        let mut host = trino_platform_n64::N64Host {
+            renderer,
+            audio,
+            input,
+            platform,
+        };
+        host.run_named(&mut game, "n64-castle64")
     }
 
     /// The `asset groups` step's backends and the loader's frame.
@@ -112,6 +99,46 @@ mod n64 {
         }
     }
 
+    /// The cross-platform replay (issue #67): the PC's recording of
+    /// castle64's bot, every state hash compared; the FPU's control word
+    /// beside it.
+    #[inline(never)]
+    fn replay_step(
+        game: &mut castle64::Castle64Game,
+        renderer: &mut N64Renderer,
+        audio: &mut N64Audio,
+        platform: &mut N64Platform,
+    ) {
+        runtime::log("TRINO_STEP:replay\n");
+        let t0 = runtime::now_us();
+        let mut host = GroupHost {
+            renderer,
+            audio,
+            platform,
+        };
+        // What the N64 fed and hashed goes back over ISViewer as
+        // `TRINO_REC:` lines: `test n64` holds it to the PC's file.
+        let mut rec = trino_core::replay::LineSink::new(runtime::log);
+        match castle64::selftest::replay(&mut host, game, false, Some(&mut rec)) {
+            Ok(r) => {
+                rec.end();
+                castle64::selftest::log_replay(host.platform, &r);
+                runtime::log(&format!(
+                    "TRINO_STEP:replay took {}ms fcr31={:#010x}\n",
+                    runtime::now_us().wrapping_sub(t0) / 1000,
+                    runtime::fpu_control()
+                ));
+            }
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                loop {
+                    trino_core::Renderer::begin_frame(host.renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(host.renderer);
+                }
+            }
+        }
+    }
+
     /// The animation steps with the strider's group (issue #65).
     #[inline(never)]
     fn anim_steps(renderer: &mut N64Renderer, audio: &mut N64Audio, platform: &mut N64Platform) {
@@ -138,8 +165,11 @@ mod n64 {
         let mut m = trino_core::Platform::memory(platform);
         m.heap_peak = m.heap_peak.max(sampled);
         runtime::log(&format!(
-            "TRINO_HEAP:{}/{} peak={} after {after}\n",
-            m.heap_used, m.heap_total, m.heap_peak
+            "TRINO_HEAP:{}/{} peak={} top={} after {after}\n",
+            m.heap_used,
+            m.heap_total,
+            m.heap_peak,
+            runtime::heap_top_free()
         ));
         if m.heap_peak + HEAP_MARGIN > m.heap_total {
             runtime::log(&format!(
@@ -638,11 +668,23 @@ mod n64 {
         audio_cost(renderer, audio);
         ui_cost(renderer);
         runtime::log("TRINO_STEP:input\n");
-        if let Err(e) = castle64::selftest::idle_input_checks(&mut N64Input) {
+        if let Err(e) = castle64::selftest::idle_input_checks(&mut N64Input::new()) {
             runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
             loop {
                 trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
                 trino_core::Renderer::end_frame(renderer);
+            }
+        }
+        // Local players (issue #67): the four controller ports.
+        runtime::log("TRINO_STEP:players\n");
+        match castle64::selftest::players_checks(&mut N64Input::new()) {
+            Ok(r) => castle64::selftest::log_players(platform, &r),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                loop {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
             }
         }
         // Its own frame: the showcase games (~22 KB each) must be gone from
@@ -831,8 +873,13 @@ mod n64 {
                     renderer.trim_buffers();
                     let (used, total) = runtime::heap();
                     runtime::log(&format!(
-                        "TRINO_HEAP:{used}/{total} before the micro scenes\n"
+                        "TRINO_HEAP:{used}/{total} top={} before the micro scenes\n",
+                        runtime::heap_top_free()
                     ));
+                    // The micro scenes' biggest batch, exactly and while
+                    // the trim left its block free: a 512 → 1 024 doubling
+                    // later held 45 + 90 KB at once (#110, #67).
+                    renderer.reserve_batch(micro::BATCH_TRIS);
                     micro::run(renderer, castle64::perf::MEASURE_FRAMES, micro_ready);
                     // 7) Water (ADR 0015): the showcase's river under its
                     // scene camera, the hero wading in (gated like the
@@ -851,6 +898,9 @@ mod n64 {
                         // (test-only content) loaded and unloaded where
                         // nothing big allocates after it.
                         anim_steps(renderer, audio, platform);
+                        // 10) The cross-platform replay (issue #67): also a
+                        // group load, so after every big allocation (#110).
+                        replay_step(game, renderer, audio, platform);
                         runtime::log("TRINO_TEST_PASS\n");
                     }
                 }

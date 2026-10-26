@@ -57,6 +57,9 @@ pub enum Tab {
     /// Timeline traces (`target/traces/*.json|*.log`, issue #62): zones per
     /// track, a frame's flame graph, per-zone statistics and an A/B diff.
     Profiler,
+    /// Local players and network play (issue #67): `[players]` / `[net]`,
+    /// a simulated network, two local instances online, the lobby.
+    Net,
 }
 
 impl Tab {
@@ -78,6 +81,7 @@ impl Tab {
             Tab::Localization => (icon::TRANSLATE, "Localization"),
             Tab::Project => (icon::TROPHY, "Project"),
             Tab::Profiler => (icon::PULSE, "Profiler"),
+            Tab::Net => (icon::WIFI_HIGH, "Net"),
         };
         format!("{glyph}  {name}")
     }
@@ -349,6 +353,8 @@ pub struct App {
     pub shipping: crate::shipping::ShippingState,
     /// The Profiler tab (issue #62): traces A and B, the view.
     pub profiler: crate::profiler::ProfilerState,
+    /// The Net tab (issue #67).
+    pub net: crate::net::NetPanel,
     /// Its overlay preview (the engine's list and popup).
     pub shipping_preview: Option<crate::preview::Preview>,
     /// The scene's frame from its camera on every target (variants, LOD and
@@ -720,6 +726,7 @@ impl App {
                 Ok("localization") => Some(Tab::Localization),
                 Ok("project") => Some(Tab::Project),
                 Ok("profiler") => Some(Tab::Profiler),
+                Ok("net") => Some(Tab::Net),
                 _ if std::env::var_os("TRINO_EDITOR_UI").is_some() => Some(Tab::Ui),
                 _ if std::env::var_os("TRINO_EDITOR_TRACE").is_some() => Some(Tab::Profiler),
                 _ => None,
@@ -727,7 +734,10 @@ impl App {
             open_docs: Vec::new(),
             // Dev hook: TRINO_EDITOR_PALETTE=<query> opens the palette.
             palette: std::env::var("TRINO_EDITOR_PALETTE").ok(),
-            play_here_on_start: std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("here"),
+            play_here_on_start: matches!(
+                std::env::var("TRINO_EDITOR_PLAY").as_deref(),
+                Ok("here" | "record")
+            ) || std::env::var_os("TRINO_EDITOR_REPLAY").is_some(),
             simulate_controller: std::env::var("TRINO_EDITOR_PHYSICS").as_deref() == Ok("sim"),
             graph_play: {
                 let mut g = trino_asset_pipeline::anim_graph::GraphPlayback::new(&root);
@@ -794,6 +804,7 @@ impl App {
             access: crate::access::AccessState::load(&root),
             shipping: crate::shipping::ShippingState::load(&root),
             profiler: crate::profiler::ProfilerState::new(&root),
+            net: crate::net::NetPanel::new(&root),
             shipping_preview: None,
             // Dev hook: TRINO_EDITOR_UI=<screen>[,<platform>[,<lang>[,<node
             // id>]]] opens the UI tab on that screen.
@@ -2683,6 +2694,7 @@ impl App {
             (Tab::Ui, "UI"),
             (Tab::Project, "Project"),
             (Tab::Profiler, "Profiler"),
+            (Tab::Net, "Net"),
         ] {
             add(format!("Go to {name} view"), "View", Cmd::FocusTab(tab));
         }
@@ -2894,6 +2906,81 @@ impl App {
                 );
             }
             Err(e) => self.log.toast(Level::Error, e),
+        }
+    }
+
+    /// Play here again from the scene's start, recording (issue #67).
+    pub fn record_play_here(&mut self) {
+        let players = self.game_view.play.as_ref().map(|s| s.players);
+        self.game_view.play = None;
+        self.start_play_here();
+        if let Some(s) = self.game_view.play.as_mut() {
+            if let Some(p) = players {
+                s.players = p;
+            }
+            s.begin_recording();
+            self.log.toast(
+                Level::Ok,
+                format!(
+                    "{} recording — Save in the Game view's bar ends it",
+                    icon::RECORD
+                ),
+            );
+        }
+    }
+
+    /// Write a finished recording under `<project>/recordings/`.
+    pub fn save_recording(&mut self, bytes: &[u8]) {
+        let scene = self.doc.scene.name.clone();
+        let path = crate::play::recording_path(&self.project.root, &scene);
+        let result = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(&path, bytes));
+        match result {
+            Ok(()) => {
+                let frames = trino_core::replay::Header::parse(bytes).map_or(0, |h| h.frames);
+                self.log.toast(
+                    Level::Ok,
+                    format!(
+                        "recorded {frames} frames: {} (cargo xtask replay dump)",
+                        path.display()
+                    ),
+                );
+            }
+            Err(e) => self
+                .log
+                .toast(Level::Error, format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Play here again from the scene's start, replaying `path`.
+    pub fn replay_here(&mut self, path: &std::path::Path) {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.log
+                    .toast(Level::Error, format!("{}: {e}", path.display()));
+                return;
+            }
+        };
+        self.game_view.play = None;
+        self.start_play_here();
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        if let Some(s) = self.game_view.play.as_mut() {
+            match s.load_replay(&bytes, &name) {
+                Ok(()) => {
+                    if s.replay.as_ref().is_some_and(|r| r.other_start) {
+                        self.log.toast(
+                            Level::Warn,
+                            format!("{name} starts from another state than this scene's"),
+                        );
+                    }
+                }
+                Err(e) => self.log.toast(Level::Error, format!("{name}: {e}")),
+            }
         }
     }
 
@@ -3444,7 +3531,26 @@ impl eframe::App for App {
             self.cmds.push(Cmd::ImportFiles(dropped));
         }
         if std::mem::take(&mut self.play_here_on_start) {
-            self.start_play_here();
+            // Dev hooks (issue #67): TRINO_EDITOR_REPLAY=<file.trec> replays
+            // it in the Game view (paused at TRINO_EDITOR_REPLAY_FRAME), and
+            // TRINO_EDITOR_PLAY=record starts recording.
+            if let Ok(file) = std::env::var("TRINO_EDITOR_REPLAY") {
+                self.replay_here(std::path::Path::new(&file));
+                if let Some(frame) = std::env::var("TRINO_EDITOR_REPLAY_FRAME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    && let Some(s) = self.game_view.play.as_mut()
+                {
+                    s.seek(frame);
+                    if let Some(r) = s.replay.as_mut() {
+                        r.playing = false;
+                    }
+                }
+            } else if std::env::var("TRINO_EDITOR_PLAY").as_deref() == Ok("record") {
+                self.record_play_here();
+            } else {
+                self.start_play_here();
+            }
         }
         if let Some(child) = &mut self.play
             && let Ok(Some(status)) = child.try_wait()
@@ -3580,10 +3686,15 @@ impl eframe::App for App {
 
         let width = ui.available_width();
         let mut dock = self.dock.take().unwrap_or_else(|| default_dock(width));
-        if let Some(tab) = self.focus_tab.take()
-            && let Some(path) = dock.find_tab(&tab)
-        {
-            let _ = dock.set_active_tab(path);
+        if let Some(tab) = self.focus_tab.take() {
+            match dock.find_tab(&tab) {
+                Some(path) => {
+                    let _ = dock.set_active_tab(path);
+                }
+                // A tab the default layout leaves out (Net: the center's
+                // strip is full at 960 px) opens beside the focused one.
+                None => dock.push_to_focused_leaf(tab),
+            }
         }
         let style = theme::dock_style(ui.style());
         egui::CentralPanel::default()
@@ -3753,7 +3864,8 @@ impl egui_dock::TabViewer for TabView<'_> {
             | Tab::Ui
             | Tab::Localization
             | Tab::Project
-            | Tab::Profiler => [false, false],
+            | Tab::Profiler
+            | Tab::Net => [false, false],
             _ => [false, true],
         }
     }
@@ -3873,6 +3985,9 @@ impl egui_dock::TabViewer for TabView<'_> {
                             app.cmds.push(Cmd::Select(None));
                             app.scroll_to_budget = true;
                         }
+                        ViewAction::RecordPlay => app.record_play_here(),
+                        ViewAction::SaveRecording(bytes) => app.save_recording(&bytes),
+                        ViewAction::ReplayFile(path) => app.replay_here(&path),
                     }
                 }
             }
@@ -3895,6 +4010,7 @@ impl egui_dock::TabViewer for TabView<'_> {
             Tab::Localization => crate::panels::localization::ui(app, ui),
             Tab::Project => crate::panels::shipping::ui(app, ui),
             Tab::Profiler => crate::panels::profiler::ui(app, ui),
+            Tab::Net => crate::panels::net::ui(app, ui),
         }
     }
 }

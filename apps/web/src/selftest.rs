@@ -219,14 +219,14 @@ fn soak_frame(s: &mut GroupSoak, host: &mut WebHost) -> Result<bool, String> {
 /// decoded, pump; then unload them and run the consoles' check on the
 /// downloaded bundles (`Ok(true)` once it passed).
 fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
-    use castle64::selftest::{LEVEL, LEVEL2, STRIDER_GROUP};
+    use castle64::selftest::{LEVEL, LEVEL2, REPLAY_GROUP, STRIDER_GROUP};
     use trino_core::LoadState;
     host.pump_groups();
-    let states = [LEVEL, LEVEL2, STRIDER_GROUP].map(|g| host.platform.group_state(g));
+    let states = [LEVEL, LEVEL2, STRIDER_GROUP, REPLAY_GROUP].map(|g| host.platform.group_state(g));
     if states.contains(&LoadState::Failed) {
         return Err("asset groups: a bundle failed to download or decode".into());
     }
-    if states != [LoadState::Ready; 3] {
+    if states != [LoadState::Ready; 4] {
         if frames > GROUP_WAIT_FRAMES {
             return Err(format!(
                 "asset groups: the bundles were not in after {frames} frames ({states:?})"
@@ -247,6 +247,15 @@ fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
     castle64::selftest::log_groups(&mut host.platform, &r);
     // The animation steps (issue #65) on the strider's downloaded bundle.
     castle64::selftest::anim_steps(&mut GroupHost(host))?;
+    // The cross-platform replay (issue #67) on the recording's bundle.
+    host.platform.log("TRINO_STEP:replay\n");
+    let mut game = castle64::Castle64Game::new(host.screen());
+    // What the browser fed and hashed goes back over the console as
+    // `TRINO_REC:` lines: `test web` holds it to the PC's file.
+    let mut rec = trino_core::replay::LineSink::new(|l: &str| js::log(l.trim_end()));
+    let r = castle64::selftest::replay(&mut GroupHost(host), &mut game, false, Some(&mut rec))?;
+    rec.end();
+    castle64::selftest::log_replay(&host.platform, &r);
     js::log(&format!(
         "TRINO_STEP:asset groups took {}ms",
         (host.platform.now_micros() - t0) / 1000
@@ -316,6 +325,14 @@ impl Run {
                     self.fail(e.to_string());
                     return Flow::Continue;
                 }
+                host.platform.log("TRINO_STEP:players\n");
+                match castle64::selftest::players_checks(&mut host.input) {
+                    Ok(r) => castle64::selftest::log_players(&host.platform, &r),
+                    Err(e) => {
+                        self.fail(e.to_string());
+                        return Flow::Continue;
+                    }
+                }
                 host.platform.log("TRINO_STEP:ktx2 transcode\n");
                 if let Err(e) = ktx2_check(host) {
                     self.fail(format!("ktx2: {e}"));
@@ -328,6 +345,7 @@ impl Run {
                     castle64::selftest::LEVEL,
                     castle64::selftest::LEVEL2,
                     castle64::selftest::STRIDER_GROUP,
+                    castle64::selftest::REPLAY_GROUP,
                 ] {
                     host.platform.load_group(g);
                 }
@@ -470,6 +488,18 @@ impl Run {
                         };
                         match result.and_then(|bytes| host.load_pack_bytes(&bytes)) {
                             Ok(_) => {
+                                // The PC's two-player recording (issue #67)
+                                // on a fresh game first.
+                                host.platform.log("TRINO_STEP:solid eleven replay\n");
+                                let mut r =
+                                    Box::new(solid_eleven::SolidElevenGame::new(host.screen()));
+                                if let Err(e) = solid_eleven::selftest::replay_two_players(
+                                    &mut host.platform,
+                                    &mut r,
+                                ) {
+                                    self.fail(format!("solid eleven: {e}"));
+                                    return Flow::Continue;
+                                }
                                 host.platform.log("TRINO_STEP:solid eleven match\n");
                                 let mut g =
                                     Box::new(solid_eleven::SolidElevenGame::new(host.screen()));

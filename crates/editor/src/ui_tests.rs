@@ -1124,8 +1124,162 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.run_steps(4);
         assert!(h.query_by_label_contains("DIFF (B").is_some());
         crate::layout_audit::assert_clean(&h, size, true, &what("Profiler A vs B"));
+        // The Net tab and Play here's bar with a replay (issue #67).
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Net));
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Net tab"));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+        h.state_mut().record_play_here();
+        h.run_steps(30);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Play here recording"));
+        let bytes = h
+            .state_mut()
+            .game_view
+            .play
+            .as_mut()
+            .unwrap()
+            .end_recording()
+            .unwrap();
+        let file = std::env::current_dir().unwrap().join("target/layout.trec");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, bytes).unwrap();
+        h.state_mut().replay_here(&file);
+        h.run_steps(6);
+        crate::layout_audit::assert_clean(&h, size, true, &what("Play here replay"));
+        h.state_mut().cmds.push(crate::app::Cmd::StopPlayHere);
+        h.run_steps(2);
         leave_temp_project(&repo);
     }
+}
+
+/// Play here records and replays (issue #67): Rec restarts the scene and
+/// records (two simulated players), Save writes `recordings/<scene>-1.trec`
+/// (what `cargo xtask replay dump` reads), the Replay menu plays it back
+/// with every hash matching, and the scrubber seeks back and forth. The Net
+/// tab writes `trino.toml`'s `[players]` and `[net]` (what `cargo xtask net
+/// config set` writes) and shows the command its instances run.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn play_here_records_replays_and_the_net_tab_writes_trino_toml() {
+    use crate::app::{Cmd, Tab};
+    use egui::accesskit::Role;
+    let Some((mut h, _tmp, repo)) = temp_project_app_with(egui::vec2(1600.0, 1000.0), |_, p| {
+        std::fs::write(
+            p.join("trino.toml"),
+            "[project]\nname = \"netty\"\ntitle = \"Netty\"\n",
+        )
+        .unwrap();
+    }) else {
+        return;
+    };
+    // Record with two players (the bar's combo), a few hundred frames.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.state_mut().cmds.push(Cmd::PlayHere);
+    h.run_steps(4);
+    h.state_mut().game_view.play.as_mut().unwrap().players.count = 2;
+    h.run_steps(2);
+    press(&mut h, Role::Button, "Rec");
+    h.run_steps(4);
+    let session = h.state().game_view.play.as_ref().unwrap();
+    assert_eq!(session.players.count, 2, "Rec kept the players");
+    assert!(session.recorded().is_some(), "recording");
+    h.run_steps(120);
+    press(&mut h, Role::Button, "Save (");
+    let file = std::path::Path::new("recordings/showcase-1.trec");
+    assert!(file.is_file(), "the recording on disk");
+    let header = trino_core::replay::Header::parse(&std::fs::read(file).unwrap()).unwrap();
+    assert_eq!(header.players, 2);
+    assert!(header.frames >= 100, "{} frames", header.frames);
+    // Replay it from the bar's menu: every hash matches.
+    press(&mut h, Role::Button, "Replay");
+    press(&mut h, Role::Button, "showcase-1.trec");
+    wait_for(&mut h, "the replay to end", |a| {
+        a.game_view
+            .play
+            .as_ref()
+            .and_then(|s| s.replay.as_ref())
+            .is_some_and(|r| r.pos as usize == r.frames.len())
+    });
+    let r = h
+        .state()
+        .game_view
+        .play
+        .as_ref()
+        .unwrap()
+        .replay
+        .as_ref()
+        .unwrap();
+    assert_eq!(r.diverged, None);
+    assert_eq!(r.checked, header.frames);
+    assert!(h.query_by_label_contains("hashes match").is_some());
+    // The scrubber: back to the start, one frame, then the end again.
+    press(&mut h, Role::Button, crate::theme::icon::SKIP_BACK);
+    assert_eq!(
+        h.state()
+            .game_view
+            .play
+            .as_ref()
+            .unwrap()
+            .replay
+            .as_ref()
+            .unwrap()
+            .pos,
+        0
+    );
+    press(&mut h, Role::Button, crate::theme::icon::CARET_RIGHT);
+    assert_eq!(
+        h.state()
+            .game_view
+            .play
+            .as_ref()
+            .unwrap()
+            .replay
+            .as_ref()
+            .unwrap()
+            .pos,
+        1
+    );
+    h.state_mut()
+        .game_view
+        .play
+        .as_mut()
+        .unwrap()
+        .seek(header.frames);
+    h.run_steps(2);
+    assert_eq!(
+        h.state()
+            .game_view
+            .play
+            .as_ref()
+            .unwrap()
+            .replay
+            .as_ref()
+            .unwrap()
+            .diverged,
+        None
+    );
+    h.state_mut().cmds.push(Cmd::StopPlayHere);
+    h.run_steps(2);
+
+    // The Net tab.
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Net));
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("cargo xtask net local --game solid-eleven")
+            .is_some()
+    );
+    press(&mut h, Role::RadioButton, "Delay");
+    set_value(&mut h, "Local players value", 3.0);
+    press(&mut h, Role::Button, "Save to trino.toml");
+    let toml = std::fs::read_to_string("trino.toml").unwrap();
+    let n = trino_asset_pipeline::net::ProjectNet::parse(&toml).unwrap();
+    assert_eq!(n.max_players, 3, "{toml}");
+    assert!(n.net.contains("mode = delay"), "{toml}");
+    // An edit on disk, then Read again.
+    trino_asset_pipeline::net::set_in(std::path::Path::new("."), "net.input_delay", "5").unwrap();
+    press(&mut h, Role::Button, "Read again");
+    assert_eq!(h.state().net.cfg.input_delay, 5);
+    leave_temp_project(&repo);
 }
 
 /// The Project tab (issue #61), both ways: Add achievement and its fields

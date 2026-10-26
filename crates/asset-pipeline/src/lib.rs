@@ -37,6 +37,7 @@ pub mod lz4;
 pub mod manifest;
 pub mod memory;
 pub mod model;
+pub mod net;
 pub mod par;
 pub mod particles;
 pub mod primitive;

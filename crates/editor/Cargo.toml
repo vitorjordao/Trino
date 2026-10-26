@@ -11,6 +11,8 @@ name = "trino-editor"
 path = "src/main.rs"
 
 [dependencies]
+# The Net tab: the session settings and `[net]` (issue #67).
+trino-net = { workspace = true }
 trino-core = { workspace = true }
 trino-scene = { workspace = true }
 trino-platform-pc = { workspace = true }

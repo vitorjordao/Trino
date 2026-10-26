@@ -58,7 +58,8 @@ shipping a 3D game first**, then by cost:
 - **Shipping follow-ups (#61, ADR 0029)** (S–M each).
   - Minidumps behind a feature (`minidumper` + `crash-handler`: an out-of-process
     monitor) for crashes that aren't Rust panics (a driver, `abort`).
-  - The input-replay tail in crash reports once #67 records input.
+  - ~~The input-replay tail in crash reports once #67 records input~~: **done** (#67:
+    `crash-*.trec` beside the report, the last 3 600 frames).
   - A first real Steam submission: the manual checklist (app 480: unlock, stats, Cloud
     round trip on two machines, rich presence, the Deck) on a machine with a client.
   - The `.cia` on a real 3DS (FBI); a `[3ds]` exheader option for apps that need more
@@ -243,8 +244,8 @@ shipping a 3D game first**, then by cost:
     instance, under a RAM budget. Also put the scene's `ao` block in TSCN (a version
     bump) for PC games that load levels as data. (ADR 0014, Consequences.)
 16. **Solid Eleven follow-ups** (S–M each, from issue #39).
-    - Local two-player matches: the sim takes two pads already (`human: [bool; 2]`), but
-      no menu offers it.
+    - ~~Local two-player matches~~: **done** (#67): Quick match › Team › "P1 V P2",
+      player 2 on the second seat (a pad, the N64's port 2, an online friend).
     - The N64 frame is 27.4 ms locally (eight code layouts) against its 33.3 ms gate,
       but CI's layout ran the same code ~3.6 ms slower: the sim update (7.2 ms) is the
       next thing to cut.
@@ -278,6 +279,21 @@ shipping a 3D game first**, then by cost:
     - Nothing has run on real hardware yet: blob cost on an N64, the stencil path on a
       3DS.
 
+20. **Netplay follow-ups** (S–M each, from #67, ADR 0036).
+    - `Platform::local_seats`: the seats this machine plays, so an online game's
+      camera and HUD follow the local player (Solid Eleven's guest sees player 1's
+      guides today).
+    - The 3DS's `uds` (local wireless) transport with delay-based lockstep, then a test
+      on two units (the rollback cost is measured: §PLATFORMS › Players).
+    - Netplay in the standalone template's Web host (`run_game` replays and records;
+      `?net` is `apps/web`'s), and PC↔Web crossplay (a WebRTC peer for the PC runner).
+    - A `Join` screen in Solid Eleven's menus (the core helper exists; the quick
+      match's "P1 V P2" seats the second pad by order).
+    - The editor's Play here is the showcase runtime: only player 1 walks; a
+      `player2` tag for seat-driven heroes.
+    - Real-hardware numbers for the rollback cost (Azahar doesn't time the 3DS's
+      clocks).
+
 ## Engineering hygiene (ongoing)
 
 - Keep `docs/adr/` current: every format change gets a version bump, a migration and
@@ -286,6 +302,22 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — local players, input recordings and replays, rollback netplay (2026-10-25, branch `feat/67-netplay`, GitHub #67, ADR 0036)
+
+| Item | Evidence |
+|---|---|
+| Phase 1 — `PlayersInput`, `Seats`, `HostedPlayers`, `Join`; N64 four ports (`trino_joypad_poll`), 3DS one, PC and Web keyboard + pads by seat; `rebind_player` / `binding_label_for`, `<save>.input` v2 | `crates/core/tests/players.rs` (4), `players.rs` unit tests (8), `crates/platform-pc/tests/players.rs` (3: one player merges as before), `pad::four_ports_are_four_players_…`; the `players` step: `connected=1111` in ares, `0001` in Azahar, the browsers |
+| Phase 2 — `TREC`, `Session`, `ChannelSession`, `Neutral`, `StateHasher`, `Game::state_hash`; `TRINO_RECORD`/`TRINO_REPLAY`, `?record`/`?replay=`, console replay/record through the DFS/RomFS and the debug channel; `cargo xtask replay dump|run|check`; crash-report tail; the cross-platform gate | castle64's PC recording (731 frames, `TRINO_BOT=green`) replays 731/731 hashes on PC, ares (Pak and base), Azahar (New and old) and every browser, and each target re-records it byte for byte (`test n64|3ds|web`); Solid Eleven's two-player recording (640 frames) in the template's console self-tests and the Web self-test; `crates/core/tests/replay.rs` (4), `replay_cli.rs` (4), `replay_gate.rs` (a tampered frame 100 diverges at 101) |
+| Phase 3 — editor: Play here Rec/Replay, scrubber with snapshots, split input (2–4 seats), the Net tab | `records_replays_and_scrubs_a_scene`, `play_here_records_replays_and_the_net_tab_writes_trino_toml`, the layout audit (Net tab, recording, replay at 960×600 and 1600×940) |
+| Phase 4 — `trino-net` (ggrs 0.13): `NetSession`, `SimNet`, UDP, `Conditioned`, lobby; `TRINO_NET=host:/join:/lobby:` in `trino-runner-pc`; `[players]`/`[net]` (`net/config`, `net config`); Solid Eleven 2P, `save_state`/`load_state` | soak: 10 000 frames × latency 0/50/100/200 ms × loss 0/5/10 %, no desync, the final state = a one-machine run; ggrs sync test on Solid Eleven (7-frame rollbacks every frame; a mutation fails it); UDP loopback; `cargo xtask net local --script …`: two Solid Eleven windows end on the same hash at frame 760 |
+| Phase 5 — WebRTC (`rtc.rs`) through the lobby's WebSocket, `?net=`; the 3DS evaluation (`rollback_cost`, `TRINO_ROLLBACK`); `strict-determinism`; docs, ADR 0036 | `cargo xtask net web`: two Chromium pages over WebRTC, hash `0xaeadc42f3bbe07f9` on frame 760, the PC's; rollback cost N64 64.6 ms / 3DS 12.1 ms per 8 frames (PLATFORMS.md) |
+
+Deviations (ADR 0036): ares v148 always plugs four pads, so "port absent" is covered by host
+tests; the 3DS `uds` transport is evaluated (measured) but not written; netplay sends the
+console buttons and sticks (no keyboard, pointer or wheel); the online camera and HUD
+follow player 1 on every machine; ggrs's retries run on the wall clock, so the soak lets
+real time pass while every peer waits.
 
 ## Done — physics 2.0: a broadphase, shape casts and triggers, the character controller, ramps and mesh colliders, a fixed-point mode (2026-10-25, branch `feat/66-physics`, GitHub #66, ADR 0035)
 

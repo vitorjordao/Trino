@@ -46,6 +46,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `new-project` | `cargo xtask new` (in-repo or `--standalone`), maintaining the templates and `trino-runner-pc` |
 | `profiling` | timeline traces on every target: `zone!`/counters/frame marks, `--trace` builds, `trace collect/report/diff`, Perfetto, Tracy, the editor's Profiler; perf evidence for PRs |
 | `shipping` | achievements/stats/presence/cloud (`assets/achievements.ron`, `services check\|export steam`), `package pc` per OS, Steam, crash reports, `deck check`, the 3DS `.cia` |
+| `netplay` | local players (`Platform::players`, seats, `Join`), input recordings and replays (`TREC`, `TRINO_RECORD/REPLAY`, `cargo xtask replay`, the `replay` self-test gate), rollback netplay (`trino-net`, `TRINO_NET`, `cargo xtask net`), determinism traps |
 
 **Knowledge loop:** before reporting a task done, write what it taught you into the
 skill that owns that kind of work. A trap also gets a line under Pitfalls below. Create a
@@ -1071,6 +1072,27 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     read back) and as a mono target in ares and the browsers;
     `crates/platform-pc/tests/stereo.rs`; `crates/core/tests/stereo.rs`.
 
+- **Players, recordings, netplay (2026-10-25, ADR 0036, GitHub #67):**
+  - **Players:** `Platform::players()` (`PlayersInput`: four seats; player 0 = the
+    update's `input`), `Seats`/`HostedPlayers`/`Join` in `trino_core::players`. N64 four
+    ports, 3DS one, PC/Web keyboard + pads (one player until `set_player_setup`;
+    `trino.toml [players] max`); `rebind_player`, `<save>.input` v2.
+  - **Recordings:** `trino_core::replay` (`TREC`: raw input bits delta-coded, `dt`, a
+    `Game::state_hash` every N frames), `Session`/`ChannelSession`/`Neutral`;
+    `TRINO_RECORD`/`TRINO_REPLAY` (PC), `?record`/`?replay=` (Web), DFS/RomFS + debug
+    channel (consoles); `cargo xtask replay dump|run|check`; crash reports keep the
+    last minute (`crash-*.trec`). The `replay` self-test step plays castle64's PC
+    recording on every target and each re-records it byte for byte; the football
+    template replays Solid Eleven's two-player recording.
+  - **Netplay:** `trino-net` (ggrs 0.13) runs the whole session under rollback
+    (`Game::save_state`/`load_state`, `NetPad` 9-byte input); UDP (`TRINO_NET=host:|
+    join:|lobby:`), WebRTC (`?net=&lobby=`), `SimNet` for tests; `cargo xtask net
+    lobby|local|web|config`. Solid Eleven: Quick match "P1 V P2", online between two
+    PCs and two browsers (same hash on frame 760).
+  - **Editor:** Play here Rec/Replay + scrubber, 2–4 simulated seats, the Net tab.
+  - **3DS local wireless:** evaluated (`rollback_cost`: 8 frames = 12.1 ms in
+    Azahar), not written.
+
 PC keyboard mapping: A/B = Z/X, X/Y = C/V, L/R = Q/E, Start = Enter,
 Select = Right Shift, D-pad = arrows, stick = WASD; L2/R2/L3/R3 have no default key
 (see `crates/platform-pc/src/input.rs`). Gamepads (gilrs): A/B/X/Y, L = LB+LT, R = RB+RT,
@@ -1105,6 +1127,7 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 | `crates/game-api` | Stable ABI boundary for hot-reloadable game dylibs |
 | `crates/platform-*` | One backend per target: winit/cpal (pc), libdragon FFI (n64), ctru/citro FFI (3ds), web-sys (web, `wasm32-unknown-unknown`) |
 | `crates/render-wgpu` | The wgpu renderer the PC and the Web share (profiles, strict mode, CPU/GPU T&L, WebGPU/WebGL2) |
+| `crates/net` | `trino-net`: rollback sessions over ggrs, `SimNet`, UDP, WebRTC, the lobby protocol (hosts use it; games only see `Platform::players`) |
 | `crates/editor` | egui editor (see the `editor` skill for its file map) |
 | `crates/scene` | Scenes, prefabs, materials (RON), resolve → draw list, codegen |
 | `crates/runner-pc` | Ready-made PC host (window, renderer, audio, asset bake) for standalone projects |
@@ -1130,7 +1153,8 @@ Super, which the OS takes) are not bindable, so one press never does two things.
 ```
 game ──► core ◄── platform-{pc,n64,3ds,web}      apps glue them together
            ▲
-           └──── render-wgpu ◄── platform-{pc,web}
+           ├──── render-wgpu ◄── platform-{pc,web}
+           └──── net ◄── runner-pc, apps/web, the editor, xtask
 ```
 
 - `trino-core` must have **zero dependencies** and stay `no_std`.
@@ -1139,6 +1163,8 @@ game ──► core ◄── platform-{pc,n64,3ds,web}      apps glue them toge
 - Platform crates may use external crates but, within the workspace, only `trino-core` and
   `trino-render-wgpu` (the renderer the PC and the Web share, itself on `trino-core` only).
 - libdragon/ctru/wgpu types must **never** appear in `core` or game code.
+- `trino-net` (ggrs, sockets) depends only on `trino-core` within the workspace, and only
+  hosts use it: games see `Platform::players`, the platform crates never link it.
 
 This is enforced by `xtask/tests/dep_graph.rs`, which runs in `cargo test --workspace`
 and fails CI. If you add a crate, that test decides what it may depend on by name:
@@ -1245,6 +1271,16 @@ cargo xtask lut neutral [--size 32] [--out x.png] | inspect <file|luts/x> [--jso
 cargo xtask post check [--json]                     # LUTs bake, scenes name declared LUTs, graded scenes draw graded models
 cargo xtask scene shot <scene.ron> [--platform pc|n64|3ds|web] [--post game|on|off|bloom] [--size WxH] [--out x.png] [--json]
 cargo xtask scene export --platform n64 --bake-grading <scene.ron> <out.rs>   # the scene's colors graded for a console
+cargo xtask replay dump <file.trec> [--json]                    # a recording's header and frames (issue #67)
+cargo xtask replay run <file.trec> --platform pc|n64|3ds|web [--until-frame N] [--shot x.png] [--window] [--json]
+cargo xtask replay check <file.trec>.. [--platforms pc,n64,3ds,web] [--json]   # every target, one final hash
+TRINO_RECORD=run.trec cargo run -p trino-app-pc                   # record a session (TRINO_BOT=green: castle64's bot plays)
+TRINO_REPLAY=run.trec [TRINO_REPLAY_UNTIL=N] cargo run -p trino-app-pc   # replay it, the verdict, exit
+cargo xtask net lobby [--udp 7400] [--ws 7401]                   # rooms by code (PC UDP, Web WebSocket signalling)
+cargo xtask net local [--game solid-eleven] [--sim latency=80,jitter=10,loss=3] [--script f.trec]   # two PC instances online
+cargo xtask net web                                               # two browser pages online over WebRTC
+cargo xtask net config [--json] | net config set players.max=2 net.mode=delay   # trino.toml [players] / [net]
+TRINO_NET=host:7300 | join:<ip>:7300 | lobby:<code>@<ip>:7400  # online play in trino-runner-pc (TRINO_NET_SIM=latency=…)
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo test -p xtask --test water_shots -- --ignored   # water evidence: tiers, ripples, crate, bridge (target/evidence/water)
 cargo xtask new <name> --standalone <dir> [--git <url> --rev <r>]   # project outside this repo
@@ -1560,8 +1596,19 @@ cargo test --workspace
   lines whose 4th column is empty or its tier. A new per-tier asset kind goes through
   `tier_twins` and `TierBlob::index_line`, or the expanded tier loads both copies.
 
-- **The PC `gamepad` feature is compiled by no default gate.** fmt, clippy and
-  `cargo test --workspace` build without it, so gilrs code can rot unseen. Check it with
+- **On the base N64 a feature's code comes straight out of the self-test's top free
+  block.** The heap is 4 MB minus the image; #67's ~45 KB of code left the micro scenes
+  no hole for their 79 KB triangle batch (`memory allocation of 90112 bytes failed`,
+  then `display_init` asserts and the run stalls) although 250 KB were free. Read
+  `TRINO_HEAP … top=`, not the free bytes; the draw memo is the biggest boot allocation
+  (768 slots on the base tier), and big batches are sized once with
+  `N64Renderer::reserve_batch` (build-n64 skill › assets).
+- **The PC `gamepad` feature is on in workspace builds, off in `-p` builds.** `apps/pc`
+  enables it by default, so `cargo test --workspace` unifies it into
+  `trino-platform-pc`'s tests, while `cargo test -p trino-platform-pc` runs them without
+  it. A test that feeds pads (`PcInput::feed_pads`) must pass both ways: the gilrs poll
+  once replaced the fed pads with its empty list, and the players tests failed only in
+  the workspace run (#67). Check gilrs code alone with
   `cargo clippy -p trino-platform-pc --features gamepad --all-targets -- -D warnings`.
   Without `libudev-dev`, point `PKG_CONFIG_PATH` at a scratch `libudev.pc`
   (`Libs: -L<dir> -ludev`, with `<dir>/libudev.so` → the system's `libudev.so.1`).
@@ -2023,6 +2070,25 @@ cargo test --workspace
 - **A full alpha ramp keeps ~33 dB in 4-bit alpha** (`RGBA4`, `ETC1A4`), so `auto` at the
   default 35 dB leaves soft colored glows in `RGBA8`. Use `quality = "low"` when 4-bit
   alpha is acceptable.
+- **`#[derive(Hash)]` is not a cross-platform state hash.** It hashes integer slices
+  and arrays as raw memory in the CPU's byte order, and the N64 is big-endian. Hash a
+  game's state field by field with `trino_core::StateHasher` (which deliberately isn't a
+  `Hasher`), widening `usize` to 64 bits.
+- **A sim that reads platform state can't replay elsewhere.** castle64's Select opens
+  the Graphics page only where `quality_info()` is `Some` (PC/Web), and Solid Eleven
+  loads its settings from the save. Record from a point none of that touches, or run
+  the session on `replay::Neutral` (no save, default settings): netplay and the
+  portable recordings do.
+- **ggrs re-sends lost handshake and input packets on a 200 ms wall-clock timer.** A
+  test that drives sessions faster than real time over a lossy `SimNet` stalls forever
+  unless it lets real time pass when every peer waits (`crates/net/tests/soak.rs`).
+- **A PC pad's seat must be known before its buttons are mapped** (each seat has its
+  own bindings). `PcInput::poll_players` reports a device once to learn its seat, then
+  again with its input; mapping first used player 1's bindings for a new pad's first
+  frame.
+- **The editor's center tab strip is full at 960 px.** A new tab that only some work
+  needs (Net) opens on demand (`Cmd::FocusTab` pushes a missing tab into the focused
+  leaf) instead of joining the default dock, or the layout audit finds overlaps.
 - Do not add dependencies to `trino-core` — the dep-graph test will fail, and the crate
   must compile for MIPS bare metal.
 - Screen space is X-right, **Y-down**, origin top-left; stick input is Y-up.

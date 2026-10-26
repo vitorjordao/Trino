@@ -477,6 +477,8 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     if test_mode {
         std::fs::write(romfs.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // `replay run` / `run --record` (issue #67): the session's files.
+    crate::replay::stage(&romfs)?;
     // `[3ds] speedup = false` (or `--speedup off`): the app leaves a New
     // 3DS at 268 MHz, the base tier (issue #54).
     if !p.n3ds_speedup {
@@ -1179,6 +1181,46 @@ pub fn test(
     ExitCode::SUCCESS
 }
 
+/// Boot `app` in Azahar (the user's New 3DS setting as it is) and hand
+/// each line of its log to `on_line` until it returns true (`Ok`), Azahar
+/// exits, or the emulator watchdog fires. `replay run --platform 3ds` reads
+/// its verdict this way (issue #67).
+pub fn boot_for_lines(app: &Path, on_line: &mut dyn FnMut(&str) -> bool) -> Result<(), String> {
+    let azahar = azahar_exe().ok_or("Azahar not found (set TRINO_AZAHAR to the executable)")?;
+    let log = azahar_log().ok_or("cannot locate the Azahar log directory")?;
+    ensure_azahar_log_filter()?;
+    let _ = std::fs::remove_file(&log);
+    let mut child = Command::new(&azahar)
+        .arg(app)
+        .spawn()
+        .map_err(|e| format!("failed to launch Azahar: {e}"))?;
+    let mut watchdog = crate::emulators::Watchdog::new();
+    let mut seen = 0usize;
+    let result = 'run: loop {
+        if let Some(why) = watchdog.expired(Instant::now()) {
+            break Err(why);
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            break Err(format!("Azahar exited before the run ended ({status})"));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let Ok(content) = std::fs::read_to_string(&log) else {
+            continue;
+        };
+        let end = content.rfind('\n').map_or(0, |i| i + 1);
+        for line in content[seen.min(end)..end].lines() {
+            watchdog.saw(line, Instant::now());
+            if on_line(line) {
+                break 'run Ok(());
+            }
+        }
+        seen = end;
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
 /// Boot the test app in Azahar (as a New or an old 3DS) and tail its log
 /// file for the magic strings and the `TRINO_HW` line (the GUI build has no
 /// console stdout on Windows). Kills the emulator on verdict or timeout.
@@ -1254,6 +1296,9 @@ fn boot_test(
     let mut tier_step = None;
     let mut quality_step = None;
     let mut worker_step = None;
+    let mut players_step: Option<String> = None;
+    let mut replay_step: Option<String> = None;
+    let mut rerecord = crate::replay::Rerecord::default();
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
             break Err(why);
@@ -1284,6 +1329,10 @@ fn boot_test(
             if traces.feed(line) {
                 continue;
             }
+            // The replay step's re-recording (issue #67).
+            if rerecord.feed(line) {
+                continue;
+            }
             if line.contains("TRINO_") {
                 println!("[azahar] {line}");
             }
@@ -1306,6 +1355,12 @@ fn boot_test(
             }
             if line.contains("TRINO_STEP:worker ") {
                 worker_step = Some(line.to_string());
+            }
+            if line.contains("TRINO_STEP:players connected=") {
+                players_step = Some(line.to_string());
+            }
+            if line.contains("TRINO_STEP:replay ok ") {
+                replay_step = Some(line.to_string());
             }
         }
         if fresh.contains("TRINO_TEST_PASS") {
@@ -1342,6 +1397,14 @@ fn boot_test(
             let want = if new3ds { "medium" } else { "low" };
             let q = crate::hwtier::check_quality(quality_step.as_deref(), want)?;
             println!("[3ds] quality: {q}");
+            // One player on a 3DS (issue #67); the PC's recording replayed
+            // hash for hash.
+            let pl = crate::replay::check_players_step(players_step.as_deref(), "0001")?;
+            println!("[3ds] players: {pl}");
+            let r = crate::replay::check_replay_step(replay_step.as_deref())?;
+            println!("[3ds] replay: {r}");
+            let again = rerecord.check(&p.engine, &p.engine.join("target/3ds/replay-3ds.trec"))?;
+            println!("[3ds] re-recording: {again}");
         }
         Ok(())
     });

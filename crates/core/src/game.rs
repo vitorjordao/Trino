@@ -32,6 +32,45 @@ pub trait Game {
     /// Must not mutate gameplay state.
     fn render(&mut self, renderer: &mut dyn Renderer);
 
+    /// A hash of the simulation state (issue #67): everything `update`
+    /// reads and changes that decides what happens next — positions,
+    /// velocities, timers, scores, the RNG — and nothing render-only.
+    /// Recordings store it every few frames and replays compare it
+    /// ([`crate::replay`]); network sessions exchange it to find a desync.
+    /// Hash with [`StateHasher`](crate::StateHasher), which is the same on
+    /// every target. `None` (the default): the game can be recorded and
+    /// replayed, but nothing is checked.
+    fn state_hash(&self) -> Option<u64> {
+        None
+    }
+
+    /// The bytes [`save_state`](Self::save_state) needs (0: the game takes
+    /// no snapshots, the default).
+    fn state_size(&self) -> usize {
+        0
+    }
+
+    /// Write a snapshot of the simulation state into `out` for a rollback
+    /// session (issue #67): everything `update` changes, so that
+    /// [`load_state`](Self::load_state) of it followed by the same updates
+    /// gives the same frames. Returns the bytes written; `None` when the
+    /// game takes no snapshots (the default) or `out` is shorter than
+    /// [`state_size`](Self::state_size). Snapshots stay on the machine that
+    /// took them (sessions exchange inputs and hashes, never states), so a
+    /// `Copy` struct may be copied byte for byte
+    /// ([`snapshot::save_copy`](crate::snapshot::save_copy)).
+    fn save_state(&self, out: &mut [u8]) -> Option<usize> {
+        let _ = out;
+        None
+    }
+
+    /// Restore a [`save_state`](Self::save_state) snapshot. `false` when the
+    /// game takes no snapshots or `bytes` is not one of its own.
+    fn load_state(&mut self, bytes: &[u8]) -> bool {
+        let _ = bytes;
+        false
+    }
+
     /// The picture changed size (PC: window resized, fullscreen toggled,
     /// pixel scale changed). `screen` is the new internal resolution, the
     /// same space as `InputState::pointer`. Consoles never call it.

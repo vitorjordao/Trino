@@ -404,6 +404,32 @@ Web `performance.measure`. The `profiling` skill is the how-to.
   - the editor's Play here draws its debug overlay.
 - **The `physics` self-test step** pins its course hashes to the PC's on every target.
 
+## Players, recordings and netplay (issue #67, ADR 0036)
+
+- **Players.** `Platform::players()` gives every local player's `InputState` (four
+  seats). Player 0 is the `input` every update already receives.
+  - Hosts fold their devices into seats with `trino_core::players::Seats`: the N64's
+    four ports, the 3DS's one, and the PC's and the Web's keyboard and pads (all on
+    player 0 until a game asks for more with `set_player_setup`).
+  - `Join` is the assignment screen.
+- **Recordings.** `trino_core::replay` records what each update was given (`TREC`:
+  `dt` and every player's input as raw bits, delta-coded) with the game's
+  `state_hash` every few frames. A replay feeds a fresh game the same frames and names
+  the first frame whose hash differs.
+  - Every target can record and replay: the PC by `TRINO_RECORD` / `TRINO_REPLAY`, the
+    Web by `?record` / `?replay=`, the consoles through their debug channel and the
+    image's file system.
+  - The `replay` self-test step plays a recording made on the PC on every target, and
+    each target sends it back byte for byte.
+- **Netplay.** `trino-net` runs the whole session under ggrs's rollback: remote players
+  sit in their seats, `save_state` / `load_state` snapshot the game, `state_hash`
+  catches desyncs.
+  - Transports: UDP on the PC, WebRTC on the Web, and an in-process network for tests.
+  - The core keeps the game-facing contract. The transport stays in the hosts, because
+    `trino-net` is `std` and not a dependency of the platform crates.
+- **Portability.** A recording or a session runs against `replay::Neutral`: no save, the
+  default settings. So nothing one machine keeps changes the sim.
+
 ## Authored content
 
 Scenes, prefabs, materials, particle effects and fake objects are versioned RON files
@@ -437,7 +463,11 @@ entry ([ADR 0024](adr/0024-ui-system.md)).
 - **Handles** are the FNV-1a hash of a logical asset path, so they stay stable across
   reloads and platforms.
 - **Determinism:** the math, physics and T&L give the same results on the three targets.
-  The console self-tests and the bot that plays castle64 in ares and Azahar depend on it.
+  The console self-tests and the bot that plays castle64 in ares and Azahar depend on it,
+  and the `replay` step proves it on every build: a PC recording replays hash for hash
+  in ares, Azahar and the browsers (ADR 0036). What differs between CPUs is subnormals
+  (the N64 and the 3DS flush them) and NaN bits; the `strict-determinism` feature of
+  `trino-core` turns either into a named panic when it reaches a state hash.
 
 ## Testing
 

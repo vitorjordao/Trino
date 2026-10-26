@@ -30,6 +30,8 @@ tracy = ["trino-platform-pc/tracy"]
 trino-core = { workspace = true }
 trino-platform-pc = { workspace = true }
 trino-asset-pipeline = { workspace = true }
+# Online play (issue #67): `TRINO_NET`.
+trino-net = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
 # `raw-bindings` exposes `steamworks::sys` (Steam Input's handle types).

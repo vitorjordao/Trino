@@ -255,6 +255,13 @@ impl N3dsAssets {
         unsafe { ffi::trino_file_exists(cpath.as_ptr()) != 0 }
     }
 
+    /// A RomFS file's bytes (`/replay.trec`). `None` when it isn't there.
+    pub fn read(romfs_relative_path: &str) -> Option<Vec<u8>> {
+        let mut path = alloc::string::String::from("romfs:");
+        path.push_str(romfs_relative_path);
+        read_bytes(&path)
+    }
+
     /// Read `romfs:/index.tsv` and register every boot asset with the
     /// renderer, audio and platform (blobs) backends, and the groups the
     /// build holds.

@@ -302,6 +302,29 @@ impl KeySet {
         KeySet([lo, hi])
     };
 
+    /// The set as 16 little-endian bytes (a recording's field,
+    /// [`crate::replay`]).
+    pub fn to_bytes(&self) -> [u8; 16] {
+        let mut b = [0u8; 16];
+        b[..8].copy_from_slice(&self.0[0].to_le_bytes());
+        b[8..].copy_from_slice(&self.0[1].to_le_bytes());
+        b
+    }
+
+    /// [`to_bytes`](Self::to_bytes) back (bits past [`Key::COUNT`] are
+    /// dropped).
+    pub fn from_bytes(b: [u8; 16]) -> KeySet {
+        let mut lo = [0u8; 8];
+        let mut hi = [0u8; 8];
+        lo.copy_from_slice(&b[..8]);
+        hi.copy_from_slice(&b[8..]);
+        let all = KeySet::ALL;
+        KeySet([
+            u64::from_le_bytes(lo) & all.0[0],
+            u64::from_le_bytes(hi) & all.0[1],
+        ])
+    }
+
     #[inline]
     fn bit(key: Key) -> (usize, u64) {
         let i = key as usize;
@@ -596,12 +619,75 @@ impl InputState {
             self.pointer_buttons &= !bit;
         }
     }
+
+    /// Every held button as its bit mask (bit `b as u32` for each
+    /// [`Button`]): what an input recording stores ([`crate::replay`]).
+    #[inline]
+    pub const fn button_bits(&self) -> u32 {
+        self.buttons
+    }
+
+    /// Replace every held button at once (a decoded recording).
+    #[inline]
+    pub fn set_button_bits(&mut self, bits: u32) {
+        self.buttons = bits;
+    }
+
+    /// The held pointer buttons as a bit mask (bit `b as u8`).
+    #[inline]
+    pub const fn pointer_bits(&self) -> u8 {
+        self.pointer_buttons
+    }
+
+    /// Replace the held pointer buttons at once.
+    #[inline]
+    pub fn set_pointer_bits(&mut self, bits: u8) {
+        self.pointer_buttons = bits;
+    }
+
+    /// Fold another device's input into this one, as one player holding
+    /// both (a keyboard and a pad on the same seat, [`crate::players`]):
+    /// buttons, keys and pointer buttons are OR'ed, the stronger of each
+    /// stick wins (a tie keeps this one's), the triggers take the larger
+    /// value, the wheel adds up, the pointer is this one's unless it has
+    /// none, and `pad` is set when either used a pad.
+    pub fn merge(&mut self, other: &InputState) {
+        let len2 = |v: Vec2| v.x * v.x + v.y * v.y;
+        self.buttons |= other.buttons;
+        self.pointer_buttons |= other.pointer_buttons;
+        if len2(other.stick) > len2(self.stick) {
+            self.stick = other.stick;
+        }
+        if len2(other.right_stick) > len2(self.right_stick) {
+            self.right_stick = other.right_stick;
+        }
+        self.triggers = Vec2::new(
+            self.triggers.x.max(other.triggers.x),
+            self.triggers.y.max(other.triggers.y),
+        );
+        if self.pointer.is_none() && other.pointer.is_some() {
+            self.pointer = other.pointer;
+            self.pointer_screen = other.pointer_screen;
+        }
+        self.wheel += other.wheel;
+        self.keys |= other.keys;
+        self.pad |= other.pad;
+    }
 }
 
 /// What every platform backend implements: poll the controller once per
 /// frame and hand the snapshot to the game.
 pub trait Input {
     fn poll(&mut self) -> InputState;
+
+    /// Every local player's input this frame ([`crate::players`], issue
+    /// #67): the N64's four controller ports, the PC's and the Web's
+    /// keyboard and pads by seat. Player 0 is what [`poll`](Self::poll)
+    /// returns. The default — a backend with one controller — is that one
+    /// player, connected. Call this *or* `poll` once per frame, not both.
+    fn poll_players(&mut self) -> crate::PlayersInput {
+        crate::PlayersInput::single(self.poll())
+    }
 }
 
 #[cfg(test)]

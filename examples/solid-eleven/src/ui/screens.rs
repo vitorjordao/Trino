@@ -657,6 +657,7 @@ fn quick(g: &mut SolidElevenGame, r: &mut dyn Renderer, _screen: Vec2) {
             let side = match g.quick.side {
                 0 => S::SideHome,
                 1 => S::SideAway,
+                3 => S::SideTwo,
                 _ => S::SideCpu,
             };
             let sky = [S::Day, S::Dusk, S::Night][g.quick.sky as usize % 3];

@@ -23,6 +23,14 @@
 //! - `TRINO_GAME=showcase` — run `examples/showcase` (the editor's demo
 //!   scene exported to `no_std` code — the exact path console builds take)
 //!   instead of castle64.
+//! - `TRINO_RECORD=<file>` / `TRINO_REPLAY=<file>` (+ `TRINO_REPLAY_UNTIL=N`)
+//!   — record this run's input with its state hashes, or play a recording
+//!   back and report where it diverged (issue #67; `cargo xtask replay`).
+//!   A replay exits when it ends (`TRINO_SCREENSHOT=x.png` writes its last
+//!   frame).
+//! - `TRINO_BOT=green|full` — castle64's waypoint bot plays instead of the
+//!   keyboard, and the app exits when its run is over (a reproducible PC
+//!   recording: `TRINO_BOT=green TRINO_RECORD=run.trec`).
 //! - `TRINO_GAME=solid-eleven` — run `examples/solid-eleven` (the football
 //!   demo) on `trino-runner-pc`, the host its template uses: its own assets
 //!   (`examples/solid-eleven/assets`, baked to `target/solid-eleven/assets/pc`),
@@ -37,6 +45,7 @@ use std::time::Instant;
 #[cfg(not(feature = "reload"))]
 use trino_core::Game;
 use trino_core::{Input, Vec2};
+use trino_platform_pc::replay_host::InputSession;
 use trino_platform_pc::{PcAudio, PcInput, PcPlatform, PcRenderer, SimProfile};
 
 use winit::application::ApplicationHandler;
@@ -68,6 +77,21 @@ mod hot_game {
             dt: f32,
         );
         pub fn trino_game_render(state: &mut Castle64Game, renderer: &mut dyn Renderer);
+        pub fn trino_game_state_hash(state: &Castle64Game) -> Option<u64>;
+    }
+}
+
+/// The hot-reloaded castle64 as a `Game` a recording can hash: its state
+/// hash goes through the dylib's export (issue #67).
+#[cfg(feature = "reload")]
+struct HotHash<'a>(&'a castle64::Castle64Game);
+
+#[cfg(feature = "reload")]
+impl trino_core::Game for HotHash<'_> {
+    fn update(&mut self, _: &trino_core::InputState, _: &mut dyn trino_core::Audio, _: f32) {}
+    fn render(&mut self, _: &mut dyn trino_core::Renderer) {}
+    fn state_hash(&self) -> Option<u64> {
+        hot_game::trino_game_state_hash(self.0)
     }
 }
 
@@ -108,6 +132,10 @@ struct Ctx {
     access_persist: bool,
     /// Whether achievements go to `target/save/castle64.achievements`.
     services_persist: bool,
+    /// `TRINO_RECORD` / `TRINO_REPLAY` (issue #67): what each update gets.
+    session: InputSession,
+    /// `TRINO_BOT`: castle64's bot plays player 1.
+    bot: Option<castle64::bot::Bot>,
     last_frame: Instant,
     #[cfg(feature = "reload")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -234,6 +262,23 @@ impl App {
 
         let (iw, ih) = renderer.internal_size();
         let game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
+        // The game a recording names: the scene player records nothing.
+        let name = match (&player, &showcase) {
+            (Some(_), _) => "scene",
+            (None, Some(_)) => "showcase",
+            _ => "castle64",
+        };
+        let mut session =
+            InputSession::from_env(name, (iw as u16, ih as u16)).unwrap_or_else(|e| panic!("{e}"));
+        match &showcase {
+            Some(s) => session.start(s),
+            None => session.start(&game),
+        }
+        let bot = match std::env::var("TRINO_BOT").as_deref() {
+            Ok("green") => Some(castle64::bot::Bot::new(castle64::bot::GREEN_RUN)),
+            Ok("full") => Some(castle64::bot::Bot::new(castle64::bot::FULL_RUN)),
+            _ => None,
+        };
         let access_persist = trino_runner_pc::load_access_settings(
             &mut platform,
             &access_file(),
@@ -259,6 +304,8 @@ impl App {
             showcase,
             access_persist,
             services_persist,
+            session,
+            bot,
             last_frame: Instant::now(),
             #[cfg(feature = "reload")]
             asset_events,
@@ -275,6 +322,10 @@ impl ApplicationHandler for App {
             && let Err(e) = ctx.renderer.save_pipeline_cache()
         {
             eprintln!("[trino] pipeline cache: {e}");
+        }
+        // A recording is written (a replay reported) when the window closes.
+        if let Some(ctx) = &mut self.ctx {
+            ctx.session.finish();
         }
     }
 
@@ -320,7 +371,42 @@ impl ApplicationHandler for App {
                 let dt = (now - ctx.last_frame).as_secs_f32().min(0.1);
                 ctx.last_frame = now;
 
-                let input = ctx.input.poll();
+                // The players (issue #67): the game's seat requests, the
+                // devices, then the recording or the bot over them.
+                while let Some(r) = ctx.platform.players.take_request() {
+                    ctx.input.seats_mut().apply(r);
+                }
+                let mut live = ctx.input.poll_players();
+                ctx.platform.players.publish(ctx.input.seats());
+                if let Some(bot) = &mut ctx.bot {
+                    if bot.done() {
+                        // The run is over: write the recording and exit.
+                        ctx.session.finish();
+                        println!("TRINO_BOT: done after {} frames", self.frames);
+                        event_loop.exit();
+                        return;
+                    }
+                    live.players[0] = bot.drive(&ctx.game);
+                    live.connected |= 1;
+                }
+                let Some((players, dt)) = ctx.session.input(&live, dt) else {
+                    // A replay ran out: its verdict, its last frame, exit.
+                    ctx.session.finish();
+                    if let Ok(path) = std::env::var("TRINO_SCREENSHOT") {
+                        let (w, h) = ctx.renderer.internal_size();
+                        let rgba = ctx.renderer.read_offscreen();
+                        match trino_runner_pc::write_png(std::path::Path::new(&path), w, h, &rgba) {
+                            Ok(()) => println!("TRINO_SCREENSHOT: {path}"),
+                            Err(e) => eprintln!("TRINO_SCREENSHOT {path}: {e}"),
+                        }
+                    }
+                    event_loop.exit();
+                    return;
+                };
+                if ctx.session.is_replay() || ctx.bot.is_some() {
+                    ctx.platform.players.publish_players(&players);
+                }
+                let input = players.players[0];
                 let zone = trino_core::trace::Zone::begin("groups");
                 ctx.groups
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
@@ -335,6 +421,7 @@ impl ApplicationHandler for App {
                 } else if let Some(game) = &mut ctx.showcase {
                     use trino_core::Game as _;
                     game.update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
+                    ctx.session.after(game, &players, dt);
                     game.render(&mut ctx.renderer);
                 } else {
                     #[cfg(feature = "reload")]
@@ -352,6 +439,7 @@ impl ApplicationHandler for App {
                             &mut ctx.audio,
                             dt,
                         );
+                        ctx.session.after(&HotHash(&ctx.game), &players, dt);
                         hot_game::trino_game_render(&mut ctx.game, &mut ctx.renderer);
                     }
                     #[cfg(not(feature = "reload"))]
@@ -360,6 +448,7 @@ impl ApplicationHandler for App {
                         ctx.game
                             .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
                         update.end();
+                        ctx.session.after(&ctx.game, &players, dt);
                         trino_core::zone!("render");
                         ctx.game.render(&mut ctx.renderer);
                     }
@@ -401,6 +490,7 @@ impl ApplicationHandler for App {
                 {
                     println!("{}", self.meter.line(&run_label()));
                     println!("{}", trino_runner_pc::texture_line(&ctx.renderer));
+                    ctx.session.finish();
                     event_loop.exit();
                     return;
                 }

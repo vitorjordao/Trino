@@ -32,6 +32,12 @@ const headed = args.includes("--headed");
 // --smoke: a project without the engine's self-test (`?frames=N` runs its
 // game and stops): no save or golden checks, the rest the same.
 const smoke = args.includes("--smoke");
+// --page "?game=castle64&replay=x.trec": open that page instead of the
+// self-test, wait for its verdict (`__trino.done`), save the console and,
+// with --shot <png>, the canvas (`cargo xtask replay run --platform web`,
+// issue #67). The game keeps drawing its last frame after the verdict.
+const page_query = opt("--page", null);
+const shot = opt("--shot", null);
 const timeoutMs = Number(process.env.TRINO_WEB_TIMEOUT || 900) * 1000;
 
 // Chromium runs twice: WebGPU (its primary API; SwiftShader's Vulkan on a
@@ -100,6 +106,28 @@ for (const run of plan) {
     const page = await context.newPage();
     page.on("console", (m) => log.push(`[${m.type()}] ${m.text()}`));
     page.on("pageerror", (e) => log.push(`[pageerror] ${e.message}`));
+
+    if (page_query) {
+      await page.goto(`${base}${page_query}&backend=${run.backend}&size=640x480`);
+      await page.waitForFunction(() => globalThis.__trino && globalThis.__trino.done, null, {
+        timeout: timeoutMs,
+        polling: 250,
+      });
+      const state = await page.evaluate(() => globalThis.__trino);
+      r.pass = state.pass;
+      r.error = state.error;
+      r.info = state.info;
+      if (shot) {
+        await page.waitForTimeout(250);
+        await page.locator("canvas").screenshot({ path: shot });
+        r.shot = shot;
+      }
+      await context.close();
+      r.ms = Date.now() - started;
+      fs.writeFileSync(path.join(dir, "console.log"), log.join("\n") + "\n");
+      results.runs.push(r);
+      continue;
+    }
 
     // 1) The self-test.
     const first = smoke ? "?frames=120" : "?selftest";

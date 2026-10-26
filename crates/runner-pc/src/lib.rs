@@ -52,6 +52,7 @@
 //! See [`quality::QualityHost`].
 
 pub mod crash;
+pub mod net;
 pub mod package;
 pub mod quality;
 #[cfg(feature = "steam")]
@@ -124,6 +125,10 @@ pub struct RunConfig {
     /// The precompile workers (`None`: `TRINO_THREADS`, else all CPUs but
     /// one, at least one).
     pub threads: Option<trino_core::ThreadSetting>,
+    /// The most local players (`trino.toml` `[players] max`, issue #67):
+    /// above 1 each pad after the first plays for its own player
+    /// (`trino_core::PlayerSetup`). 1 by default: every device is player 1.
+    pub players: u8,
 }
 
 /// Start the boot warm-up (issue #101): `default` unless
@@ -191,6 +196,7 @@ impl RunConfig {
             build: None,
             precompile: PrecompileAtBoot::default(),
             threads: None,
+            players: 1,
         }
     }
 
@@ -752,6 +758,13 @@ struct Ctx {
     /// Serves `Platform::load_group` before every update.
     groups: GroupLoader,
     game: Box<dyn Game>,
+    /// `TRINO_RECORD` / `TRINO_REPLAY` (issue #67): what each update gets.
+    session: trino_platform_pc::replay_host::InputSession,
+    /// `TRINO_NET` (issue #67): the session runs online.
+    net: Option<net::NetHost>,
+    /// The window's title, and the online status last shown in it.
+    title: String,
+    net_label: String,
     last_frame: Instant,
     #[cfg(feature = "watch")]
     asset_events: std::sync::mpsc::Receiver<Vec<u32>>,
@@ -935,12 +948,42 @@ impl Host {
             q.begin(&mut renderer, &mut platform, hz);
             q
         });
+        // `trino.toml [players] max` (the baked `net/config`, issue #67).
+        let net_blob = trino_core::Platform::blob(
+            &platform,
+            trino_core::BlobId::from_path(trino_asset_pipeline::net::LOGICAL),
+        );
+        let max_players = net_blob
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .and_then(|t| {
+                t.lines().find_map(|l| {
+                    let (k, v) = l.split_once('=')?;
+                    (k.trim() == "max_players").then(|| v.trim().parse::<u8>().ok())?
+                })
+            })
+            .unwrap_or(cfg.players);
+        let net = match net::NetHost::from_env(net_blob) {
+            None => None,
+            Some(Ok(n)) => Some(n),
+            Some(Err(e)) => panic!("TRINO_NET: {e}"),
+        };
         let make = self.make.take().expect("game created once");
         let game = make(Vec2::new(w as f32, h as f32));
+        let mut session = trino_platform_pc::replay_host::InputSession::from_env(
+            &cfg.save_name,
+            (w as u16, h as u16),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        session.start(game.as_ref());
         window.request_redraw();
         let mut input = PcInput::new();
         if let Ok(t) = std::fs::read_to_string(cfg.input_file()) {
-            input.set_bindings(trino_platform_pc::input::bindings_from_text(&t));
+            input.set_all_bindings(trino_platform_pc::input::players_bindings_from_text(&t));
+        }
+        if max_players > 1 {
+            input
+                .seats_mut()
+                .set_setup(trino_core::PlayerSetup::up_to(max_players));
         }
         platform.publish_input(&input);
         let mut ctx = Ctx {
@@ -960,6 +1003,10 @@ impl Host {
             quality,
             groups,
             game,
+            session,
+            net,
+            title: cfg.title.clone(),
+            net_label: String::new(),
             last_frame: Instant::now(),
             #[cfg(feature = "watch")]
             asset_events,
@@ -1040,7 +1087,7 @@ fn apply_input(ctx: &mut Ctx, file: &Path) {
         }
         let _ = std::fs::write(
             file,
-            trino_platform_pc::input::bindings_to_text(ctx.input.bindings()),
+            trino_platform_pc::input::players_bindings_to_text(ctx.input.all_bindings()),
         );
     }
     ctx.platform.publish_input(&ctx.input);
@@ -1053,6 +1100,13 @@ impl ApplicationHandler for Host {
             && let Err(e) = ctx.renderer.save_pipeline_cache()
         {
             eprintln!("[trino] pipeline cache: {e}");
+        }
+        // A recording is written (a replay reported) when the window closes.
+        if let Some(ctx) = &mut self.ctx {
+            ctx.session.finish();
+            if let Some(n) = &ctx.net {
+                println!("{}", n.line());
+            }
         }
     }
 
@@ -1093,17 +1147,56 @@ impl ApplicationHandler for Host {
                 // Clamp dt: pauses and window drags must not teleport.
                 let dt = (now - ctx.last_frame).as_secs_f32().min(0.1);
                 ctx.last_frame = now;
-                let mut input = ctx.input.poll();
-                if let Some(s) = &mut ctx.store {
-                    s.input(&mut input, &mut ctx.platform);
+                // The players (issue #67): the game's seat requests, the
+                // devices, then a recording over them.
+                while let Some(r) = ctx.platform.players.take_request() {
+                    ctx.input.seats_mut().apply(r);
                 }
+                let mut live = ctx.input.poll_players();
+                if let Some(s) = &mut ctx.store {
+                    s.input(&mut live.players[0], &mut ctx.platform);
+                }
+                ctx.platform.players.publish(ctx.input.seats());
+                let Some((players, dt)) = ctx.session.input(&live, dt) else {
+                    // A replay ran out: its verdict, its last frame, exit.
+                    ctx.session.finish();
+                    if let Ok(path) = std::env::var("TRINO_SCREENSHOT") {
+                        let (w, h) = ctx.renderer.internal_size();
+                        let rgba = ctx.renderer.read_offscreen();
+                        match write_png(Path::new(&path), w, h, &rgba) {
+                            Ok(()) => println!("TRINO_SCREENSHOT: {path}"),
+                            Err(e) => eprintln!("TRINO_SCREENSHOT {path}: {e}"),
+                        }
+                    }
+                    event_loop.exit();
+                    return;
+                };
+                if ctx.session.is_replay() {
+                    ctx.platform.players.publish_players(&players);
+                }
+                let input = players.players[0];
                 let zone = trino_core::trace::Zone::begin("groups");
                 ctx.groups
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
                 zone.end();
                 let zone = trino_core::trace::Zone::begin("update");
-                ctx.game
-                    .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
+                if let Some(net) = &mut ctx.net {
+                    // Online (issue #67): the session advances the game;
+                    // this machine's devices are its seat.
+                    if net.frame(ctx.game.as_mut(), &mut ctx.platform, &mut ctx.audio, &input) {
+                        let p = *net.session.players();
+                        ctx.session.after(ctx.game.as_ref(), &p, net.session.dt());
+                    }
+                    if net.label != ctx.net_label {
+                        ctx.net_label = net.label.clone();
+                        ctx.window
+                            .set_title(&format!("{} — {}", ctx.title, ctx.net_label));
+                    }
+                } else {
+                    ctx.game
+                        .update_with(&mut ctx.platform, &input, &mut ctx.audio, dt);
+                    ctx.session.after(ctx.game.as_ref(), &players, dt);
+                }
                 zone.end();
                 let zone = trino_core::trace::Zone::begin("render");
                 ctx.renderer
@@ -1181,6 +1274,10 @@ impl ApplicationHandler for Host {
                             Ok(()) => println!("TRINO_SCREENSHOT: {path}"),
                             Err(e) => eprintln!("TRINO_SCREENSHOT {path}: {e}"),
                         }
+                    }
+                    ctx.session.finish();
+                    if let Some(n) = &ctx.net {
+                        println!("{}", n.line());
                     }
                     println!("TRINO_RUN_OK frames={}", self.frames);
                     event_loop.exit();

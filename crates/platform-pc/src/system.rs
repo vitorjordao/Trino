@@ -18,6 +18,7 @@ use trino_core::{
 
 use crate::input::{BINDABLE, BINDINGS, InputRequest, PcInput};
 use crate::quality::{HostedQuality, QualityRequest};
+use trino_core::MAX_PLAYERS;
 
 pub struct PcPlatform {
     start: Instant,
@@ -37,8 +38,11 @@ pub struct PcPlatform {
     input: Option<InputInfo>,
     pad_name: Option<String>,
     pad_family: Option<trino_core::PadFamily>,
-    /// Binding labels, [`BINDABLE`] order: keyboard, gamepad.
-    labels: [[Option<String>; 2]; BINDINGS],
+    /// Binding labels per player, [`BINDABLE`] order: keyboard, gamepad.
+    labels: [[[Option<String>; 2]; BINDINGS]; MAX_PLAYERS],
+    /// The local players (issue #67), published by the host before each
+    /// update.
+    pub players: trino_core::HostedPlayers,
     /// The game's last rebind/cancel/reset, for the host to apply.
     input_request: Option<InputRequest>,
     /// The simulated console's hardware tier ([`Platform::hw_tier`]).
@@ -89,6 +93,7 @@ impl PcPlatform {
             pad_name: None,
             pad_family: None,
             labels: Default::default(),
+            players: trino_core::HostedPlayers::new(),
             input_request: None,
             hw_tier: caps.hw_tier,
             quality: HostedQuality::new(caps),
@@ -181,11 +186,14 @@ impl PcPlatform {
         self.input = Some(input.info());
         self.pad_name = input.gamepad_name();
         self.pad_family = input.gamepad_family();
-        for (i, b) in BINDABLE.iter().enumerate() {
-            self.labels[i] = [
-                input.bindings().label(*b, BindDevice::Keyboard),
-                input.bindings().label(*b, BindDevice::Gamepad),
-            ];
+        for (p, labels) in self.labels.iter_mut().enumerate() {
+            let bindings = input.bindings_for(p as u8);
+            for (i, b) in BINDABLE.iter().enumerate() {
+                labels[i] = [
+                    bindings.label(*b, BindDevice::Keyboard),
+                    bindings.label(*b, BindDevice::Gamepad),
+                ];
+            }
         }
     }
 
@@ -193,7 +201,7 @@ impl PcPlatform {
     /// own: Steam Input's origins).
     pub fn set_gamepad_label(&mut self, button: trino_core::Button, label: Option<String>) {
         if let Some(i) = BINDABLE.iter().position(|b| *b == button) {
-            self.labels[i][1] = label;
+            self.labels[0][i][1] = label;
         }
     }
 
@@ -447,15 +455,23 @@ impl Platform for PcPlatform {
         self.pad_family
     }
 
-    fn binding_label(&self, button: Button, device: BindDevice) -> Option<&str> {
+    fn binding_label_for(&self, player: u8, button: Button, device: BindDevice) -> Option<&str> {
         let i = BINDABLE.iter().position(|b| *b == button)?;
-        self.labels[i][device as usize].as_deref()
+        self.labels.get(player as usize)?[i][device as usize].as_deref()
     }
 
-    fn rebind(&mut self, button: Button, device: BindDevice) {
-        if self.input.is_some() {
-            self.input_request = Some(InputRequest::Rebind(button, device));
+    fn rebind_player(&mut self, player: u8, button: Button, device: BindDevice) {
+        if self.input.is_some() && (player as usize) < MAX_PLAYERS {
+            self.input_request = Some(InputRequest::Rebind(player, button, device));
         }
+    }
+
+    fn hosted_players(&self) -> Option<&trino_core::HostedPlayers> {
+        Some(&self.players)
+    }
+
+    fn hosted_players_mut(&mut self) -> Option<&mut trino_core::HostedPlayers> {
+        Some(&mut self.players)
     }
 
     fn cancel_rebind(&mut self) {

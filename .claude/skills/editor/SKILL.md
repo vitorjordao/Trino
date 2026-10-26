@@ -70,7 +70,8 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_SCREENSHOT=out.png` | save a PNG of the whole window, then exit |
 | `TRINO_EDITOR_SCREENSHOT_FRAME=N` | …after N frames (default 30; use ~60 so thumbnails finish) |
 | `TRINO_EDITOR_SELECT=<name>[,<name>…]` | start with those entities selected (the first is active; gizmo + inspector visible) |
-| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project\|profiler` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab; `profiler`: the Profiler tab) |
+| `TRINO_EDITOR_TAB=scene\|game\|level\|animation\|mixer\|quality\|memory\|accessibility\|ui\|localization\|project\|profiler\|net` | focused center tab (`mixer`, `quality`, `memory`, `accessibility`: the bottom dock's Mixer, Quality or Memory tab; `project`: the Project tab; `profiler`: the Profiler tab; `net`: the Net tab, opened on demand) |
+| `TRINO_EDITOR_REPLAY=<file.trec>` | Play here replays it in the Game view (`TRINO_EDITOR_REPLAY_FRAME=N`: seeks there, paused); `TRINO_EDITOR_PLAY=record` starts recording; `TRINO_EDITOR_PLAYERS=1..4` simulated local seats (issue #67) |
 | `TRINO_EDITOR_TRACE=<file>[@session]` | the Profiler tab opens that trace (relative to the project, e.g. `target/traces/n64-trace.json@n64-hub`) as trace A on that session, and comes to front |
 | `TRINO_EDITOR_TRACE_B=<file>[@session]` | …and that one as trace B (compare); without `@session` B pairs with A's session (`pair_sessions`) |
 | `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements); `=physics` on the collision layers and their matrix (issue #66) |
@@ -494,6 +495,42 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
 - The Accessibility tab's Daltonize sets `preview.cvd_filter`, copied to both views'
   `cvd_filter` each frame (`TRINO_EDITOR_ACCESS=cvd=deuteranopia,cvd_filter=on`).
 - Kittest: `post_section_view_modes_glow_and_the_correction_preview`.
+
+## Players, replays and the Net tab (issue #67, ADR 0036)
+
+- **The Play here bar** (`viewport.rs` › `play_bar`, Game view while playing):
+  - **`Rec`** (`ViewAction::RecordPlay`): restarts the scene, then `begin_recording`.
+  - **`Save (n)`**: writes `recordings/<scene>-<n>.trec` (`App::save_recording`).
+  - **`Replay` ▸ file** (`App::replay_here`): restarts the scene, then `load_replay`.
+  - **The scrubber.** ⏮ / ⏯ / one frame, a slider, `n / total` and the hash status.
+    Any seek pauses, then `PlaySession::seek` loads the nearest snapshot (every 60
+    frames) and re-simulates.
+  - **The players combo and seat modes** (`play::PlayersSim`): P1 WASD + F G R T, P2
+    arrows + K L I O, P3/P4 as a bot, an idle pad or a copy of P1.
+  - **The play logic** lives in `play.rs`, which needs no UI:
+    `records_replays_and_scrubs_a_scene` covers it.
+- **The Net tab** (`panels/net.rs`, state in `net.rs`):
+  - its settings write `trino.toml` through `trino_asset_pipeline::net::set_in`, the
+    same as `cargo xtask net config set`;
+  - Start runs `cargo xtask net local …` (and the lobby) in the background and shows
+    the instances' `TRINO_NET` lines and the command.
+  - **It isn't in the default dock**, because the center strip is full at 960 px.
+    `Cmd::FocusTab` pushes a missing tab into the focused leaf (View ▸ Go to Net view,
+    `TRINO_EDITOR_TAB=net`).
+  - **Name its sliders** for kittest: `row()` puts the label beside the slider and names
+    the slider `<label> value` (`audio::name_slider`). A `Slider::text` label duplicates
+    the name and `get_by_label` finds two nodes.
+- **Hooks:**
+  - `TRINO_EDITOR_REPLAY=<file>` (with `TRINO_EDITOR_REPLAY_FRAME=N`: paused there);
+  - `TRINO_EDITOR_PLAY=record`;
+  - `TRINO_EDITOR_PLAYERS=2`.
+
+  Screenshot: `TRINO_EDITOR_TAB=game TRINO_EDITOR_REPLAY=target/recordings/
+  showcase-demo.trec TRINO_EDITOR_REPLAY_FRAME=200 TRINO_EDITOR_SCREENSHOT=…`. Write the
+  demo recording first: `cargo test -p trino-editor write_demo_recording -- --ignored`.
+- **Proof:** `play_here_records_replays_and_the_net_tab_writes_trino_toml`
+  (`--ignored --test-threads=1`) and the layout audit's "Net tab", "Play here recording"
+  and "Play here replay".
 
 ## Rules when changing the editor
 

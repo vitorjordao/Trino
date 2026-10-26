@@ -10,7 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use trino_core::{DisplayInfo, DisplaySettings, Game, Input, InputInfo, Renderer, Vec2};
+use trino_core::{DisplayInfo, DisplaySettings, Game, InputInfo, Renderer, Vec2};
 use trino_render_wgpu::sim::native_internal;
 use trino_render_wgpu::{FrameMeter, PcRenderer, SimProfile, WebBackend};
 use wasm_bindgen::JsCast;
@@ -543,14 +543,27 @@ impl WebHost {
     }
 
     /// The frame's input: gestures unlock audio, the pointer maps to game
-    /// pixels.
+    /// pixels. Player 0 of [`poll_players`](Self::poll_players).
     pub fn poll_input(&mut self) -> trino_core::InputState {
+        self.poll_players().players[0]
+    }
+
+    /// Every local player this frame (issue #67): the game's seat requests
+    /// applied, the keyboard and pads folded by seat, published to the
+    /// platform (`Platform::players`).
+    pub fn poll_players(&mut self) -> trino_core::PlayersInput {
+        use trino_core::Input as _;
         if self.input.take_gesture() {
             self.audio.unlock();
         }
         let px = self.input.shared.borrow().pointer_px;
         self.input.pointer = px.and_then(|(x, y)| self.renderer.window_to_pointer(x, y));
-        let state = self.input.poll();
+        while let Some(r) = self.platform.players.take_request() {
+            self.input.seats.apply(r);
+        }
+        let players = self.input.poll_players();
+        self.platform.players.publish(&self.input.seats);
+        let state = players.players[0];
         self.platform.input = Some(InputInfo {
             gamepad: self.input.gamepad_status(),
             capturing: None,
@@ -577,7 +590,7 @@ impl WebHost {
             crate::js::trino_info("input", &summary);
             self.last_input = summary;
         }
-        state
+        players
     }
 
     /// Per-frame housekeeping after the game ran: audio (streams, voices,
@@ -743,25 +756,54 @@ pub fn run_game<G: Game + 'static>(
             return fail(&e);
         }
         let mut game = make(host.screen());
+        let query = Query::from_location();
+        // `?replay=<url>` / `?record` (issue #67): the game is the save's
+        // name, as on the PC.
+        let screen = host.screen();
+        let name = host.config.save_name.clone();
+        let mut session = match crate::replay::WebSession::from_query(
+            &query,
+            &name,
+            (screen.x as u16, screen.y as u16),
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => return fail(&e),
+        };
+        session.start(&game);
         // `?frames=N`: a smoke run (`cargo xtask test web` on a project),
         // like the PC's TRINO_SMOKE_FRAMES.
-        let smoke = Query::from_location()
-            .get("frames")
-            .and_then(|f| f.parse::<u64>().ok());
+        let smoke = query.get("frames").and_then(|f| f.parse::<u64>().ok());
         let mut frames = 0u64;
         run(host, move |host, dt| {
             if let Some(screen) = host.sync_size() {
                 game.resize(screen);
             }
-            let input = host.poll_input();
+            let live = host.poll_players();
+            let Some((players, dt)) = session.input(&live, dt) else {
+                // The replay ended: its verdict once, then its last frame
+                // stays on the canvas (a screenshot can take it).
+                if let Some(pass) = session.finish() {
+                    crate::js::trino_finish(pass, (!pass).then(|| "replay diverged".to_string()));
+                }
+                game.render(&mut host.renderer);
+                host.end_frame();
+                return Flow::Continue;
+            };
+            if session.is_replay() {
+                host.platform.players.publish_players(&players);
+            }
             host.pump_groups();
-            game.update_with(&mut host.platform, &input, &mut host.audio, dt);
+            game.update_with(&mut host.platform, &players.players[0], &mut host.audio, dt);
+            session.after(&game, &players, dt);
             host.renderer
                 .apply_access(&trino_core::Platform::access(&host.platform));
             game.render(&mut host.renderer);
             host.end_frame();
             frames += 1;
             if smoke.is_some_and(|n| frames >= n) {
+                session.finish();
                 crate::js::log(&host.frame_line("game"));
                 crate::js::log(&host.audio_line());
                 crate::js::trino_finish(true, None);

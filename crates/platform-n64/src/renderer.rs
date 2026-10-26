@@ -206,6 +206,12 @@ const GRAVE_FRAMES: u32 = 4;
 
 /// Memo slots (308 bytes each): a few hundred draws per frame rarely share one.
 const MEMO_SLOTS: usize = 1024;
+/// The memo on the base N64 (4 MB): 768 slots (~228 KB instead of ~304 KB).
+/// Direct-mapped, so fewer slots mean more collisions, but the gated
+/// scenes draw at most ~70 draws a frame (Solid Eleven's match; castle64
+/// ~27), ten times fewer than the slots; the 78 KB went to the self-test's
+/// top free block, which new code had eaten (#110, #67).
+const MEMO_SLOTS_BASE: usize = 768;
 /// A memo entry: the command, then `RspPan` (s, q, r2) and the view
 /// translation the command was made for, as float bits, then a colored
 /// command's color words (`rsp::color_words`) or a textured command's
@@ -243,6 +249,28 @@ impl N64Renderer {
         drop_empty(&mut self.pending_ring_rsp);
         drop_empty(&mut self.pending_blobs);
         drop_empty(&mut self.pending_shadow);
+    }
+
+    /// Size the CPU batch for `tris` triangles before a frame that needs
+    /// them, exactly and without a transient copy: a `Vec` that doubles
+    /// from 512 to 1 024 triangles holds its old 45 KB block while it asks
+    /// for a 90 KB one, which a fragmented base N64 heap doesn't have, and
+    /// the two together set the self-test's heap peak (#110, #67). Empty
+    /// buffers only (call between frames); bigger ones stay as they are.
+    pub fn reserve_batch(&mut self, tris: usize) {
+        fn exact<T>(v: &mut Vec<T>, n: usize) {
+            if v.is_empty() && v.capacity() < n {
+                // Free the old block first: `*v = with_capacity` would
+                // allocate the new one before dropping it.
+                *v = Vec::new();
+                *v = Vec::with_capacity(n);
+            }
+        }
+        exact(&mut self.pending_tris, tris);
+        exact(&mut self.order, tris);
+        if self.pending_tex.capacity() > 0 {
+            exact(&mut self.pending_tex, tris);
+        }
     }
 
     pub fn start_profile(&mut self) {
@@ -303,7 +331,7 @@ impl N64Renderer {
             pending_rsp: Vec::new(),
             rsp_cull: 0,
             rsp_stream: false,
-            memo: alloc::vec![MemoSlot::EMPTY; MEMO_SLOTS],
+            memo: alloc::vec![MemoSlot::EMPTY; memo_slots()],
             memo_gen: 0,
             rsp_flat: BTreeMap::new(),
             rsp_rigid: BTreeMap::new(),
@@ -2692,3 +2720,13 @@ const EMPTY_TRI: ScreenTri = ScreenTri {
     uv: [Vec2::ZERO; 3],
     w: [1.0; 3],
 };
+
+/// The draw memo's slots for this console: [`MEMO_SLOTS_BASE`] without
+/// the Expansion Pak.
+fn memo_slots() -> usize {
+    if crate::runtime::memory_size() > 4 * 1024 * 1024 {
+        MEMO_SLOTS
+    } else {
+        MEMO_SLOTS_BASE
+    }
+}

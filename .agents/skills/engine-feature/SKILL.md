@@ -430,3 +430,28 @@ verified by `crates/core/tests/physics_{world,controller}.rs` and the self-test'
   - The f32 path is cross-target exact because Rust never contracts to FMA and the
     core's `sqrt` is bit-defined. Never call `f32::sqrt` or `mul_add` in physics.
 
+
+## Players, recordings, netplay (#67, ADR 0036)
+
+- **A per-player input is a `Platform` method over a `Hosted*` struct**
+  (`HostedPlayers`), never a new `update` argument. The hot-reload ABI keeps its
+  signatures; player 0 is the `input` already passed. Every backend's host publishes it
+  before the update, test fakes report `NONE`, and the game's requests come back to the
+  input's `Seats` after the frame.
+- **Prove "one player is unchanged" by construction:** with `max` 1, `Seats` folds every
+  device through `InputState::merge`, which reproduces the old `merge_pad`, and the old
+  input tests run unchanged.
+- **The cheapest cross-platform gate is a self-test step that replays a PC recording.**
+  It runs on every target CI already boots. Make the step re-record too and compare the
+  bytes in the harness: that checks the console's recorder, its hashes and its channel
+  in one go. castle64's `replay` step does this.
+- **A `Game` method a host calls through the hot-reload boundary needs an export**
+  (`trino_game_state_hash` …) and a `GAME_API_VERSION` bump. `apps/pc`'s reload build
+  wraps the export in a `Game` (`HotHash`).
+- **A std crate the hosts share but the platform crates may not depend on** (ggrs,
+  sockets) gets its own name rule in `dep_graph.rs` (`trino-net`: core only) and plugs
+  into `trino-runner-pc`, `apps/web` and the editor.
+- **Measure what a feature would cost on a console before writing its transport.** The
+  3DS local-wireless evaluation is `rollback_cost` on the hosts, logged by the football
+  template's self-tests. Azahar doesn't time the 3DS's clocks, so say so beside its
+  numbers.

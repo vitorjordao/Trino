@@ -475,6 +475,45 @@ Physics is core code: every target runs the same bits.
     venue a ray falls from 1.8 ms to 94 µs and a controller step from 749 to 153 µs.
 - **Measuring.** `TRINO_PHYSICS_COST:` in `cargo xtask test n64|3ds` prints both ways.
 
+## Players, recordings and netplay on each platform (ADR 0036)
+
+| Target | Local players | Record / replay | Network |
+|---|---|---|---|
+| PC | the keyboard and every pad; one player by default, up to four with `set_player_setup` (`trino.toml [players] max`); bindings per player | `TRINO_RECORD`, `TRINO_REPLAY` (+ `TRINO_REPLAY_UNTIL`, `TRINO_SCREENSHOT`); crash reports keep the last minute | UDP: `TRINO_NET=host:<port>`, `join:<ip:port>`, `lobby:<code>@<ip:port>`; `TRINO_NET_SIM` |
+| Web | the keyboard and the Gamepad API's pads, as on the PC | `?record` (the recording in `__trino.info.recording`), `?replay=<url>` | WebRTC data channels: `?net=<code>&lobby=ws://<ip:port>` |
+| N64 | four controller ports, port k = player k (an empty port reads disconnected; ares plugs all four) | `cargo xtask replay run --platform n64`; recording over ISViewer / USB (`TRINO_REC:` lines) | none (no network hardware) |
+| 3DS | one player | `cargo xtask replay run --platform 3ds`; recording over the debug channel | none yet (the local-wireless evaluation below) |
+
+- **The proof.** The self-test's `replay` step plays `assets/shared/replays/
+  castle64_green.trec` (recorded on the PC) on every target, hash for hash, and each
+  target sends its own re-recording back byte for byte. The football template's
+  console self-tests do the same with Solid Eleven's two-player recording.
+- **Float control words** (logged by the step):
+  - N64 `FCR31 0x01800e04`: flush-to-zero, traps on invalid, divide-by-zero and
+    overflow;
+  - 3DS `FPSCR 0x83000013`: RunFast, flush-to-zero and default NaN.
+
+  The PC keeps gradual underflow, so a sim that makes subnormals would differ, and the
+  `strict-determinism` feature catches that on the PC.
+- **What a rollback costs** (`TRINO_ROLLBACK:`, the football template's self-tests,
+  Solid Eleven's match):
+
+  | Target | Snapshot | Save | Load | Update | 8-frame rollback |
+  |---|---|---|---|---|---|
+  | N64 (ares) | 34.6 KB | 3.4 ms | 3.3 ms | 4.2 ms | 64.6 ms |
+  | 3DS (Azahar, old and New) | 34.6 KB | 0.13 ms | 0.13 ms | 1.37 ms | 12.1 ms |
+
+  ares times the N64's CPU; Azahar doesn't time the 3DS's clocks (the old and the New
+  3DS read alike), so the 3DS figures are a lower bound until measured on hardware.
+- **3DS local wireless.** An 8-frame rollback fits a 30 fps frame only on a New 3DS
+  that measures close to Azahar. Delay-based lockstep costs one update a frame (1.4 ms),
+  so it is the 3DS's mode. The `uds` transport isn't written: two units can't run in CI,
+  and the follow-up issue carries the plan.
+- **The base N64's heap.** The players, replay and host code is ~45 KB of every N64
+  image, which the 4 MB console pays from its heap. Without the Expansion Pak the draw
+  memo has 768 slots instead of 1 024 (−78 KB), which leaves the self-test's peak
+  213 KB under the RAM (gate: 128 KB). `TRINO_HEAP … top=` shows the top free block.
+
 ## Traces on each platform (ADR 0030)
 
 | Target | Clock | Channel | Record with |

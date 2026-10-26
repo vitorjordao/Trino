@@ -10,6 +10,7 @@ pub mod localization;
 pub mod lod;
 pub mod memory;
 pub mod mixer;
+pub mod net;
 pub mod particles;
 pub mod platforms;
 pub mod profiler;

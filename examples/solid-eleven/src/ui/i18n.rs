@@ -267,12 +267,13 @@ strings! {
     SideHome => "side_home",
     SideAway => "side_away",
     SideCpu => "side_cpu",
+    SideTwo => "side_two",
 }
 
 impl S {
     /// The last string id: tests walk the enum up to it, so a string added
     /// after it must move it.
-    pub const LAST: S = S::SideCpu;
+    pub const LAST: S = S::SideTwo;
 
     /// A hair style's name, by [`crate::render::HairStyle`] index.
     pub fn hair_style(i: usize) -> S {

@@ -25,6 +25,8 @@ pub struct N3dsPlatform {
     /// Achievements and stats for the session (issue #61): the game's save
     /// holds them (`AchievementState::pack_for`, `restore_achievements`).
     services: trino_core::HostedServices,
+    /// The one player (issue #67), published by the host before each update.
+    pub players: trino_core::HostedPlayers,
 }
 
 impl N3dsPlatform {
@@ -36,6 +38,7 @@ impl N3dsPlatform {
             groups: crate::assets::Groups::new(),
             access: trino_core::HostedAccess::new(),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
+            players: trino_core::HostedPlayers::new(),
         }
     }
 
@@ -122,6 +125,14 @@ impl Platform for N3dsPlatform {
 
     fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
         Some(&mut self.services)
+    }
+
+    fn hosted_players(&self) -> Option<&trino_core::HostedPlayers> {
+        Some(&self.players)
+    }
+
+    fn hosted_players_mut(&mut self) -> Option<&mut trino_core::HostedPlayers> {
+        Some(&mut self.players)
     }
 
     /// The system setting, read at boot: a bare language (`pt`, `en`).

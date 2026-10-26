@@ -21,6 +21,8 @@
 //!   loads.)
 //! - `<hash>.mixer`: the project's mix (`assets/audio.toml`) as `TMIX`
 //!   (`trino_core::MixerConfig`), logical path `audio/mixer`.
+//! - `<hash>.blob`, logical path `net/config` (PC and Web, issue #67):
+//!   `trino.toml`'s `[players]` and `[net]` as `key = value` lines.
 //! - `<hash>.blob`, logical path `quality/presets` (PC and Web): the
 //!   project's quality presets (`crate::quality`), `key=value` text.
 //!
@@ -313,6 +315,43 @@ pub fn bake_all_with(
             let blob = q.bake(root)?;
             let file = format!("{id:08x}.blob");
             let changed = write_if_changed(&out_dir.join(&file), &blob)?;
+            Ok(Some(BakedEntry {
+                logical,
+                id,
+                kind: "blob",
+                file,
+                format: "TEXT".into(),
+                preview_3ds: None,
+                compressed: None,
+                ktx2: None,
+                graded: None,
+                changed,
+                groups: Vec::new(),
+            }))
+        });
+        match result {
+            Ok(Some(entry)) => report.entries.push(entry),
+            Ok(None) => {}
+            Err(e) => errors.push(e),
+        }
+    }
+
+    // `trino.toml`'s `[players]` and `[net]` → the `net/config` blob, for
+    // the PC and the Web (issue #67: the hosts that seat pads and run
+    // network sessions). Nothing when the project declares neither.
+    if matches!(platform, Platform::Pc | Platform::Web) {
+        let root = assets_root.parent().unwrap_or(assets_root);
+        let result = crate::net::ProjectNet::load(root).and_then(|n| {
+            if !n.declared {
+                return Ok(None);
+            }
+            let logical = crate::net::LOGICAL.to_string();
+            let id = asset_id(&logical);
+            if let Some(other) = by_id.insert(id, logical.clone()) {
+                return Err(format!("hash collision between `{other}` and `{logical}`"));
+            }
+            let file = format!("{id:08x}.blob");
+            let changed = write_if_changed(&out_dir.join(&file), &n.bake())?;
             Ok(Some(BakedEntry {
                 logical,
                 id,

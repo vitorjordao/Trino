@@ -40,8 +40,8 @@
 //! mapping. Bound keys set theirs too (Z sets `Key::Z` and presses A).
 
 use trino_core::{
-    BindDevice, Button, GamepadStatus, Input, InputInfo, InputState, Key, PadFamily, PointerButton,
-    Vec2,
+    BindDevice, Button, DeviceKind, GamepadStatus, Input, InputInfo, InputState, Key, MAX_PLAYERS,
+    PadFamily, PlayersInput, PointerButton, Seats, Vec2,
 };
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -507,23 +507,75 @@ fn pads_is_dash(rest: &str) -> bool {
     rest.split_once('|').is_some_and(|(_, p)| p.trim() == "-")
 }
 
+/// Every player's bindings as text: player 1's lines as
+/// [`bindings_to_text`] writes them (a single-player file is unchanged
+/// apart from its first line), then, for each other player whose bindings
+/// differ from the defaults, the same lines prefixed `P2 `, `P3 `, `P4 `.
+/// The first line names the version (`# trino-input 2`); readers before
+/// issue #67 skip it and the prefixed lines.
+pub fn players_bindings_to_text(all: &[Bindings; MAX_PLAYERS]) -> String {
+    let mut out = String::from("# trino-input 2\n");
+    out.push_str(&bindings_to_text(&all[0]));
+    for (p, b) in all.iter().enumerate().skip(1) {
+        if *b == Bindings::default() {
+            continue;
+        }
+        for line in bindings_to_text(b).lines() {
+            out.push_str(&format!("P{} {line}\n", p + 1));
+        }
+    }
+    out
+}
+
+/// Parse [`players_bindings_to_text`] (and every older file: unprefixed
+/// lines are player 1's, a player without lines keeps the defaults).
+pub fn players_bindings_from_text(text: &str) -> [Bindings; MAX_PLAYERS] {
+    let mut per: [String; MAX_PLAYERS] = Default::default();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let player = t
+            .strip_prefix('P')
+            .and_then(|r| r.split_once(' '))
+            .and_then(|(n, rest)| Some((n.parse::<usize>().ok()?, rest)))
+            .filter(|(n, _)| (2..=MAX_PLAYERS).contains(n));
+        match player {
+            Some((n, rest)) => {
+                per[n - 1].push_str(rest);
+                per[n - 1].push('\n');
+            }
+            None => {
+                per[0].push_str(line);
+                per[0].push('\n');
+            }
+        }
+    }
+    core::array::from_fn(|p| bindings_from_text(&per[p]))
+}
+
 /// What the host asks of the input backend for the game
 /// ([`trino_core::Platform::rebind`] and friends, through
 /// [`crate::PcPlatform::take_input_request`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InputRequest {
-    Rebind(Button, BindDevice),
+    /// Player `.0`'s `button` on `device` takes the next press.
+    Rebind(u8, Button, BindDevice),
     Cancel,
+    /// Every player's bindings back to the defaults.
     Reset,
 }
 
 #[derive(Default)]
 pub struct PcInput {
+    /// The keyboard and mouse: keys, WASD stick, pointer, wheel. Its bound
+    /// buttons come from the held keys at each poll (its seat's bindings).
     state: InputState,
+    /// Bindable keys held, in press order.
+    held: Vec<KeyCode>,
     // W, A, S, D held state for the digital stick.
     wasd: [bool; 4],
-    bindings: Bindings,
-    capture: Option<(Button, BindDevice)>,
+    /// Each player's bindings (issue #67): a device plays with its seat's.
+    bindings: [Bindings; MAX_PLAYERS],
+    capture: Option<(u8, Button, BindDevice)>,
     /// The bindings changed since [`PcInput::take_changed`] (persist them).
     changed: bool,
     /// The pad button that just completed a rebind: it presses nothing
@@ -531,8 +583,23 @@ pub struct PcInput {
     held_after_bind: Option<PadButton>,
     /// The first connected pad as the pad layer names it ([`PcInput::note_pad`]).
     pad: Option<PadIdent>,
+    /// The pads this frame, by the pad layer's own id: what
+    /// [`feed_pads`](Self::feed_pads) was told.
+    pads_now: Vec<FedPad>,
+    /// The keyboard and the pads as devices with seats (issue #67).
+    seats: Seats,
     #[cfg(feature = "gamepad")]
-    pads: Option<gilrs::Gilrs>,
+    gilrs: Option<gilrs::Gilrs>,
+}
+
+/// One pad as the pad layer (or a test, or the editor's split-input
+/// simulator) reports it for a frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FedPad {
+    /// The pad layer's id (stable while the pad stays connected).
+    pub key: u32,
+    pub reading: PadReading,
+    pub family: Option<PadFamily>,
 }
 
 /// A connected pad's identity, copied out of the pad layer: its name and,
@@ -560,7 +627,7 @@ impl PcInput {
             // No pad subsystem (headless CI, missing permissions): keyboard
             // and mouse still work.
             Self {
-                pads: gilrs::Gilrs::new().ok(),
+                gilrs: gilrs::Gilrs::new().ok(),
                 ..Self::default()
             }
         }
@@ -568,36 +635,60 @@ impl PcInput {
         Self::default()
     }
 
-    /// The bindings in effect.
+    /// Player 1's bindings.
     pub fn bindings(&self) -> &Bindings {
+        &self.bindings[0]
+    }
+
+    /// Player `player`'s bindings (player 1's past [`MAX_PLAYERS`]).
+    pub fn bindings_for(&self, player: u8) -> &Bindings {
+        &self.bindings[(player as usize).min(MAX_PLAYERS - 1)]
+    }
+
+    /// Every player's bindings (what the runner persists).
+    pub fn all_bindings(&self) -> &[Bindings; MAX_PLAYERS] {
         &self.bindings
     }
 
-    /// Replace the bindings (a saved file, at start-up). Buttons held by the
-    /// old ones are released.
+    /// Replace player 1's bindings (a saved file, at start-up). Keys held
+    /// under the old ones are released.
     pub fn set_bindings(&mut self, b: Bindings) {
-        self.bindings = b;
-        for button in BINDABLE {
-            self.state.set(button, false);
-        }
+        self.bindings[0] = b;
+        self.held.clear();
+    }
+
+    /// Replace every player's bindings (a saved file, at start-up).
+    pub fn set_all_bindings(&mut self, all: [Bindings; MAX_PLAYERS]) {
+        self.bindings = all;
+        self.held.clear();
+    }
+
+    /// The keyboard and pads as devices with seats.
+    pub fn seats(&self) -> &Seats {
+        &self.seats
+    }
+
+    pub fn seats_mut(&mut self) -> &mut Seats {
+        &mut self.seats
     }
 
     /// Start or stop a rebind, or reset (from [`crate::PcPlatform`]).
     pub fn apply(&mut self, req: InputRequest) {
         match req {
-            InputRequest::Rebind(button, device) => {
+            InputRequest::Rebind(player, button, device) => {
                 // A pad rebind needs a pad layer to hear the press.
                 if device == BindDevice::Gamepad
                     && self.gamepad_status() == GamepadStatus::Unsupported
                 {
                     return;
                 }
-                self.capture = Some((button, device));
+                let player = player.min(MAX_PLAYERS as u8 - 1);
+                self.capture = Some((player, button, device));
             }
             InputRequest::Cancel => self.capture = None,
             InputRequest::Reset => {
                 self.capture = None;
-                self.set_bindings(Bindings::default());
+                self.set_all_bindings([Bindings::default(); MAX_PLAYERS]);
                 self.changed = true;
             }
         }
@@ -612,21 +703,31 @@ impl PcInput {
     pub fn info(&self) -> InputInfo {
         InputInfo {
             gamepad: self.gamepad_status(),
-            capturing: self.capture,
+            capturing: self.capture.map(|(_, b, d)| (b, d)),
         }
+    }
+
+    /// The player a pending rebind is for.
+    pub fn capturing_player(&self) -> Option<u8> {
+        self.capture.map(|(p, _, _)| p)
     }
 
     pub fn gamepad_status(&self) -> GamepadStatus {
         #[cfg(feature = "gamepad")]
         {
-            match &self.pads {
+            match &self.gilrs {
                 None => GamepadStatus::Unsupported,
                 Some(g) if g.gamepads().next().is_some() => GamepadStatus::Connected,
+                Some(_) if !self.pads_now.is_empty() => GamepadStatus::Connected,
                 Some(_) => GamepadStatus::Disconnected,
             }
         }
         #[cfg(not(feature = "gamepad"))]
-        GamepadStatus::Unsupported
+        if self.pads_now.is_empty() {
+            GamepadStatus::Unsupported
+        } else {
+            GamepadStatus::Connected
+        }
     }
 
     /// The first connected gamepad's name.
@@ -636,7 +737,7 @@ impl PcInput {
         }
         #[cfg(feature = "gamepad")]
         {
-            self.pads
+            self.gilrs
                 .as_ref()
                 .and_then(|g| g.gamepads().next().map(|(_, p)| p.name().to_string()))
         }
@@ -657,11 +758,24 @@ impl PcInput {
         self.pad = pad;
     }
 
+    /// The pads connected this frame (the gilrs glue calls it before every
+    /// poll; tests and the editor's split-input simulator call it
+    /// directly). Each becomes a [`DeviceKind::Gamepad`] with its seat.
+    pub fn feed_pads(&mut self, pads: &[FedPad]) {
+        self.pads_now.clear();
+        self.pads_now.extend_from_slice(pads);
+        if let Some(h) = self.held_after_bind
+            && !pads.iter().any(|p| p.reading.is_held(h))
+        {
+            self.held_after_bind = None;
+        }
+    }
+
     /// A pad button went down: completes a pending pad rebind (true), else
     /// nothing.
     pub fn pad_pressed(&mut self, pad: PadButton) -> bool {
-        if let Some((button, BindDevice::Gamepad)) = self.capture {
-            self.bindings.bind_pad(button, pad);
+        if let Some((player, button, BindDevice::Gamepad)) = self.capture {
+            self.bindings[player as usize].bind_pad(button, pad);
             self.capture = None;
             self.changed = true;
             self.held_after_bind = Some(pad);
@@ -680,20 +794,22 @@ impl PcInput {
                 self.capture = None;
                 return;
             }
-            if let Some((button, BindDevice::Keyboard)) = self.capture
+            if let Some((player, button, BindDevice::Keyboard)) = self.capture
                 && key_label(code).is_some()
             {
-                self.state.set(button, false);
-                self.bindings.bind_key(button, code);
+                self.held.retain(|k| *k != code);
+                self.bindings[player as usize].bind_key(button, code);
                 self.capture = None;
                 self.changed = true;
                 return;
             }
         }
-        for (i, button) in BINDABLE.iter().enumerate() {
-            if self.bindings.keys[i] == Some(code) {
-                self.state.set(*button, down);
+        if down {
+            if !self.held.contains(&code) {
+                self.held.push(code);
             }
+        } else {
+            self.held.retain(|k| *k != code);
         }
         for k in keys_for(code) {
             self.state.set_key(*k, down);
@@ -710,6 +826,24 @@ impl PcInput {
             (self.wasd[3] as i8 - self.wasd[1] as i8) as f32,
             (self.wasd[0] as i8 - self.wasd[2] as i8) as f32,
         );
+    }
+
+    /// The keyboard's input with `bindings`: its keys, stick and pointer,
+    /// the buttons its held keys are bound to, full triggers for keys on
+    /// L2/R2.
+    fn keyboard_state(&self, bindings: &Bindings) -> InputState {
+        let mut state = self.state;
+        for (i, button) in BINDABLE.iter().enumerate() {
+            if bindings.keys[i].is_some_and(|k| self.held.contains(&k)) {
+                state.set(*button, true);
+            }
+        }
+        // Keys bound to L2/R2 are fully pulled triggers.
+        state.triggers = Vec2::new(
+            state.is_down(Button::L2) as u8 as f32,
+            state.is_down(Button::R2) as u8 as f32,
+        );
+        state
     }
 }
 
@@ -831,14 +965,18 @@ fn fold_stick(into: &mut Vec2, pad: Vec2) -> bool {
 }
 
 impl PcInput {
-    /// Fold one gamepad into `state`, as [`Input::poll`] does for every
-    /// connected pad: bound buttons are OR'ed in, the stronger stick wins
-    /// (each of the two), triggers take the larger value. Sets
-    /// [`InputState::pad`] when a button, a stick past the deadzone or a
-    /// trigger past a quarter is used.
+    /// Fold one gamepad into `state` with player 1's bindings, as
+    /// [`Input::poll`] does for every pad on player 1: bound buttons are
+    /// OR'ed in, the stronger stick wins (each of the two), triggers take
+    /// the larger value. Sets [`InputState::pad`] when a button, a stick
+    /// past the deadzone or a trigger past a quarter is used.
     pub fn merge_pad(&self, state: &mut InputState, pad: &PadReading) {
+        self.merge_pad_with(&self.bindings[0], state, pad);
+    }
+
+    fn merge_pad_with(&self, bindings: &Bindings, state: &mut InputState, pad: &PadReading) {
         for (i, to) in BINDABLE.iter().enumerate() {
-            for from in self.bindings.pad[i].iter().flatten() {
+            for from in bindings.pad[i].iter().flatten() {
                 if Some(*from) != self.held_after_bind && pad.is_held(*from) {
                     state.set(*to, true);
                     state.pad = true;
@@ -859,6 +997,15 @@ impl PcInput {
             state.pad = true;
         }
         state.triggers = Vec2::new(state.triggers.x.max(t.x), state.triggers.y.max(t.y));
+    }
+
+    /// The bindings a device seated on `seat` plays with (player 1's when
+    /// unseated, or for one player).
+    fn seat_bindings(&self, seat: Option<u8>) -> &Bindings {
+        match seat {
+            Some(s) if self.seats.setup().max > 1 => self.bindings_for(s),
+            _ => &self.bindings[0],
+        }
     }
 }
 
@@ -892,12 +1039,12 @@ impl PcInput {
         r
     }
 
-    /// Fold every connected gamepad into `state` ([`PcInput::merge_pad`]).
-    fn merge_pads(&mut self, state: &mut InputState) {
+    /// Read every connected gamepad ([`PcInput::feed_pads`]).
+    fn read_pads(&mut self) {
         use gilrs::EventType;
         let mut pressed = Vec::new();
         {
-            let Some(g) = self.pads.as_mut() else { return };
+            let Some(g) = self.gilrs.as_mut() else { return };
             while let Some(ev) = g.next_event() {
                 if let EventType::ButtonPressed(b, _) = ev.event
                     && let Some(p) = PadButton::from_gilrs(b)
@@ -909,39 +1056,71 @@ impl PcInput {
         for p in pressed {
             self.pad_pressed(p);
         }
-        let Some(g) = self.pads.as_ref() else { return };
-        let readings: Vec<PadReading> = g.gamepads().map(|(_, p)| Self::read_gilrs(&p)).collect();
+        let Some(g) = self.gilrs.as_ref() else { return };
+        let fed: Vec<FedPad> = g
+            .gamepads()
+            .map(|(id, p)| FedPad {
+                key: usize::from(id) as u32,
+                reading: Self::read_gilrs(&p),
+                family: Some(
+                    PadIdent {
+                        name: p.name().to_string(),
+                        vendor: p.vendor_id(),
+                        product: p.product_id(),
+                    }
+                    .family(),
+                ),
+            })
+            .collect();
         let first = g.gamepads().next().map(|(_, p)| PadIdent {
             name: p.name().to_string(),
             vendor: p.vendor_id(),
             product: p.product_id(),
         });
         self.note_pad(first);
-        if let Some(h) = self.held_after_bind
-            && !readings.iter().any(|r| r.is_held(h))
-        {
-            self.held_after_bind = None;
-        }
-        for r in &readings {
-            self.merge_pad(state, r);
+        // No pad on gilrs leaves what a test or the editor fed this frame.
+        if !fed.is_empty() || self.pads_now.is_empty() {
+            self.feed_pads(&fed);
         }
     }
 }
 
 impl Input for PcInput {
     fn poll(&mut self) -> InputState {
-        #[allow(unused_mut)]
-        let mut state = self.state;
-        // Keys bound to L2/R2 are fully pulled triggers.
-        state.triggers = Vec2::new(
-            state.is_down(Button::L2) as u8 as f32,
-            state.is_down(Button::R2) as u8 as f32,
-        );
+        self.poll_players().players[0]
+    }
+
+    /// The keyboard and every pad as devices, folded by seat (issue #67).
+    /// With one player (the default) every device is player 0: the
+    /// keyboard's state with each pad merged in, as before #67.
+    fn poll_players(&mut self) -> PlayersInput {
         #[cfg(feature = "gamepad")]
-        self.merge_pads(&mut state);
+        self.read_pads();
+        self.seats.begin();
+        // Each device is reported first to learn its seat (a new one is
+        // seated then), then again with its input under that seat's
+        // bindings.
+        let kb_seat = self
+            .seats
+            .report(DeviceKind::Keyboard, 0, None, InputState::IDLE)
+            .and_then(|id| self.seats.seat_of(id));
+        let kb = self.keyboard_state(self.seat_bindings(kb_seat.or(Some(0))));
+        self.seats.report(DeviceKind::Keyboard, 0, None, kb);
+        let pads = core::mem::take(&mut self.pads_now);
+        for p in &pads {
+            let seat = self
+                .seats
+                .report(DeviceKind::Gamepad, p.key, p.family, InputState::IDLE)
+                .and_then(|id| self.seats.seat_of(id));
+            let mut state = InputState::IDLE;
+            self.merge_pad_with(self.seat_bindings(seat), &mut state, &p.reading);
+            self.seats
+                .report(DeviceKind::Gamepad, p.key, p.family, state);
+        }
+        self.pads_now = pads;
         // The wheel is a per-frame delta; everything else is held state.
         self.state.wheel = 0.0;
-        state
+        *self.seats.finish()
     }
 }
 

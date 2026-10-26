@@ -31,7 +31,10 @@
 /// 3: `InputState` gained the pointer (`pointer`, pointer buttons, `wheel`).
 /// 4: `InputState` gained the full keyboard (`keys` is a 128-bit `KeySet`),
 /// `right_stick`, `triggers` and the L2/R2/L3/R3 buttons (a `u32` mask).
-pub const GAME_API_VERSION: u32 = 4;
+/// 5: the state exports for recordings and rollback (issue #67):
+/// `trino_game_state_hash`, `trino_game_state_size`, `trino_game_save_state`,
+/// `trino_game_load_state`.
+pub const GAME_API_VERSION: u32 = 5;
 
 /// Generates the hot-reload exports for a game state type implementing
 /// `trino_core::Game`:
@@ -43,7 +46,9 @@ pub const GAME_API_VERSION: u32 = 4;
 /// ```
 ///
 /// Exports: `trino_game_api_version`, `trino_game_update`,
-/// `trino_game_render`.
+/// `trino_game_render`, and the state a recording checks and a rollback
+/// session snapshots (`trino_game_state_hash`, `trino_game_state_size`,
+/// `trino_game_save_state`, `trino_game_load_state`).
 #[macro_export]
 macro_rules! export_game {
     ($state:ty) => {
@@ -66,6 +71,26 @@ macro_rules! export_game {
         #[unsafe(no_mangle)]
         pub fn trino_game_render(state: &mut $state, renderer: &mut dyn ::trino_core::Renderer) {
             ::trino_core::Game::render(state, renderer)
+        }
+
+        #[unsafe(no_mangle)]
+        pub fn trino_game_state_hash(state: &$state) -> Option<u64> {
+            ::trino_core::Game::state_hash(state)
+        }
+
+        #[unsafe(no_mangle)]
+        pub fn trino_game_state_size(state: &$state) -> usize {
+            ::trino_core::Game::state_size(state)
+        }
+
+        #[unsafe(no_mangle)]
+        pub fn trino_game_save_state(state: &$state, out: &mut [u8]) -> Option<usize> {
+            ::trino_core::Game::save_state(state, out)
+        }
+
+        #[unsafe(no_mangle)]
+        pub fn trino_game_load_state(state: &mut $state, bytes: &[u8]) -> bool {
+            ::trino_core::Game::load_state(state, bytes)
         }
     };
 }

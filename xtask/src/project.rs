@@ -260,6 +260,14 @@ struct File {
     itch: Option<ItchSection>,
     #[serde(default)]
     threads: ThreadsSection,
+    /// `[players]` and `[net]` (issue #67): validated by
+    /// `trino_asset_pipeline::net::ProjectNet`, which the PC/Web bake reads.
+    #[serde(default)]
+    #[allow(dead_code)]
+    players: Option<toml::Value>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    net: Option<toml::Value>,
 }
 
 /// `[threads]` (issue #101): `auto`, `N` or `-N` each.
@@ -530,6 +538,7 @@ impl Project {
     fn parse(text: &str, root: PathBuf, engine: PathBuf) -> Result<Self, String> {
         let f: File = toml::from_str(text).map_err(|e| e.to_string())?;
         trino_asset_pipeline::quality::ProjectQuality::parse(text)?;
+        trino_asset_pipeline::net::ProjectNet::parse(text)?;
         if f.project.name.is_empty()
             || !f
                 .project

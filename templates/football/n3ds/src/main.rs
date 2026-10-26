@@ -17,6 +17,18 @@ fn self_test(
     game: &mut {{name_snake}}::{{name_camel}}Game,
 ) -> Result<(), alloc::string::String> {
     use {{name_snake}}::selftest;
+    // First, on the fresh game: the PC's two-player recording (issue #67),
+    // every hash compared.
+    selftest::replay_two_players(&mut host.platform, game)
+        .map_err(alloc::string::String::from)?;
+    // What rollback netplay would cost here (the 3DS local-wireless
+    // evaluation, issue #67): snapshot, load and update times.
+    selftest::begin(game);
+    if let Some(cost) = host.rollback_cost(game, 60, selftest::DT, selftest::input) {
+        let mut line = alloc::string::String::new();
+        let _ = cost.write_line(&mut line);
+        host.log(&alloc::format!("{line}\n"));
+    }
     selftest::begin(game);
     let report = host.measure(game, selftest::FRAMES, selftest::DT, selftest::input);
     host.report_frames("match", &report);

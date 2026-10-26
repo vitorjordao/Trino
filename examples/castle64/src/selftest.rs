@@ -5212,3 +5212,249 @@ pub fn log_physics(platform: &mut dyn Platform, p: &PhysicsProbe) {
     );
     platform.log(cost.as_str());
 }
+
+// ---- issue #67: local players and the cross-platform replay ----
+
+/// What the `players` step saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayersReport {
+    /// The host's connected mask (the N64 in ares: four ports, `0b1111`).
+    pub connected: u8,
+    /// Devices the host reported.
+    pub devices: u32,
+}
+
+/// Local players (issue #67) on this target: the host's own controllers
+/// read idle and player 0 is connected where a controller is plugged; then
+/// the seat rules on synthetic devices (four ports, a keyboard and pads),
+/// so every CPU runs the same fold the PC and the Web use.
+pub fn players_checks(input: &mut dyn trino_core::Input) -> Result<PlayersReport, &'static str> {
+    use trino_core::{Button, DeviceKind, MAX_PLAYERS, PlayerSetup, Seats};
+    let mut last = trino_core::PlayersInput::NONE;
+    for _ in 0..3 {
+        last = input.poll_players();
+        for p in &last.players {
+            if p.any_button() || !p.keys.is_empty() || p.triggers != Vec2::ZERO {
+                return Err("players: a player reads input with nothing pressed");
+            }
+        }
+        if last.connected >> MAX_PLAYERS != 0 {
+            return Err("players: a player past the fourth is connected");
+        }
+    }
+    let press = |b: Button| {
+        let mut s = InputState::default();
+        s.set(b, true);
+        s
+    };
+    // Four console ports: port k is player k; an empty port reads
+    // disconnected.
+    let mut seats = Seats::new();
+    seats.begin();
+    seats.report(DeviceKind::Port, 0, None, press(Button::A));
+    seats.report(DeviceKind::Port, 1, None, press(Button::B));
+    seats.report(DeviceKind::Port, 3, None, press(Button::Start));
+    let p = *seats.finish();
+    if p.connected != 0b1011
+        || !p.players[0].is_down(Button::A)
+        || !p.players[1].is_down(Button::B)
+        || p.players[2] != InputState::default()
+        || !p.players[3].is_down(Button::Start)
+    {
+        return Err("players: four ports didn't map to four players");
+    }
+    // A keyboard and two pads: one player folds them all; two players seat
+    // the second pad apart.
+    let mut seats = Seats::new();
+    let frame = |seats: &mut Seats| {
+        seats.begin();
+        seats.report(DeviceKind::Keyboard, 0, None, press(Button::A));
+        seats.report(DeviceKind::Gamepad, 7, None, press(Button::X));
+        seats.report(DeviceKind::Gamepad, 9, None, press(Button::B));
+        *seats.finish()
+    };
+    let one = frame(&mut seats);
+    if one.connected != 1
+        || !(one.players[0].is_down(Button::A)
+            && one.players[0].is_down(Button::X)
+            && one.players[0].is_down(Button::B))
+    {
+        return Err("players: one player didn't fold every device");
+    }
+    seats.set_setup(PlayerSetup::up_to(2));
+    let two = frame(&mut seats);
+    if two.connected != 0b11
+        || two.players[0].is_down(Button::B)
+        || !two.players[1].is_down(Button::B)
+    {
+        return Err("players: the second pad didn't take player 2");
+    }
+    Ok(PlayersReport {
+        connected: last.connected,
+        devices: last.count(),
+    })
+}
+
+/// `TRINO_STEP:players connected=<mask> players=<n>`.
+pub fn log_players(platform: &dyn Platform, r: &PlayersReport) {
+    let mut line = TextBuf::<96>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:players connected={:04b} players={}\n",
+            r.connected, r.devices
+        ),
+    );
+    platform.log(line.as_str());
+}
+
+/// The recording's group and blob (`[groups.replay]`).
+pub const REPLAY_GROUP: trino_core::GroupId = trino_core::GroupId::from_name("replay");
+pub const REPLAY_BLOB: BlobId = BlobId::from_path("blobs/replay_castle64");
+
+/// What the `replay` step played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayReport {
+    pub frames: u32,
+    /// Hashes compared with the recording's (all of them matched).
+    pub checked: u32,
+    /// The game's hash after the last frame.
+    pub hash: u64,
+    pub load_frames: u32,
+}
+
+/// Audio that plays nothing (the replay checks the sim, not the sound).
+struct Silent;
+
+impl trino_core::Audio for Silent {
+    fn play_sound(&mut self, _: trino_core::SoundId) {}
+    fn play_music(&mut self, _: trino_core::MusicId, _: bool) {}
+    fn stop_music(&mut self) {}
+    fn set_master_volume(&mut self, _: f32) {}
+}
+
+/// The cross-platform determinism gate (issue #67): castle64's bot run as
+/// the PC recorded it (`assets/shared/replays/castle64_green.trec`: wall-
+/// clock `dt`s, a state hash every frame), played on this target from a
+/// reset game through `update_with`, every hash compared. The recording's
+/// group loads first and unloads after. `tamper` flips player 1's A on
+/// frame 100: the mutation the step must catch (PC tests).
+///
+/// With `rerecord`, the target records what it fed the game, with its own
+/// hashes, into that sink (the consoles: their debug channel through
+/// [`trino_core::replay::LineSink`]): `cargo xtask test` reassembles it and
+/// holds it byte for byte to the PC's file — the console's recorder and
+/// hashes, end to end.
+pub fn replay(
+    host: &mut dyn GroupHost,
+    game: &mut crate::Castle64Game,
+    tamper: bool,
+    mut rerecord: Option<&mut dyn trino_core::replay::Sink>,
+) -> Result<ReplayReport, &'static str> {
+    use trino_core::Game as _;
+    use trino_core::replay::{Reader, Recorder};
+    let load_frames = load_until_ready(host, REPLAY_GROUP)?;
+    game.reset();
+    let mut cursor = {
+        let platform = host.parts().1;
+        let bytes = platform
+            .group_blob(REPLAY_BLOB)
+            .ok_or("replay: the recording's blob is missing")?;
+        let r = Reader::new(bytes).map_err(|e| e.message())?;
+        if r.header().game != trino_core::asset_id("castle64") {
+            return Err("replay: the recording is another game's");
+        }
+        if game.state_hash() != Some(r.header().start_hash) {
+            return Err("replay: the reset game isn't the recording's start state");
+        }
+        r.cursor()
+    };
+    let mut recorder = {
+        let platform = host.parts().1;
+        let bytes = platform
+            .group_blob(REPLAY_BLOB)
+            .ok_or("replay: the recording's blob is missing")?;
+        let header = *Reader::new(bytes).map_err(|e| e.message())?.header();
+        rerecord
+            .as_deref_mut()
+            .map(|sink| Recorder::begin(header, sink))
+    };
+    let mut report = ReplayReport {
+        frames: 0,
+        checked: 0,
+        hash: 0,
+        load_frames,
+    };
+    loop {
+        let platform = host.parts().1;
+        let frame = {
+            let bytes = platform
+                .group_blob(REPLAY_BLOB)
+                .ok_or("replay: the recording's blob went away")?;
+            let mut r = Reader::resume(bytes, cursor);
+            let f = r.next_frame();
+            cursor = r.cursor();
+            f
+        };
+        let Some(frame) = frame else { break };
+        let mut frame = frame.map_err(|e| e.message())?;
+        if tamper && frame.index == 100 {
+            let a = frame.players.players[0].is_down(trino_core::Button::A);
+            frame.players.players[0].set(trino_core::Button::A, !a);
+        }
+        if let Some(h) = platform.hosted_players_mut() {
+            h.publish_players(&frame.players);
+        }
+        game.update_with(platform, &frame.players.players[0], &mut Silent, frame.dt);
+        report.frames += 1;
+        if let (Some(rec), Some(sink)) = (recorder.as_mut(), rerecord.as_deref_mut()) {
+            let hash = frame.hash.map(|_| game.state_hash().unwrap_or(0));
+            rec.frame(sink, &frame.players, frame.dt, hash);
+        }
+        if let Some(want) = frame.hash {
+            let got = game.state_hash().unwrap_or(0);
+            report.checked += 1;
+            report.hash = got;
+            if got != want {
+                let mut line = TextBuf::<160>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "TRINO_REPLAY: diverged at frame {} (expected {want:#018x}, got {got:#018x})\n",
+                        report.frames
+                    ),
+                );
+                platform.log(line.as_str());
+                platform.unload_group(REPLAY_GROUP);
+                host.pump();
+                return Err("replay: castle64 diverged from the PC recording");
+            }
+        }
+    }
+    // An unload frees on the host's next pump: the base N64's 4 MB heap
+    // can't keep 15 KB of recording through the rest of the self-test.
+    host.parts().1.unload_group(REPLAY_GROUP);
+    host.pump();
+    if host.parts().1.group_blob(REPLAY_BLOB).is_some() {
+        return Err("replay: the unloaded recording is still in memory");
+    }
+    if report.checked == 0 {
+        return Err("replay: the recording has no hashes");
+    }
+    // The rest of the self-test starts castle64 fresh.
+    game.reset();
+    Ok(report)
+}
+
+/// `TRINO_STEP:replay ok frames=731 checked=731 hash=0x…`.
+pub fn log_replay(platform: &dyn Platform, r: &ReplayReport) {
+    let mut line = TextBuf::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:replay ok frames={} checked={} hash={:#018x} load_frames={}\n",
+            r.frames, r.checked, r.hash, r.load_frames
+        ),
+    );
+    platform.log(line.as_str());
+}

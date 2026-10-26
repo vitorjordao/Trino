@@ -169,6 +169,8 @@ unsafe extern "C" {
     /// the touch screen (1) or the top screen's right eye (2) at (x, y);
     /// 0 = unavailable.
     pub fn trino_debug_pixel(x: u32, y: u32, screen: u32) -> u32;
+    /// The VFP's FPSCR (flush-to-zero, default NaN, rounding).
+    pub fn trino_fpu_control() -> u32;
     /// Test hook: print a screen (the numbers of `trino_debug_pixel`) as
     /// `TRINO_FBR:` rows (RGBA5551) and a `TRINO_FB_END:` hash line — the
     /// N64 dump format.

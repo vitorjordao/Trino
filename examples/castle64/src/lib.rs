@@ -307,6 +307,37 @@ impl Castle64Game {
         game
     }
 
+    /// Back to the state [`new`](Self::new) builds, in place (a replay
+    /// starts from it: issue #67). Field by field, so the game is never
+    /// built by value on the N64's 64 KB stack.
+    pub fn reset(&mut self) {
+        self.pos = Vec3::ZERO;
+        self.vel = Vec3::ZERO;
+        self.on_ground = false;
+        self.level = 0;
+        self.stars = 0;
+        self.yaw = 0.0;
+        self.cam_yaw = 0.0;
+        self.state = State::Playing;
+        self.coins_taken = [0; LEVELS.len()];
+        self.enemies = [EnemyState::default(); MAX_ENEMIES];
+        self.standing_mover = None;
+        self.body = CharacterController::new(player_body(), V3::ZERO);
+        self.level_time = 0.0;
+        self.walk_phase = 0.0;
+        self.music_started = false;
+        self.prev = InputState::default();
+        self.graphics = GraphicsOptions::new();
+        self.access = AccessSettings::DEFAULT;
+        self.captions = Captions::new();
+        self.toast = AchievementToast::new();
+        self.achievement_list = None;
+        self.ach_state = AchievementState::EMPTY;
+        self.reported = (0, 0, 0, usize::MAX);
+        self.stomps = 0;
+        self.goto_level(0);
+    }
+
     fn cur(&self) -> &'static Level {
         LEVELS[self.level]
     }
@@ -776,6 +807,38 @@ impl Game for Castle64Game {
         }
 
         self.prev = *input;
+    }
+
+    /// Everything the next update depends on (issue #67): the player and
+    /// its controller, the camera's yaw, the level, its clock and enemies,
+    /// what was collected, the overlays that pause the game and the buttons
+    /// held last frame (edges are pressed against them). Not the captions,
+    /// the toast or the services: they only show.
+    fn state_hash(&self) -> Option<u64> {
+        let mut h = trino_core::StateHasher::new();
+        h.vec3(self.pos).vec3(self.vel).bool(self.on_ground);
+        h.usize(self.level).u8(self.stars);
+        h.f32(self.yaw).f32(self.cam_yaw);
+        match self.state {
+            State::Playing => h.u8(0),
+            State::StarGet(t) => h.u8(1).f32(t),
+        };
+        for c in &self.coins_taken {
+            h.u32(*c);
+        }
+        for e in &self.enemies {
+            h.f32(e.t).vec3(e.pos).f32(e.yaw).bool(e.alive);
+        }
+        h.u32(self.standing_mover.map_or(u32::MAX, |m| m as u32));
+        let b = &self.body;
+        h.f32(b.pos.x).f32(b.pos.y).f32(b.pos.z);
+        h.f32(b.vel.x).f32(b.vel.y).f32(b.vel.z).bool(b.on_ground);
+        h.f32(self.level_time).f32(self.walk_phase);
+        h.bool(self.music_started).u32(self.prev.button_bits());
+        h.bool(self.graphics.is_open())
+            .bool(self.achievement_list.is_some());
+        h.u32(self.stomps);
+        Some(h.value())
     }
 
     fn render(&mut self, renderer: &mut dyn Renderer) {
@@ -1482,6 +1545,36 @@ trino_game_api::export_game!(Castle64Game);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A replay starts from `reset`: it must be `new`, hash for hash, and
+    /// the hash must see what the game plays with.
+    #[test]
+    fn reset_is_new_and_the_hash_follows_the_sim() {
+        let screen = Vec2::new(320.0, 240.0);
+        let fresh = Castle64Game::new(screen);
+        let mut g = Castle64Game::new(screen);
+        let h0 = fresh.state_hash().unwrap();
+        let mut a = CountAudio {
+            sounds: 0,
+            music: 0,
+        };
+        let mut run = InputState::default();
+        run.stick = Vec2::new(0.0, 1.0);
+        for _ in 0..30 {
+            g.update(&run, &mut a, 1.0 / 60.0);
+        }
+        assert_ne!(
+            g.state_hash().unwrap(),
+            h0,
+            "30 frames of running move the hash"
+        );
+        g.reset();
+        assert_eq!(g.state_hash().unwrap(), h0);
+        std::println!(
+            "Castle64Game: {} bytes",
+            core::mem::size_of::<Castle64Game>()
+        );
+    }
 
     struct CountAudio {
         sounds: usize,

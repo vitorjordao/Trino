@@ -26,6 +26,7 @@ trino-scene = { path = "crates/scene" }
 trino-runner-pc = { path = "crates/runner-pc" }
 trino-scaffold = { path = "crates/scaffold" }
 trino-trace = { path = "crates/trace" }
+trino-net = { path = "crates/net" }
 hello-sprite = { path = "examples/hello-sprite" }
 platformer = { path = "examples/platformer" }
 castle64 = { path = "examples/castle64" }
@@ -50,6 +51,9 @@ png = "0.18"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+# Rollback netcode (issue #67): GGPO's model in Rust. trino-net wraps it;
+# games only see `Platform::players`.
+ggrs = { version = "0.13", default-features = false }
 hound = "3"
 # glTF 2.0 import for the 3D model pipeline (Fase 7).
 gltf = { version = "1", features = ["extras"] }

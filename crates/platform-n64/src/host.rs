@@ -18,6 +18,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use trino_core::perf::ModelCost;
+use trino_core::replay::ChannelSession;
 use trino_core::{Game, Input, InputState, Vec2};
 
 use crate::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
@@ -76,7 +77,7 @@ impl N64Host {
         let mut host = N64Host {
             renderer: N64Renderer::new(),
             audio: N64Audio::new(),
-            input: N64Input,
+            input: N64Input::new(),
             platform: N64Platform::new(),
         };
         N64Assets::load_all(&mut host.renderer, &mut host.audio, &mut host.platform);
@@ -92,19 +93,37 @@ impl N64Host {
         runtime::log(msg);
     }
 
-    /// One frame with real controller input.
+    /// One frame with real controller input: the four ports as players
+    /// (`Platform::players`, issue #67), port 1 as the game's `input`.
     pub fn frame(&mut self, game: &mut dyn Game, dt: f32) {
-        let state = self.input.poll();
-        self.step(game, &state, dt);
+        let players = self.poll_players();
+        self.step(game, &players.players[0], dt);
+    }
+
+    /// Poll the ports, apply the game's seat requests and publish the
+    /// players to the platform.
+    pub fn poll_players(&mut self) -> trino_core::PlayersInput {
+        while let Some(r) = self.platform.players.take_request() {
+            self.input.seats_mut().apply(r);
+        }
+        let players = self.input.poll_players();
+        self.platform.players.publish(self.input.seats());
+        players
     }
 
     /// One frame with scripted input (self-tests, bots): the asset-group
     /// loader's step (issue #56), the game, the audio.
     pub fn step(&mut self, game: &mut dyn Game, input: &InputState, dt: f32) {
         N64Assets::pump(&mut self.renderer, &mut self.audio, &mut self.platform);
+        let zone = trino_core::trace::Zone::begin("update");
         game.update_with(&mut self.platform, input, &mut self.audio, dt);
+        zone.end();
+        let zone = trino_core::trace::Zone::begin("render");
         game.render(&mut self.renderer);
+        zone.end();
+        let zone = trino_core::trace::Zone::begin("audio");
         self.audio.poll();
+        zone.end();
         self.platform.sample_heap();
     }
 
@@ -245,15 +264,135 @@ impl N64Host {
         runtime::stack_used()
     }
 
-    /// The real-time loop. Never returns.
+    /// What rollback netplay would cost on this console (issue #67): per
+    /// frame, a snapshot of `game` ([`Game::save_state`]), one sim update
+    /// with no drawing, and a load of the snapshot back; `window` updates
+    /// in a row is a full rollback of that many frames. The sim runs on a
+    /// [`Neutral`](trino_core::replay::Neutral) platform (no save writes)
+    /// with no sound. `None` when the game takes no snapshots.
+    pub fn rollback_cost(
+        &mut self,
+        game: &mut dyn Game,
+        frames: u32,
+        dt: f32,
+        mut input: impl FnMut(u32) -> InputState,
+    ) -> Option<trino_core::perf::RollbackCost> {
+        let size = game.state_size();
+        if size == 0 || frames == 0 {
+            return None;
+        }
+        let mut buf = alloc::vec![0u8; size];
+        let mut c = trino_core::perf::RollbackCost {
+            snapshot_bytes: size as u32,
+            ..Default::default()
+        };
+        let mut mute = trino_core::perf::Silent;
+        for i in 0..frames {
+            let state = input(i);
+            let t0 = runtime::now_us();
+            game.save_state(&mut buf)?;
+            let t1 = runtime::now_us();
+            {
+                let mut neutral = trino_core::replay::Neutral(&mut self.platform);
+                game.update_with(&mut neutral, &state, &mut mute, dt);
+            }
+            let t2 = runtime::now_us();
+            game.load_state(&buf);
+            let t3 = runtime::now_us();
+            c.save_us += t1.wrapping_sub(t0);
+            c.update_us += t2.wrapping_sub(t1);
+            c.load_us += t3.wrapping_sub(t2);
+            // Move on (the next frame's state is the updated one).
+            let mut neutral = trino_core::replay::Neutral(&mut self.platform);
+            game.update_with(&mut neutral, &state, &mut mute, dt);
+        }
+        c.save_us /= frames;
+        c.update_us /= frames;
+        c.load_us /= frames;
+        Some(c)
+    }
+
+    /// The replay or recording this ROM was built for (issue #67): a
+    /// `/replay.trec` in the DFS replays it (`/replay_until` stops early,
+    /// `/replay_shot` dumps the last frame), a `/record` file (the game's
+    /// name) records the live input over ISViewer/USB (`cargo xtask replay
+    /// run --platform n64`, `cargo xtask run n64 --record`). `None`: play.
+    pub fn channel_session(
+        &mut self,
+        game: &dyn Game,
+    ) -> Option<ChannelSession<'static, fn(&str)>> {
+        let log: fn(&str) = runtime::log;
+        if let Some(bytes) = N64Assets::read("/replay.trec") {
+            let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+            let until = N64Assets::read("/replay_until").and_then(|b| decimal(&b));
+            return match ChannelSession::replay(bytes, until, "n64", log) {
+                Ok(mut s) => {
+                    s.start(game);
+                    Some(s)
+                }
+                Err(e) => {
+                    runtime::log(&format!("TRINO_REPLAY: {}\n", e.message()));
+                    None
+                }
+            };
+        }
+        let name = N64Assets::read("/record")?;
+        let name = core::str::from_utf8(name.trim_ascii()).ok()?;
+        runtime::log(&format!("TRINO_RECORD: n64 {name}\n"));
+        Some(ChannelSession::record(
+            game,
+            name,
+            (320, 240),
+            1,
+            "n64",
+            log,
+        ))
+    }
+
+    /// The real-time loop (a replay or a recording when the ROM asks for
+    /// one: [`channel_session`](Self::channel_session)). Never returns.
     pub fn run(&mut self, game: &mut dyn Game) -> ! {
+        self.run_named(game, "n64-game")
+    }
+
+    /// [`run`](Self::run) with the trace session's name (`run n64
+    /// --trace`; castle64's ROM names its own).
+    pub fn run_named(&mut self, game: &mut dyn Game, trace: &'static str) -> ! {
+        let mut session = self.channel_session(game);
         let mut last = runtime::now_us();
-        let mut trace = runtime::TraceLoop::start("n64-game");
+        let mut trace = runtime::TraceLoop::start(trace);
         loop {
             let now = runtime::now_us();
             let dt = (now.wrapping_sub(last) as f32 / 1_000_000.0).min(0.1);
             last = now;
-            self.frame(game, dt);
+            match &mut session {
+                None => self.frame(game, dt),
+                Some(s) => {
+                    let live = self.poll_players();
+                    match s.input(&live, dt) {
+                        Some((players, dt)) => {
+                            if s.is_replay() {
+                                self.platform.players.publish_players(&players);
+                            }
+                            self.step(game, &players.players[0], dt);
+                            s.after(game, &players, dt);
+                        }
+                        None => {
+                            // The replay ended: its verdict, its last frame.
+                            if let Some(s) = session.take() {
+                                s.finish();
+                            }
+                            if N64Assets::exists("/replay_shot") {
+                                self.dump_framebuffer();
+                            }
+                            runtime::log("TRINO_REPLAY_DONE\n");
+                            loop {
+                                game.render(&mut self.renderer);
+                            }
+                        }
+                    }
+                }
+            }
             trace.frame();
         }
     }
@@ -307,4 +446,18 @@ fn boxed<G>(make: impl FnOnce(Vec2) -> G) -> Box<G> {
     b.write(make(N64Host::SCREEN));
     // SAFETY: just written.
     unsafe { b.assume_init() }
+}
+
+/// A file's decimal number (`replay_until`), by hand: `str::parse` and
+/// `trim` would link their generic code into every N64 image.
+fn decimal(bytes: &[u8]) -> Option<u32> {
+    let digits = bytes.trim_ascii();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.iter().try_fold(0u32, |n, &b| {
+        b.is_ascii_digit()
+            .then(|| n.checked_mul(10)?.checked_add(u32::from(b - b'0')))
+            .flatten()
+    })
 }

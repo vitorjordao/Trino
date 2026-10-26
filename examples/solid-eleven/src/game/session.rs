@@ -116,8 +116,13 @@ pub struct Session {
     /// Surname index per player (the HUD's tag).
     pub names: [u8; N],
     pub banner: Option<Banner>,
-    /// The side a human plays, if any.
+    /// The side a human plays, if any (player 1: the camera and the HUD
+    /// follow it).
     pub human: Option<usize>,
+    /// The side player 2 plays in a two-player match (issue #67: local
+    /// pads or an online friend), with its own controls.
+    pub second: Option<usize>,
+    pub controls2: Controls,
     acc: f32,
     seen: u32,
     prev_officials: [(f32, f32); 3],
@@ -160,6 +165,7 @@ impl Session {
     pub fn new(setup: &Setup, dress: &Dress, names: [u8; N], sky: Sky) -> Session {
         let m = Match::new(setup);
         let human = (0..2).find(|&s| setup.humans[s]);
+        let second = (setup.humans == [true, true]).then_some(1);
         let mut anims = [AnimState::new(ClipName::Idle); N + 3];
         for (i, a) in anims.iter_mut().enumerate() {
             // Stagger idle cycles so the crowd of players doesn't breathe in step.
@@ -192,6 +198,8 @@ impl Session {
             names,
             banner: None,
             human,
+            second,
+            controls2: Controls::default(),
             acc: 0.0,
             seen: 0,
             prev_officials: officials,
@@ -207,11 +215,18 @@ impl Session {
         }
     }
 
+    /// Sim time waiting for the next tick (a state hash reads it).
+    pub fn accumulated(&self) -> f32 {
+        self.acc
+    }
+
     /// Can the human's controlled player kick now?
     fn human_can_kick(&self) -> bool {
-        let Some(s) = self.human else {
-            return false;
-        };
+        self.human.is_some_and(|s| self.side_can_kick(s))
+    }
+
+    /// Can side `s`'s controlled player kick now?
+    fn side_can_kick(&self, s: usize) -> bool {
         let a = self.m.active[s];
         match self.m.phase {
             Phase::Play => {
@@ -228,7 +243,8 @@ impl Session {
     }
 
     /// One frame: `dt` seconds of play. `touch` carries the 3DS's
-    /// bottom-screen taps (player pick, formation) into the pad.
+    /// bottom-screen taps (player pick, formation) into the pad. `p2` is
+    /// player 2's input (now, last frame) in a two-player match.
     pub fn update(
         &mut self,
         input: &InputState,
@@ -236,6 +252,7 @@ impl Session {
         audio: &mut dyn Audio,
         dt: f32,
         touch: (u8, u8, bool),
+        p2: Option<(&InputState, &InputState)>,
     ) {
         let dt = dt.clamp(0.0, 0.1);
         let can_kick = self.human_can_kick();
@@ -243,6 +260,13 @@ impl Session {
         pad.pick = touch.0;
         pad.formation = touch.1;
         pad.sub = touch.2;
+        let pad2 = match (self.second, p2) {
+            (Some(s2), Some((now, before))) => {
+                let can = self.side_can_kick(s2);
+                Some((s2, self.controls2.pad(now, before, dt, can)))
+            }
+            _ => None,
+        };
         self.acc += dt;
         let mut ticks = 0;
         let mut first = true;
@@ -250,19 +274,26 @@ impl Session {
             self.acc -= TICK;
             ticks += 1;
             // Button edges belong to one tick only; movement to all.
-            let p = if first {
-                pad
-            } else {
-                Pad {
-                    mv: pad.mv,
-                    sprint: pad.sprint,
-                    ..Pad::default()
+            let tick = |pad: Pad| {
+                if first {
+                    pad
+                } else {
+                    Pad {
+                        mv: pad.mv,
+                        sprint: pad.sprint,
+                        ..Pad::default()
+                    }
                 }
             };
+            let p = tick(pad);
+            let p2 = pad2.map(|(s2, pad)| (s2, tick(pad)));
             first = false;
             let mut pads = [Pad::default(); 2];
             if let Some(s) = self.human {
                 pads[s] = p;
+            }
+            if let Some((s2, p2)) = p2 {
+                pads[s2] = p2;
             }
             self.m.step(pads);
         }
@@ -604,6 +635,7 @@ mod tests {
                 &mut audio,
                 1.0 / 30.0,
                 (0, 0, false),
+                None,
             );
             for (_, e) in s.m.events_since(before) {
                 if e.kind != EventKind::Substitution {
@@ -637,6 +669,7 @@ mod tests {
                 &mut audio,
                 1.0 / 60.0,
                 (0, 0, false),
+                None,
             );
             most = most.max(s.turf.len());
             if !s.turf.is_empty() {
@@ -657,6 +690,7 @@ mod tests {
                 &mut audio,
                 1.0 / 60.0,
                 (0, 0, false),
+                None,
             );
         }
         let screen = Vec2::new(320.0, 240.0);

@@ -14,3 +14,8 @@ repository.workspace = true
 # The `zone!`/`counter`/`frame_mark` instrumentation (trace module, issue
 # #62). Off by default: release builds are the same machine code.
 trace = []
+# Determinism guard rails (issue #67, `determinism` module): a NaN or a
+# subnormal reaching a state hash, a rollback snapshot or a checked value
+# panics with its name, because their bits and arithmetic differ between
+# the PC, the N64 and the 3DS. Off by default (no code in release builds).
+strict-determinism = []

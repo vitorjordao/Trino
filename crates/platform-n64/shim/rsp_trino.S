@@ -1058,12 +1058,14 @@ water_fog:
     vadd vk, vk, pa_ambc
     vmulf vkt, vtint, vk
     vadd vkt, vkt, vta
-    luv vcol.e0, 24, src            # A's color, then B's (A's pad bytes)
 #ifdef TRINO_PALETTE
     # The palette: each color times its slot's entry, (c * 257 p) >> 16,
-    # rounded to a whole u8 like the CPU's (c p + 127) / 255.
+    # rounded to a whole u8 like the CPU's (c p + 127) / 255. The color
+    # load fills the branch's delay slot: a draw without a palette pays
+    # the branch alone.
     beqz palette, 1f
-    lhu t0, 22(src)                 # A's slot * 8 (the delay slot: harmless)
+    luv vcol.e0, 24, src            # A's color, then B's (A's pad bytes)
+    lhu t0, 22(src)                 # A's slot * 8
     lhu t1, VTX_IN_SIZE + 22(src)
     addiu t0, %lo(PAL)
     addiu t1, %lo(PAL)
@@ -1074,6 +1076,8 @@ water_fog:
     vmudl vcol, vcol, K512
     vmudn vcol, vcol, K128
 1:
+#else
+    luv vcol.e0, 24, src            # A's color, then B's (A's pad bytes)
 #endif
     vmulf vcol, vcol, vkt
     vadd vcol, vcol, pa_emis        # emissive, saturating

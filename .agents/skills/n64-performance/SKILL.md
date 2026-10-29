@@ -144,6 +144,13 @@ up is a cost the N64 pays.
 
 ## Code layout moves the numbers — read them like this
 
+**RSP or layout? Read the stages** (2026-10-29, #122). When a scene moves after an
+overlay change, compare the stage means over the paddings: an RSP cost shows in `end`
+(the drain the CPU waits for at the frame's end) or, for a streamed scene, in `begin`'s
+wait; a CPU layout move shows in `game` (the draw path outside the timed stages) and
+swings `begin` the other way. `showcase-river`'s +0.5 ms after the palette branch was
+`game` +0.47 with `end` 0.56 → 0.57: layout.
+
 **Measure over layouts (2026-10-16, ADR 0012 §3).** `TRINO_N64_TEXT_PAD=<bytes>` links
 that much padding into `.text` ahead of the Rust code: the same code, every function
 moved. An external project's busiest 30 fps scene at one engine commit measured **25.1–28.1 ms
@@ -328,6 +335,7 @@ the LOD panel and the impostor section print it next to the mesh's CPU-path cost
 
 | Change | Result on the scenes |
 |---|---|
+| **Palettes on the RSP** (#122, ADR 0018 §9): the slot in the RSP copy, `TrinoCmd_DrawPal` on the colored/textured overlays, never memoized | `micro-palette` (16 recolored figures, CPU vs RSP in one ROM) 50.71 → **7.05 ms**, its T&L 28.36 → 1.64 ms (~100 µs of CPU per palette draw). castle64 within its spread; `showcase-river` +0.5 ms with its RSP drain (`end`) and T&L unchanged, the move in `game`/`begin`: CPU layout. Removing one RSP instruction per vertex pair from the colored loop changed nothing measurable (26.51 vs 26.54) |
 | **#69 part 2** (ADR 0018 §7): ripples and rings on `rsp_trino_water`, two vertices per pass, static + frame water blocks, `trino_rsp_flush` for streamed commands, the water texture kept in TMEM, `trino_cache_create` on the arena, `water_plane` in the command, `words_eq`, water-memo eviction | `micro-river` 10.48 → **1.78 ms** (its T&L 6.39 → 0.94), `showcase-river` 75.17 → **26.21 ms** (8 paddings). Biggest single steps: the RSP flush (drain tail 0.8 → 0.35 ms), the TMEM residency (−0.25 ms CPU), the memo eviction (a full self-test run had rebuilt the river every frame: T&L 1.84 vs 0.97). castle64 +0.3…+0.8 ms = layout (a six-line patch to the baseline gives the same numbers); hub golden identical |
 | Indirect RSP command (`DrawAt`: the command image in the cached arena, 2 queue words instead of 27–46) | **no gain**, reverted: `submit` was already 35 µs for the river; for colored/textured commands it was slower (the showcase's `submit` 1.2 → 10 ms) |
 | **Text in runs** (`trino_text_run`: up to 32 glyphs per FFI call, on-screen glyphs straight to `__rdpq_texture_rectangle` with the constant steps `1024 / scale`) + **`GlyphIndex`** (O(1) lookup below codepoint 256; left-aligned text no longer measures its lines), 2026-10-16 | an external project, mean (min–max) over 4 paddings: busiest scene 26.3 (25.1–27.7) → 25.1 (24.8–25.3) ms, two UI-heavy scenes 28.0 → 26.3 and 28.5 → 26.8, UI-only 11.3 → 9.6, its densest far view 56.7 → 54.2; the `sprites` stage −1.0…−1.8 ms (~210–310 2D draws a frame, `draws2d=` in `TRINO_FRAME`). The spread shrank from ~2.6 to ~0.5 ms: fewer, tighter hot functions are less layout-sensitive. Goldens identical |

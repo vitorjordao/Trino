@@ -192,7 +192,7 @@ per draw (`ModelParams::palette`).
   have a / b / c / d`. In the JSON it is `slot_vertices` (`null` without slots).
 - **Cost:** on the N64 a palette draw stays on the RSP (the colored overlay multiplies
   each vertex by its slot's entry, GitHub #122) but is never memoized, so each one pays
-  the full draw setup (~0.2 ms of CPU). Draw a crowd's recolored characters one after
+  the full draw setup (~0.1 ms of CPU, `micro-palette`). Draw a crowd's recolored characters one after
   another (an overlay switch per change of overlay) and budget it with `model inspect`.
 
 ## Stage 3 — Rig (animated only)

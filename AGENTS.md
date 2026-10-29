@@ -1521,7 +1521,7 @@ cargo test --workspace
 - **A palette draw takes the N64's colored overlay** (GitHub #122, ADR 0018 §9), even
   under a white light: interleaved with white-light draws it costs an overlay switch
   each way (rspq reloads the code), so draw a recolored crowd together. It is never
-  memoized (`MemoKey` has no room for a palette): ~0.2 ms of CPU per draw, measured by
+  memoized (`MemoKey` has no room for a palette): ~0.1 ms of CPU per draw, measured by
   `micro-palette`. Water keeps palettes on the CPU (`RspReject::Palette`: no IMEM left).
 - **Captions on the 3DS touch screen switch screens:** `CaptionPlace::SecondScreen` calls
   `on_screen(Bottom)`, so draw captions after everything else on the top screen.

@@ -585,9 +585,8 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
     let out = project.root.join("target/web-test");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("node");
-    cmd.arg(harness.join("run.mjs"))
-        .arg("--url")
+    let mut cmd = harness_command(&project.root, &harness.join("run.mjs"));
+    cmd.arg("--url")
         .arg(format!("http://127.0.0.1:{port}/"))
         .arg("--out")
         .arg(&out)
@@ -695,6 +694,28 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
     }
 }
 
+/// A `node` command for one of the Playwright scripts in `tools/web-test`
+/// (`run.mjs`, `net.mjs`), with its temporary files under `root`'s
+/// `target/web-tmp` (GitHub #107). Playwright launches Chromium with
+/// `--disable-dev-shm-usage`, so the browser's shared memory and its profile
+/// go to `TMPDIR`. Where `/tmp` is a tmpfs with under ~2 GB free, Chromium's
+/// headless shell crashed its renderer ("Target crashed", an `int3` in the
+/// Compositor thread) at the WebGL2 run's `asset groups` step; the build
+/// tree is on a real disk.
+pub fn harness_command(root: &Path, script: &Path) -> Command {
+    let tmp = harness_tmp(root);
+    let _ = std::fs::create_dir_all(&tmp);
+    let mut cmd = Command::new("node");
+    cmd.arg(script).env("TMPDIR", &tmp);
+    cmd
+}
+
+/// Where [`harness_command`] points the browsers' `TMPDIR`. Not under
+/// `target/web-test`: the test run wipes that folder first.
+pub fn harness_tmp(root: &Path) -> PathBuf {
+    root.join("target/web-tmp")
+}
+
 /// `tools/web-test` has its node modules and the browsers Playwright drives
 /// (`npm ci`, `npx playwright install`).
 pub fn ensure_harness(dir: &Path, browsers: &[String]) -> Result<(), String> {
@@ -739,6 +760,24 @@ mod tests {
     fn the_cli_version_comes_from_the_lockfile() {
         let v = bindgen_version(&crate::project::engine_root()).unwrap();
         assert!(v.starts_with("0.2."), "{v}");
+    }
+
+    /// GitHub #107: the browsers' temporary files (Chromium's shared memory
+    /// under Playwright's `--disable-dev-shm-usage`, the profiles) go to the
+    /// build tree, not to a tmpfs `/tmp` that may be nearly full.
+    #[test]
+    fn the_harness_keeps_the_browsers_temp_files_in_the_build_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let cmd = harness_command(root.path(), Path::new("run.mjs"));
+        let tmp = harness_tmp(root.path());
+        assert_eq!(tmp, root.path().join("target/web-tmp"));
+        assert!(tmp.is_dir(), "the folder exists before node starts");
+        let env: Vec<_> = cmd.get_envs().collect();
+        assert!(
+            env.contains(&(std::ffi::OsStr::new("TMPDIR"), Some(tmp.as_os_str()))),
+            "{env:?}"
+        );
+        assert_eq!(cmd.get_program(), "node");
     }
 
     #[test]

@@ -158,6 +158,20 @@ zones need `TIMESTAMP_QUERY`: none on WebGL2.
   pass the golden within its tolerance even with a small change), and compare
   `target/web-test/chromium-webgl2/castle64_hub.png` with the WebGPU one: they should match.
 
+- **A nearly full tmpfs `/tmp` crashed the WebGL2 run** (GitHub #107): `chromium-webgl2
+  … FAIL in 2.6 s · page.waitForFunction: Target crashed` at the `asset groups` step, on
+  `main` too, while CI and the WebGPU run passed. Playwright launches Chromium with
+  `--disable-dev-shm-usage`, so its shared memory (and the profile) live in `TMPDIR`; the
+  kernel log showed the same `int3` in the headless shell's `Compositor` thread each time
+  (`grep traps: /var/log/kern.log`), no OOM kill. Reproduced by filling `/tmp` (7.3 GB
+  tmpfs): 78 % full (1.7 GB free) crashes, 65 % (2.6 GB free) passes; the same 5.6 GB in
+  `/dev/shm` (same RAM pressure) passes. The driver was never involved: the headless
+  shell's WebGL2 runs on SwiftShader (`TRINO_WEB: adapter="ANGLE (… SwiftShader …)"`).
+  The xtask now starts every harness with `TMPDIR=<root>/target/web-tmp`
+  (`web::harness_command`: `test web`, `replay run --platform web`, `net`). A new
+  script that launches Playwright goes through it. To see the browser's own stderr,
+  run with `DEBUG=pw:browser`.
+
 ## GPU-less Linux (CI)
 
 What the `web` job needs, all found the hard way (reproduce with Docker:

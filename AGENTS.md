@@ -2030,6 +2030,10 @@ cargo test --workspace
   - The editor measures memory plans on a worker keyed on the manifest's text and the
     bake generation (`groups::Groups::plans`); a UI test waits on `measured()` after the
     Memory tab drew once.
+- **Playwright's Chromium keeps its shared memory in `TMPDIR`** (`--disable-dev-shm-usage`):
+  with a tmpfs `/tmp` under ~2 GB free, the WebGL2 self-test's tab crashed at `asset
+  groups` ("Target crashed", GitHub #107). Launch harness scripts through
+  `web::harness_command`, which points `TMPDIR` at `target/web-tmp`.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

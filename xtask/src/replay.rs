@@ -545,9 +545,8 @@ fn run_web(
     if let Some(u) = until {
         page.push_str(&format!("&replay_until={u}"));
     }
-    let mut cmd = std::process::Command::new("node");
-    cmd.arg(harness.join("run.mjs"))
-        .arg("--url")
+    let mut cmd = crate::web::harness_command(&project.root, &harness.join("run.mjs"));
+    cmd.arg("--url")
         .arg(format!("http://127.0.0.1:{port}/"))
         .arg("--out")
         .arg(&out)

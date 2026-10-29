@@ -77,8 +77,9 @@ test runs in the dev profile, which keeps overflow checks on.
   "crashes" on the empty input). ~200–240 exec/s on RADV and on lavapipe
   (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`, what CI has); the first
   input, device and pipelines included, takes ~0.5 s, far under libFuzzer's 10 s.
-- **Vorbis check vs real files:** every baked TSN2 of the engine and Solid Eleven (21
-  Vorbis) and the pipeline's encoder at q −1..10 × 8–48 kHz pass `vorbis::check`.
+- **Vorbis check vs real files:** every baked TSN2 of the engine and Solid Eleven (24
+  Vorbis in PC, Web and Solid Eleven bakes) and the pipeline's encoder at q −1..10 ×
+  8–48 kHz pass `vorbis::check` (rechecked after the comment-header bound).
 
 ### Adding a format (the `engine-feature` checklist item)
 
@@ -142,8 +143,13 @@ test runs in the dev profile, which keeps overflow checks on.
   - **lewton's OOM** (`tsn2_decode`, 120 s run): it reserves a codebook's lookup table
     from the header (2^40 values from a 23 KB file) before reading it.
     `trino_core::vorbis::check` bounds the setup header before every lewton call (PC
-    decode and stream, the Web, the pipeline). Third-party allocations from header
-    counts need a check in front; the fuzzer's `-malloc_limit_mb` is what finds them.
+    decode and stream, the Web, the pipeline). CI's shard then found the comment
+    header doing the same (vendor, comment list at 48 bytes a comment, each comment:
+    67 GB from 4.6 KB), now bounded by the packet's own length. Third-party
+    allocations from header counts need a check in front; the fuzzer's
+    `-malloc_limit_mb` is what finds them, and only under the fuzzer: the native
+    `fuzz repro` of that input did not abort (the cause is still unknown), so replay
+    an OOM with `cargo +nightly fuzz run -O -a <t> <file>` before calling it fixed.
   - Allocation OOMs show a useless stack without a symbolizer: `addr2line -e
     fuzz/target/x86_64-unknown-linux-gnu/release/<t> -f -C -i <addrs>` names the frames
     (rustup's llvm-tools ship no `llvm-symbolizer`).

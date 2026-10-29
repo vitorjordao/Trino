@@ -174,7 +174,9 @@ Each input is in `fuzz/regressions/<target>/` and replays in `cargo test`.
   lewton's setup-header decode; it decodes at most 16 384 samples now (81–85 →
   136–162 exec/s). Its 120 s run found lewton reserving a codebook's table from the
   header (40 GB from 23 KB): `trino_core::vorbis::check` bounds Vorbis setup headers
-  before every lewton call.
+  before every lewton call. The PR's CI shard then found lewton sizing the comment
+  header's vendor string, comment list and comments from its own `u32`s (67 GB from
+  4.6 KB): the check also requires the comment packet to hold every byte it declares.
 - **Coverage per target** (`cargo xtask fuzz coverage`, each nightly shard after fuzzing,
   the `fuzz-coverage-<shard>` artifact): lines, functions and regions of the engine
   files a target reaches.

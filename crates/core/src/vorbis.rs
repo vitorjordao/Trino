@@ -1,5 +1,5 @@
-//! A bound check of an Ogg Vorbis file's setup header, before a decoder
-//! sees it (issue #121).
+//! A bound check of an Ogg Vorbis file's comment and setup headers, before
+//! a decoder sees it (issue #121).
 //!
 //! The PC and the Web decode `TSN2` Vorbis payloads with lewton, which
 //! reserves memory for a codebook from the header's own counts before it
@@ -10,8 +10,11 @@
 //! refuses a file whose codebooks need more than [`MAX_ENTRIES`] entries,
 //! [`MAX_VALUES`] lookup values or more value bits than the packet holds:
 //! libvorbis' and aoTuV's books stay far below (a few thousand entries,
-//! dimensions ≤ 8). `no_std`, no allocation: the setup packet is read in
-//! place across its Ogg pages.
+//! dimensions ≤ 8). lewton also sizes the comment header's vendor string,
+//! comment list and each comment from the header's own `u32`s (the fuzzer's
+//! next OOM: 67 GB for a comment list): [`check`] requires the comment
+//! packet to hold every byte it declares. `no_std`, no allocation: the
+//! packets are read in place across their Ogg pages.
 
 /// The most entries a codebook may have.
 pub const MAX_ENTRIES: u32 = 1 << 16;
@@ -28,21 +31,24 @@ pub enum VorbisError {
     Truncated,
     /// The third packet is not a Vorbis setup header.
     NotSetup,
+    /// The second packet is not a Vorbis comment header, or declares more
+    /// bytes than it holds.
+    BadComment,
     /// A codebook's sync pattern or layout is wrong.
     BadCodebook,
     /// A codebook asks for more than the bounds above.
     TooLarge,
 }
 
-/// The setup packet (the stream's third) as byte spans of `ogg`, one per
-/// page it crosses.
+/// A packet of the stream as byte spans of `ogg`, one per page it crosses.
 struct Spans<'a> {
     ogg: &'a [u8],
     spans: [(usize, usize); MAX_SPANS],
     n: usize,
 }
 
-fn setup_packet(ogg: &[u8]) -> Result<Spans<'_>, VorbisError> {
+/// Packet `index` of the first logical stream (1: comments, 2: setup).
+fn packet(ogg: &[u8], index: u32) -> Result<Spans<'_>, VorbisError> {
     let mut out = Spans {
         ogg,
         spans: [(0, 0); MAX_SPANS],
@@ -77,7 +83,7 @@ fn setup_packet(ogg: &[u8]) -> Result<Spans<'_>, VorbisError> {
                     continue;
                 }
                 // A packet (or its last part) ends at `seg_at`.
-                if packet == 2 {
+                if packet == index {
                     push(&mut out, start, seg_at)?;
                     return Ok(out);
                 }
@@ -85,7 +91,7 @@ fn setup_packet(ogg: &[u8]) -> Result<Spans<'_>, VorbisError> {
                 start = seg_at;
             }
             // A packet continuing on the next page.
-            if packet == 2 && seg_at > start {
+            if packet == index && seg_at > start {
                 push(&mut out, start, seg_at)?;
             }
         }
@@ -152,6 +158,50 @@ impl<'a> Bits<'a> {
     fn flag(&mut self) -> Result<bool, VorbisError> {
         Ok(self.read(1)? == 1)
     }
+
+    /// A little-endian length the packet must still hold `unit` bytes of
+    /// per count; then skip `skip` bytes per count.
+    fn length(&mut self, unit: u64) -> Result<u32, VorbisError> {
+        let n = self.read(32)?;
+        if n as u64 * unit * 8 > self.left {
+            return Err(VorbisError::BadComment);
+        }
+        Ok(n)
+    }
+
+    fn skip(&mut self, bytes: u32) -> Result<(), VorbisError> {
+        for _ in 0..bytes {
+            self.read(8)?;
+        }
+        Ok(())
+    }
+}
+
+/// The comment header (Vorbis I §5.2.1): every length it declares within
+/// the packet.
+fn check_comments(ogg: &[u8]) -> Result<(), VorbisError> {
+    let spans = packet(ogg, 1)?;
+    if spans.n == 0 {
+        return Err(VorbisError::BadComment);
+    }
+    let mut b = Bits::new(&spans);
+    if b.read(8)? != 3 {
+        return Err(VorbisError::BadComment);
+    }
+    for &c in b"vorbis" {
+        if b.read(8)? != c as u32 {
+            return Err(VorbisError::BadComment);
+        }
+    }
+    let vendor = b.length(1)?;
+    b.skip(vendor)?;
+    // Each comment is at least its 4-byte length.
+    let comments = b.length(4)?;
+    for _ in 0..comments {
+        let n = b.length(1)?;
+        b.skip(n)?;
+    }
+    Ok(())
 }
 
 /// `ilog` of the Vorbis spec: bits needed for `v`.
@@ -177,11 +227,12 @@ fn lookup1_values(entries: u32, dims: u32) -> u64 {
     }
 }
 
-/// Check the Vorbis setup header of an Ogg file against the bounds above
-/// (see the module docs). `Ok` says nothing about the rest of the stream:
-/// the decoder still validates it.
+/// Check the Vorbis comment and setup headers of an Ogg file against the
+/// bounds above (see the module docs). `Ok` says nothing about the rest of
+/// the stream: the decoder still validates it.
 pub fn check(ogg: &[u8]) -> Result<(), VorbisError> {
-    let spans = setup_packet(ogg)?;
+    check_comments(ogg)?;
+    let spans = packet(ogg, 2)?;
     if spans.n == 0 {
         return Err(VorbisError::NotSetup);
     }
@@ -332,9 +383,23 @@ mod tests {
         w.out
     }
 
+    /// A comment header: the vendor, then `comments`.
+    fn comments(vendor: &[u8], comments: &[&[u8]]) -> std::vec::Vec<u8> {
+        let mut c = b"\x03vorbis".to_vec();
+        c.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        c.extend_from_slice(vendor);
+        c.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+        for x in comments {
+            c.extend_from_slice(&(x.len() as u32).to_le_bytes());
+            c.extend_from_slice(x);
+        }
+        c.push(1); // framing bit
+        c
+    }
+
     fn file(setup: &[u8]) -> std::vec::Vec<u8> {
         let mut f = page(7, &[b"\x01vorbis ident"]);
-        f.extend(page(7, &[b"\x03vorbis comments", setup]));
+        f.extend(page(7, &[&comments(b"Trino", &[b"TITLE=x"]), setup]));
         f
     }
 
@@ -382,7 +447,8 @@ mod tests {
         // The setup packet's first part ends the second page with 255
         // laces; the third page holds the rest.
         let mut f = page(7, &[b"\x01vorbis ident"]);
-        let mut second = page(7, &[b"\x03vorbis comments", a]);
+        let c = comments(b"Trino", &[]);
+        let mut second = page(7, &[&c, a]);
         // `page` ended `a` with a 0 lace (a packet end): drop it so the
         // packet continues on the next page.
         let lace_at = 27 + 1 + 2;
@@ -395,5 +461,37 @@ mod tests {
         f.extend(page(7, &[rest]));
         assert_eq!(check(&f), Ok(()));
         assert!(lookup1_values(16, 2) == 4 && lookup1_values(15, 2) == 3);
+    }
+
+    /// lewton reserves the vendor string, the comment list (48 bytes a
+    /// comment) and each comment from these counts before it reads them:
+    /// the fuzzer's second OOM asked for 67 GB of comment list.
+    #[test]
+    fn comment_counts_must_fit_the_packet() {
+        let setup = setup(1, 8, 0, 0);
+        let with = |c: &[u8]| {
+            let mut f = page(7, &[b"\x01vorbis ident"]);
+            f.extend(page(7, &[c, &setup]));
+            check(&f)
+        };
+        assert_eq!(with(&comments(b"", &[])), Ok(()));
+        assert_eq!(
+            with(&comments(b"libVorbis", &[b"A=1", b"", b"B=2"])),
+            Ok(())
+        );
+        let lie = |at: usize, v: u32| {
+            let mut c = comments(b"aoTuV", &[b"A=1"]);
+            c[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            with(&c)
+        };
+        // Vendor length, comment count and a comment's length, each past
+        // what the packet holds.
+        assert_eq!(lie(7, 1 << 30), Err(VorbisError::BadComment));
+        assert_eq!(lie(7 + 4 + 5, 0x5800_0000), Err(VorbisError::BadComment));
+        assert_eq!(lie(7 + 4 + 5 + 4, u32::MAX), Err(VorbisError::BadComment));
+        // Two comments declared, bytes for one: within the count's bound,
+        // then the packet ends.
+        assert_eq!(lie(7 + 4 + 5, 2), Err(VorbisError::Truncated));
+        assert_eq!(with(b"\x03vorbiX"), Err(VorbisError::BadComment));
     }
 }

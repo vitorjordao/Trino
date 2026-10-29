@@ -398,7 +398,15 @@ fn overflow_issues(
     out
 }
 
-/// Font atlases past the N64's TMEM (they draw, but re-upload glyphs).
+/// Share of TMEM at which a checked font atlas gets a warning (GitHub #99:
+/// castle64's pt-BR and es-ES atlases sat at 100 %, one glyph from not
+/// fitting, and nothing said so).
+pub const TMEM_WARN_PERCENT: u64 = 75;
+
+/// Checked font atlases near or past the N64's TMEM, warnings both: from
+/// [`TMEM_WARN_PERCENT`] (a few more glyphs and it won't fit), and past it
+/// (it draws, but no longer stays resident: every glyph re-uploads, ~50 µs
+/// each; big display fonts, Solid Eleven's 22 and 44 px, live with that).
 fn budget_issues(root: &Path, manifest: &Manifest, families: &[Family]) -> Vec<I18nIssue> {
     if !families.contains(&Family::N64) {
         return Vec::new();
@@ -410,28 +418,37 @@ fn budget_issues(root: &Path, manifest: &Manifest, families: &[Family]) -> Vec<I
     costs
         .into_iter()
         .filter(|c| {
-            !c.fits
-                && checked
-                    .iter()
-                    .any(|f| c.font == *f || c.font.starts_with(&format!("{f}@")))
+            checked
+                .iter()
+                .any(|f| c.font == *f || c.font.starts_with(&format!("{f}@")))
         })
-        .map(|c| {
-            issue(
+        .filter_map(|c| {
+            let budget = c.budget.unwrap_or(4096);
+            let percent = c.memory_bytes * 100 / budget;
+            let atlas = format!(
+                "{} on n64: {}x{} {} atlas takes {} of TMEM's {} bytes ({percent} %)",
+                c.font, c.width, c.height, c.format, c.memory_bytes, budget
+            );
+            let msg = if !c.fits {
+                format!(
+                    "{atlas}: past TMEM, its glyphs upload per run (fewer glyphs, a smaller \
+                     size or per_language shrink it)"
+                )
+            } else if percent >= TMEM_WARN_PERCENT {
+                format!(
+                    "{atlas}, {TMEM_WARN_PERCENT} % or more: a few more glyphs and it won't \
+                     fit (fewer glyphs, a smaller size or per_language shrink it)"
+                )
+            } else {
+                return None;
+            };
+            Some(issue(
                 Severity::Warning,
                 IssueKind::FontBudget,
                 &c.lang,
                 "",
-                format!(
-                    "{} on n64: {}x{} {} atlas is {} bytes, past TMEM ({} bytes): its glyphs \
-                     upload per run (fewer glyphs, a smaller size or per_language shrink it)",
-                    c.font,
-                    c.width,
-                    c.height,
-                    c.format,
-                    c.bytes,
-                    c.budget.unwrap_or(4096)
-                ),
-            )
+                msg,
+            ))
         })
         .collect()
 }
@@ -711,7 +728,7 @@ fn fonts(project: &Project, root: &Path, opts: &Opts, json: bool) -> Result<bool
         let budget = match c.budget {
             Some(b) => {
                 format!("{}{}", c.memory, if c.fits { "" } else { " OVER" })
-                    + &format!(" {:.0}%", c.bytes as f64 * 100.0 / b as f64)
+                    + &format!(" {:.0}%", c.memory_bytes as f64 * 100.0 / b as f64)
             }
             None => c.memory.clone(),
         };

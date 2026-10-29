@@ -39,6 +39,9 @@ pub struct Widget {
     pub rect: egui::Rect,
     /// The part its clip region shows (overlaps are judged on this).
     pub visible: egui::Rect,
+    /// On a layer drawn over everything (a toast, a tooltip): it covers
+    /// what is under it by design, so it never counts as an overlap.
+    pub floating: bool,
 }
 
 /// Every audited widget on screen (with a non-empty rect). With `ctx`,
@@ -49,15 +52,16 @@ where
     Q: Queryable<'t, 't, N>,
     N: NodeT<'t> + 't,
 {
-    // egui's own widget rects carry the clipped `interact_rect`; match them
-    // to accessibility nodes by their (unclipped) rect.
-    let mut clipped: Vec<(egui::Rect, egui::Rect)> = Vec::new();
+    // egui's own widget rects carry the clipped `interact_rect` and the
+    // layer; match them to accessibility nodes by their (unclipped) rect.
+    let mut clipped: Vec<(egui::Rect, egui::Rect, bool)> = Vec::new();
     if let Some(ctx) = ctx {
         ctx.viewport(|v| {
             for pass in [&v.prev_pass, &v.this_pass] {
-                for (_, rects) in pass.widgets.layers() {
+                for (layer, rects) in pass.widgets.layers() {
+                    let floating = layer.order >= egui::Order::Tooltip;
                     for w in rects {
-                        clipped.push((w.rect, w.interact_rect));
+                        clipped.push((w.rect, w.interact_rect, floating));
                     }
                 }
             }
@@ -74,19 +78,19 @@ where
             let same = |a: egui::Rect| {
                 (a.min - rect.min).length() < 0.5 && (a.max - rect.max).length() < 0.5
             };
-            let visible = clipped
-                .iter()
-                .find(|(r, _)| same(*r))
-                .map_or(rect, |(_, c)| rect.intersect(*c));
+            let found = clipped.iter().find(|(r, _, _)| same(*r));
+            let visible = found.map_or(rect, |(_, c, _)| rect.intersect(*c));
             (rect.width() > 0.5
                 && rect.height() > 0.5
                 && visible.width() > 0.5
                 && visible.height() > 0.5)
                 .then(|| Widget {
                     role: ak.role(),
-                    label: ak.label().unwrap_or_default(),
+                    // A label's text is its accessible value.
+                    label: ak.label().or_else(|| ak.value()).unwrap_or_default(),
                     rect,
                     visible,
+                    floating: found.is_some_and(|f| f.2),
                 })
         })
         .collect()
@@ -113,8 +117,8 @@ pub fn problems(widgets: &[Widget], size: egui::Vec2, scrolls: bool) -> Vec<Stri
             ));
         }
     }
-    for (i, a) in widgets.iter().enumerate() {
-        for b in &widgets[i + 1..] {
+    for (i, a) in widgets.iter().enumerate().filter(|(_, w)| !w.floating) {
+        for b in widgets[i + 1..].iter().filter(|w| !w.floating) {
             let o = a.visible.intersect(b.visible);
             // Touching edges and 1-2 px antialias overlaps are fine.
             if o.width() > 2.0 && o.height() > 2.0 {
@@ -128,13 +132,49 @@ pub fn problems(widgets: &[Widget], size: egui::Vec2, scrolls: bool) -> Vec<Stri
     out
 }
 
-/// Asserts a clean layout of a harness, listing every problem.
+/// Frames [`settle`] runs at most before auditing anyway.
+pub const SETTLE_FRAMES: usize = 20;
+
+/// Run frames until two in a row lay the audited widgets out the same
+/// (roles and rects; texts may tick), at most [`SETTLE_FRAMES`]; returns
+/// the frames run. A background result (a file reload, a worker's
+/// measurement, a rebake) can land in any frame, and egui sizes some
+/// layouts (grids, right-aligned rows) from the frame before, so the frame
+/// it lands in can show one layout over another for a frame (GitHub #72).
+/// A user sees the next frame, which egui repaints at once; the audit
+/// judges that one. A layout that is wrong for good stays wrong here too.
+pub fn settle<S>(h: &mut egui_kittest::Harness<'_, S>) -> usize {
+    let shape = |h: &egui_kittest::Harness<'_, S>| -> Vec<(Role, [i32; 4])> {
+        widgets(h, Some(&h.ctx))
+            .iter()
+            .map(|w| {
+                let r = w.visible;
+                let q = |v: f32| v.round() as i32;
+                (w.role, [q(r.min.x), q(r.min.y), q(r.max.x), q(r.max.y)])
+            })
+            .collect()
+    };
+    let mut last = shape(h);
+    for n in 1..=SETTLE_FRAMES {
+        h.step();
+        let now = shape(h);
+        if now == last {
+            return n;
+        }
+        last = now;
+    }
+    SETTLE_FRAMES
+}
+
+/// Asserts a clean layout of a harness, listing every problem, once its
+/// layout has [`settle`]d.
 pub fn assert_clean<S>(
-    h: &egui_kittest::Harness<'_, S>,
+    h: &mut egui_kittest::Harness<'_, S>,
     size: egui::Vec2,
     scrolls: bool,
     what: &str,
 ) {
+    settle(h);
     let w = widgets(h, Some(&h.ctx));
     assert!(!w.is_empty(), "{what}: no widgets found");
     let p = problems(&w, size, scrolls);
@@ -157,6 +197,7 @@ mod tests {
             label: label.into(),
             rect,
             visible: rect,
+            floating: false,
         }
     }
 
@@ -167,5 +208,24 @@ mod tests {
         let p = problems(&[w("a", 0.0, 60.0), w("b", 50.0, 120.0)], size, false);
         assert_eq!(p.len(), 2, "{p:?}");
         assert!(p[0].contains("`b` runs off") && p[1].contains("overlaps"));
+    }
+
+    /// A toast or a tooltip covers the panel under it by design (GitHub
+    /// #72: a rebake's error toasts over the Game view's toolbar failed
+    /// the audit whenever the background bake finished in time).
+    #[test]
+    fn floating_layers_never_overlap() {
+        let size = egui::vec2(100.0, 50.0);
+        let toast = Widget {
+            floating: true,
+            ..w("toast", 10.0, 90.0)
+        };
+        assert!(problems(&[w("a", 0.0, 40.0), toast.clone()], size, false).is_empty());
+        // Still flagged when it runs off the window.
+        let wide = Widget {
+            rect: egui::Rect::from_min_max(egui::pos2(10.0, 0.0), egui::pos2(130.0, 20.0)),
+            ..toast
+        };
+        assert_eq!(problems(&[wide], size, false).len(), 1);
     }
 }

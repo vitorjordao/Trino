@@ -772,7 +772,8 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
       (`TRINO_LANG`).
   - **Content:**
     - the engine's `assets/i18n/{en-US,pt-BR,es-ES}.ron` and `fonts/i18n` (Roboto
-      Condensed, three 2 KB I4 atlases);
+      Condensed, three I4 atlases of 1.4–1.6 KB, 34–39 % of TMEM, shelf-packed
+      since #99);
     - the `i18n` self-test step (`castle64::selftest::i18n`) on PC, ares, Azahar and
       the browsers;
     - Solid Eleven's 187 strings in its own `assets/i18n/`, read as static code
@@ -1922,6 +1923,13 @@ cargo test --workspace
   fog on the PC GPU path looked better but missed the oracle by 2.7/255 (23.6% of pixels
   far) on the showcase river, because the CPU path leaves triangles outside the fog band
   unsplit. Fog moved to the vertex stage, like the CPU path and the consoles.
+- **An editor layout audit must read a settled frame** (GitHub #72). A rebake, a file
+  reload or a worker's result lands in whatever frame it finishes in, and a new toast's
+  first frame (egui's sizing pass) puts its labels mid-window in the accessibility tree:
+  under load 3 runs in 20 failed on overlaps nobody could see. `layout_audit::assert_clean`
+  steps until two frames lay out the same and skips floating layers (toasts, tooltips).
+  Animate editor previews by `stable_dt`, never `Instant::elapsed` (a slow frame aged a
+  particle burst between two test frames).
 - **The editor's kittest `click` helper only finds widgets the layout audit lists**
   (buttons, headers, ...). A `Label` with `Sense::click()` is not one: the helper believes
   it hidden, scrolls the panel around and the click lands nowhere at 960×600. Clickable
@@ -2045,6 +2053,12 @@ cargo test --workspace
   nightly and its own paths: Solid Eleven's frame measured 33.9 ms there against
   30.3 ms locally on the same commit (iteration 2 went the other way, -0.4 ms). Keep
   about 3 ms of local headroom under a gate, and read the CI log's `TRINO_FRAME`.
+- **An N64 RSP copy region (`N64Renderer::reserve_rsp_arena`, `[n64] rsp_arena_kb`) costs
+  heap** (GitHub #110): reserve it before any mesh registers and size it from a base-tier
+  self-test, never "with room to spare" (416 KB made a 79 KB batch fail). Stage a copy
+  one segment at a time, never a whole-copy `Vec` (a second block as big as the copy).
+  The batch buffers give memory back after a 120-frame window that used under half
+  (`N64Renderer::trim`); don't hold a reference to one across frames.
 - **An N64 RSP draw that misses the memo costs ~110 µs of CPU before its T&L stage**
   (the key, the mesh lookups, `rsp_check_mv`, the model-view product), on top of
   ~80–100 µs counted as `tnl`, so a moving body part costs ~0.2 ms a frame. Measured
@@ -2133,6 +2147,10 @@ cargo test --workspace
   `mksprite` keeps a gray master's red channel and ignores its alpha, so a white glow
   in I4 was a solid disc on the N64 (Solid Eleven's `se_glow`, found by `texture
   report` at 2.3 dB). The build now stages masks by coverage (`texture::n64::stage`).
+- **An N64 CI4/CI8 texture has 2 KB of TMEM for its texels**, not 4: the palette takes
+  the upper half (`N64Format::tmem_texels`, the shim's `trino_text_begin`). Until #99 the
+  reports compared CI texels with 4 KB, so `fonts/trino5x7` (CI4, 2 880 B) read 71 % and
+  never stayed resident. `i18n check` warns from 75 % of the real room.
 - **A full alpha ramp keeps ~33 dB in 4-bit alpha** (`RGBA4`, `ETC1A4`), so `auto` at the
   default 35 dB leaves soft colored glows in `RGBA8`. Use `quality = "low"` when 4-bit
   alpha is acceptable.

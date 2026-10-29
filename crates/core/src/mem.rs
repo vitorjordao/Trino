@@ -9,6 +9,11 @@
 //!   boot on the consoles, a static buffer).
 //! - [`LevelArena`]: an [`Arena`] tied to an asset group, reset when the
 //!   group unloads, so per-level state dies with the level's assets.
+//! - [`Blocks`]: offsets in a region allocated once (the N64's RSP mesh
+//!   copies, GitHub #110), freed in any order, so long-lived blocks don't
+//!   interleave with the general heap's short-lived ones.
+//! - [`TrimWindow`]: when a growable buffer may give memory back — after a
+//!   window of frames that used far less than it holds.
 //!
 //! An allocation is a `&mut [T]` (or `&mut T`) of `Copy` data that borrows
 //! the arena: [`reset`](FrameArena::reset) takes `&mut self`, so the borrow
@@ -204,6 +209,208 @@ unsafe fn bump<'s, T: Copy>(
     }
 }
 
+/// A free list over offsets `0..size` of a region the caller allocated
+/// once: best fit, freed blocks merge with their neighbors, at most `N`
+/// free ranges. It never touches the region itself (the N64 keeps it in
+/// uncached RDRAM the RSP reads), so the bookkeeping lives on the heap or
+/// the stack like any value. Blocks are [`Blocks::ALIGN`]-aligned and
+/// rounded up to it.
+///
+/// Why (GitHub #110): on the base N64 the RSP's mesh copies (up to ~45 KB
+/// each) came from the general heap, between short-lived buffers; after a
+/// group load and unload the heap had 137 KB free but no 45 KB hole. A
+/// region of their own keeps their holes for each other.
+#[derive(Clone, Debug)]
+pub struct Blocks<const N: usize> {
+    size: u32,
+    /// Free ranges `(offset, len)`, sorted by offset, never touching.
+    free: [(u32, u32); N],
+    count: usize,
+    used: u32,
+    high: u32,
+    /// Bytes given up when a free found the list full (never reused).
+    lost: u32,
+}
+
+impl<const N: usize> Blocks<N> {
+    /// Block alignment and granularity, bytes (the RSP DMAs 8-byte
+    /// aligned; 16 keeps a cache line's half).
+    pub const ALIGN: u32 = 16;
+
+    /// A region of `size` bytes (rounded down to [`Self::ALIGN`]), all free.
+    pub const fn new(size: u32) -> Self {
+        let size = size / Self::ALIGN * Self::ALIGN;
+        let mut free = [(0, 0); N];
+        let count = if N > 0 && size > 0 {
+            free[0] = (0, size);
+            1
+        } else {
+            0
+        };
+        Blocks {
+            size,
+            free,
+            count,
+            used: 0,
+            high: 0,
+            lost: 0,
+        }
+    }
+
+    fn round(len: u32) -> u32 {
+        len.max(1).div_ceil(Self::ALIGN) * Self::ALIGN
+    }
+
+    /// A block of `len` bytes: its offset, or `None` when no free range
+    /// holds it (the caller falls back to its heap). Best fit: the
+    /// smallest free range that holds it, its lowest end.
+    pub fn alloc(&mut self, len: u32) -> Option<u32> {
+        let len = Self::round(len);
+        let mut best: Option<usize> = None;
+        for i in 0..self.count {
+            let l = self.free[i].1;
+            if l >= len && best.is_none_or(|b| l < self.free[b].1) {
+                best = Some(i);
+            }
+        }
+        let i = best?;
+        let (off, l) = self.free[i];
+        if l == len {
+            self.free.copy_within(i + 1..self.count, i);
+            self.count -= 1;
+        } else {
+            self.free[i] = (off + len, l - len);
+        }
+        self.used += len;
+        self.high = self.high.max(self.used);
+        Some(off)
+    }
+
+    /// Give back the block at `off` of `len` bytes (what
+    /// [`alloc`](Self::alloc) was asked for). Neighbors merge; a free that
+    /// would need a range past `N` gives the block up instead (counted in
+    /// [`lost`](Self::lost)).
+    pub fn free(&mut self, off: u32, len: u32) {
+        let len = Self::round(len);
+        debug_assert!(off.is_multiple_of(Self::ALIGN) && off + len <= self.size);
+        self.used -= len;
+        // First free range after the block.
+        let at = self.free[..self.count].partition_point(|r| r.0 < off);
+        let joins_prev = at > 0 && {
+            let p = self.free[at - 1];
+            p.0 + p.1 == off
+        };
+        let joins_next = at < self.count && off + len == self.free[at].0;
+        match (joins_prev, joins_next) {
+            (true, true) => {
+                self.free[at - 1].1 += len + self.free[at].1;
+                self.free.copy_within(at + 1..self.count, at);
+                self.count -= 1;
+            }
+            (true, false) => self.free[at - 1].1 += len,
+            (false, true) => self.free[at] = (off, len + self.free[at].1),
+            (false, false) if self.count < N => {
+                self.free.copy_within(at..self.count, at + 1);
+                self.free[at] = (off, len);
+                self.count += 1;
+            }
+            (false, false) => self.lost += len,
+        }
+    }
+
+    /// Bytes of the region.
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+
+    /// Bytes in blocks now.
+    pub fn used(&self) -> u32 {
+        self.used
+    }
+
+    /// The most [`used`](Self::used) ever was.
+    pub fn high_water(&self) -> u32 {
+        self.high
+    }
+
+    /// The biggest block [`alloc`](Self::alloc) could hand out now.
+    pub fn largest_free(&self) -> u32 {
+        self.free[..self.count]
+            .iter()
+            .map(|r| r.1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Bytes no free could put back on the list.
+    pub fn lost(&self) -> u32 {
+        self.lost
+    }
+
+    /// Is `off..off + len` inside the region?
+    pub fn holds(&self, off: u32, len: u32) -> bool {
+        off.checked_add(len).is_some_and(|end| end <= self.size)
+    }
+}
+
+/// When `N` growable buffers (a renderer's per-batch `Vec`s) may give
+/// memory back: [`note`](Self::note) each buffer's length where it is
+/// emptied, call [`end_frame`](Self::end_frame) once a frame, and every
+/// `window` frames it hands back the window's peaks. [`shrink_to`] then
+/// says whether a buffer holds enough more than its peak to be worth a
+/// shrink.
+///
+/// Why (GitHub #110): one N64 frame drawing 16 rigid models (176 parts)
+/// grew the batch buffers by ~24 KB for good; on the base N64 that is a
+/// heap block nothing else can use, and a hole once the buffer moves.
+#[derive(Clone, Debug)]
+pub struct TrimWindow<const N: usize> {
+    peaks: [u32; N],
+    frames: u16,
+    window: u16,
+}
+
+impl<const N: usize> TrimWindow<N> {
+    /// A window of `window` frames (at least 1).
+    pub const fn new(window: u16) -> Self {
+        TrimWindow {
+            peaks: [0; N],
+            frames: 0,
+            window: if window == 0 { 1 } else { window },
+        }
+    }
+
+    /// Buffer `i` held `len` elements (before it was cleared).
+    #[inline]
+    pub fn note(&mut self, i: usize, len: usize) {
+        let len = len.min(u32::MAX as usize) as u32;
+        if len > self.peaks[i] {
+            self.peaks[i] = len;
+        }
+    }
+
+    /// Count a frame: at the window's end, the peaks it saw (and a new
+    /// window starts), else `None`.
+    pub fn end_frame(&mut self) -> Option<[u32; N]> {
+        self.frames += 1;
+        if self.frames < self.window {
+            return None;
+        }
+        self.frames = 0;
+        Some(core::mem::replace(&mut self.peaks, [0; N]))
+    }
+}
+
+/// The capacity to shrink a buffer of `capacity` elements of `elem` bytes
+/// to, given the `peak` its last window used: `Some(peak)` when it holds
+/// more than twice that and more than `floor` bytes beyond it, else `None`
+/// (small buffers and ones in use stay, so a steady game never reallocates).
+pub fn shrink_to(capacity: usize, peak: u32, elem: usize, floor: usize) -> Option<usize> {
+    let peak = peak as usize;
+    let spare = capacity.saturating_sub(peak).saturating_mul(elem);
+    (capacity > peak.saturating_mul(2) && spare > floor).then_some(peak)
+}
+
 /// A global allocator that counts what it holds: a PC or Web host wraps the
 /// system allocator in it (`#[global_allocator] static A: Counting<System> =
 /// Counting::new(System);`) and reports [`used`](Counting::used) and
@@ -313,6 +520,67 @@ unsafe impl<A: core::alloc::GlobalAlloc> core::alloc::GlobalAlloc for Counting<A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocks_fit_best_merge_and_count() {
+        let mut b = Blocks::<8>::new(1000);
+        assert_eq!(b.size(), 992, "rounded down to 16");
+        let x = b.alloc(100).unwrap();
+        let y = b.alloc(1).unwrap();
+        let z = b.alloc(200).unwrap();
+        assert_eq!((x, y, z), (0, 112, 128));
+        assert_eq!(b.used(), 112 + 16 + 208);
+        // A hole between x and z: a small block takes it (best fit), a
+        // big one goes after z.
+        b.free(y, 1);
+        assert_eq!(b.alloc(10), Some(112));
+        b.free(112, 10);
+        assert_eq!(b.alloc(300), Some(336));
+        // Freeing everything merges back into one range.
+        for (off, len) in [(0, 100), (128, 200), (336, 300)] {
+            b.free(off, len);
+        }
+        assert_eq!((b.used(), b.largest_free()), (0, 992));
+        assert_eq!(b.high_water(), 112 + 208 + 304, "x, z and the 300");
+        assert!(b.alloc(993).is_none());
+        assert!(b.holds(976, 16) && !b.holds(976, 17));
+    }
+
+    #[test]
+    fn blocks_give_a_block_up_when_the_list_is_full() {
+        // Two free ranges at most: alternate blocks free make a third.
+        let mut b = Blocks::<2>::new(16 * 8);
+        let offs: [u32; 8] = core::array::from_fn(|_| b.alloc(16).unwrap());
+        for &o in offs.iter().step_by(2) {
+            b.free(o, 16);
+        }
+        assert_eq!(b.lost(), 32, "the 3rd and 4th holes are given up");
+        assert_eq!(b.used(), 64);
+        // A neighbor's free still merges into a listed range.
+        b.free(offs[1], 16);
+        assert_eq!(b.largest_free(), 48);
+    }
+
+    #[test]
+    fn trim_window_hands_back_peaks_per_window() {
+        let mut t = TrimWindow::<2>::new(3);
+        t.note(0, 500);
+        t.note(0, 20);
+        t.note(1, 7);
+        assert_eq!(t.end_frame(), None);
+        assert_eq!(t.end_frame(), None);
+        assert_eq!(t.end_frame(), Some([500, 7]));
+        // A new window starts from zero.
+        t.note(1, 3);
+        t.end_frame();
+        t.end_frame();
+        assert_eq!(t.end_frame(), Some([0, 3]));
+        // 1024 triangles of 88 bytes held after a window of 100: shrink;
+        // a buffer in use, or one under the floor, stays.
+        assert_eq!(shrink_to(1024, 100, 88, 16 * 1024), Some(100));
+        assert_eq!(shrink_to(1024, 600, 88, 16 * 1024), None);
+        assert_eq!(shrink_to(64, 0, 88, 16 * 1024), None);
+    }
 
     #[test]
     fn frame_arena_bumps_aligns_and_resets() {

@@ -84,6 +84,29 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
     the table fails the N64 bake (the editor's texture test caught a gray card);
   - out-of-line helpers for code called per field or per player (`StateHasher`, the
     TREC per-player codecs): ~5 KB.
+  - the RSP mesh copies can have their own region of uncached RDRAM, reserved before
+    any mesh registers: `N64Renderer::reserve_rsp_arena(bytes)` before
+    `N64Renderer::new`, or `trino.toml` `[n64] rsp_arena_kb = N` (xtask writes
+    `rom:/rsp_arena`, `N64Host::boot` reserves it and logs `TRINO_RSP_ARENA:`). A
+    `trino_core::mem::Blocks` free list (best fit, neighbors merge) carves it; copies
+    past it take the heap. Their holes stay theirs, so a group's load and unload no
+    longer leave free bytes and no 45 KB block (GitHub #110). **It is opt-in and costs
+    heap**: measured on the base tier, 416 KB (room for every copy) made a 79 KB batch
+    fail mid-run, 376 KB (the resident peak) passed with `top=` 11 KB lower than no
+    arena, and with no arena the strider group's load and unload left `top=` intact
+    (the segment staging and the trim below did that). The engine ROM reserves 64 KB, so
+    every run exercises it. Reserve one for a game that loads and unloads groups of
+    models many times, sized from `TRINO_HEAP … rsp=live/peak` and checked with a
+    base-tier self-test; `arena=used/size` shows the fill;
+  - a copy is staged one segment at a time: the old whole-copy staging `Vec` asked the
+    heap for a second block as big as the copy;
+  - the batch buffers shrink by themselves: `N64Renderer::trim` keeps each buffer's
+    peak over 120 frames and `trim_to` gives back what holds more than twice that and
+    16 KB beyond (`mem::TrimWindow`, `shrink_to`; newlib's realloc shrinks in place).
+    The trim never goes below what `reserve_batch` asked for (a shrink there would bring
+    back the doubling it avoids); `TRINO_HEAP:batch= trims=` after the micro scenes.
+    `trim_buffers` (empty them now) and `reserve_batch` (size once, exactly) stay for the
+    self-test's scene changes;
   A malloc/free bisection to find the "largest block" changes the arena it measures
   (newlib trims and re-extends the top): use `top=`.
 - Sizes: `cargo xtask build n64` prints each group's entries, raw and stored KB; `cargo

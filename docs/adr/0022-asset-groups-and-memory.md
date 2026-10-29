@@ -188,3 +188,31 @@ browsers. Measured drift: under 3 KB on the N64, under 300 B on the 3DS.
 - Follow-ups: per-cell streaming in castle64's interior; a RAM line in the Game view's
   budget overlay; a worker for PC/Web decoding; zstd if a project needs smaller bundles
   than LZ4 gives.
+
+## Addendum (2026-10-29, GitHub #110): the base N64's fragmentation
+
+A group's load and unload in the middle of the base N64's self-test left 137 KB free and
+no block for a 45 KB RSP mesh copy, and one big frame kept the batch buffers' growth for
+good. What changed:
+
+- **The RSP copies' own region** (`N64Renderer::reserve_rsp_arena`, or `trino.toml`
+  `[n64] rsp_arena_kb` through `rom:/rsp_arena` and `N64Host::boot`): one uncached
+  block taken at boot, before any mesh registers, carved by `trino_core::mem::Blocks`
+  (best fit, neighbors merge, ≤ 96 free ranges; a free past that gives its block up and
+  counts it). A copy that doesn't fit takes the heap as before; frees still wait in the
+  renderer's grave. **Opt-in**, because it costs heap, measured on the base tier with
+  the engine's self-test: 416 KB (room for every copy) made a 79 KB batch fail mid-run;
+  376 KB (the resident peak) passed with the heap's top block 11 KB smaller than with
+  no arena; with no arena the strider group's load and unload left the top block
+  intact. The engine ROM reserves 64 KB (the boot copies fill it), so every run
+  exercises the path. A game that cycles model groups many times sizes one from
+  `TRINO_HEAP … rsp=live/peak`.
+- **A copy is staged one segment at a time**: `rsp::bake` built the whole copy in a heap
+  `Vec` beside its uncached block, so a 45 KB copy needed two 45 KB blocks at once.
+- **Batch buffers shrink by themselves**: `N64Renderer::trim` (`mem::TrimWindow`) keeps
+  each buffer group's peak over 120 frames; `trim_to` shrinks one that holds more than
+  twice that and 16 KB beyond (`mem::shrink_to`), in place on newlib, never below
+  what `reserve_batch` asked for. Commands are copied into rspq's buffer at submit, so
+  no queued command points into a buffer the trim moves.
+- `TRINO_HEAP` lines add `rsp=live/peak arena=used/size` (and `batch=` before the micro
+  scenes).

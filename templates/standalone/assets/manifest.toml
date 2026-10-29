@@ -12,7 +12,9 @@ formats = { n64 = "CI4" }
 [sounds.beep]
 file = "sounds/beep.wav"
 
-# The engine's pixel font: what the UI screens in ui/ draw with.
+# The engine's pixel font: what the UI screens in ui/ draw with. I4 on the
+# N64 keeps the whole atlas in TMEM (as CI4 it re-uploaded every glyph).
 [fonts.trino5x7]
 file = "fonts/trino5x7.png"
 cell = [6, 10]
+formats = { n64 = "I4" }

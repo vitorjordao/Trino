@@ -79,9 +79,22 @@ fn ttf_masters_rasterize_to_an_atlas_and_a_glyph_table() {
     assert_eq!((space.w, space.h), (0, 0), "whitespace has no pixels");
     assert_eq!(space.advance, h.advance);
 
-    // The atlas: 256 wide, power-of-two tall, white ink; thresholded alpha.
-    assert_eq!(mono_atlas.width, 256);
-    assert!(mono_atlas.height.is_power_of_two());
+    // The atlas: packed tight (whole 16-texel widths up to 256, heights in
+    // 4-texel steps: GitHub #99), white ink; thresholded alpha.
+    assert!(mono_atlas.width.is_multiple_of(16) && mono_atlas.width <= 256);
+    assert_eq!(mono_atlas.height % 4, 0);
+    // No two glyph boxes share a texel.
+    let boxes: Vec<_> = [h, i, e]
+        .iter()
+        .map(|g| (g.x as u32, g.y as u32, g.w as u32, g.h as u32))
+        .collect();
+    for (k, a) in boxes.iter().enumerate() {
+        for b in &boxes[k + 1..] {
+            let apart =
+                a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
+            assert!(apart, "{a:?} overlaps {b:?}");
+        }
+    }
     let alphas = |rgba: &[u8]| -> Vec<u8> { rgba.iter().skip(3).step_by(4).copied().collect() };
     let hard = alphas(&mono_atlas.rgba);
     assert!(hard.iter().all(|&a| a == 0 || a == 255));

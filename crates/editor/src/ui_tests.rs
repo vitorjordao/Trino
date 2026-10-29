@@ -523,6 +523,7 @@ fn click(h: &mut Harness<'static, App>, label: &str) {
                     label: label.into(),
                     rect,
                     visible,
+                    floating: false,
                 }
             })
     };
@@ -887,16 +888,16 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
             return;
         };
         let what = |s: &str| format!("{s} at {}x{}", size.x, size.y);
-        crate::layout_audit::assert_clean(&h, size, true, &what("scene settings"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("scene settings"));
         let rock = find(&h.state().doc.scene, "rock-1");
         h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
         h.run_steps(3);
         h.get_by_label_contains("Platforms").click();
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("entity inspector"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("entity inspector"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Game view"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Game view"));
         // The hardware tiers (issue #54): both tier columns shown, the Game
         // view on each expanded tier. (At 960x600 Platforms is still
         // closed here: open it scrolled into view.)
@@ -907,7 +908,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         click(&mut h, "Show N64 + Expansion Pak");
         click(&mut h, "Show New 3DS");
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("tier columns"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("tier columns"));
         for profile in [
             trino_platform_pc::SimProfile::N64,
             trino_platform_pc::SimProfile::N3ds,
@@ -919,23 +920,28 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
             }
             h.run_steps(3);
             let label = h.state().game_view.target_label();
-            crate::layout_audit::assert_clean(&h, size, true, &what(&format!("{label} Game view")));
+            crate::layout_audit::assert_clean(
+                &mut h,
+                size,
+                true,
+                &what(&format!("{label} Game view")),
+            );
         }
         // The 3DS stereo preview (issue #63): its menu and 3D slider in the
         // Game view's toolbar, on the New 3DS left from the loop.
         h.state_mut().game_view.stereo_view = trino_platform_pc::StereoView::Anaglyph;
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("stereo preview"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("stereo preview"));
         h.state_mut().game_view.stereo_view = trino_platform_pc::StereoView::Off;
         h.state_mut().cmds.push(Cmd::Select(None));
         h.state_mut().inspect_focus = Some("budget".into());
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("tier budgets"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("tier budgets"));
         // The scene's Stereo 3D section, on (issue #63).
         h.state_mut().doc.scene.environment.stereo = Some(trino_scene::StereoDef::default());
         h.state_mut().inspect_focus = Some("stereo".into());
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("stereo section"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("stereo section"));
         h.state_mut().doc.scene.environment.stereo = None;
         h.state_mut().inspect_focus = None;
         h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
@@ -972,7 +978,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().lod_preview = Some((sel, 20.0));
         h.state_mut().inspect_focus = Some("lod".into());
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("LOD panel"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("LOD panel"));
         // A model asset with its impostor section.
         h.state_mut().inspect_focus = Some("impostor".into());
         h.state_mut()
@@ -981,7 +987,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
                 "models/c64_boar".into(),
             )));
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("impostor section"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("impostor section"));
         // The texture inspector, measured, its formats scrolled into view,
         // with a bake error (ETC1 under a min_psnr) in a column.
         let photo = "sprites/selftest_photo_etc1";
@@ -1000,7 +1006,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
                 .as_ref()
                 .is_some_and(|(_, i, _)| i.logical == photo && i.settings.min_psnr == Some(40.0))
         });
-        crate::layout_audit::assert_clean(&h, size, true, &what("texture inspector"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("texture inspector"));
         // The audio inspector, measured, its platforms scrolled into view;
         // then the Mixer tab.
         h.state_mut().inspect_focus = Some("audio".into());
@@ -1015,15 +1021,15 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
                 .as_ref()
                 .is_some_and(|(_, i)| i.logical == "music/theme")
         });
-        crate::layout_audit::assert_clean(&h, size, true, &what("audio inspector"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("audio inspector"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Mixer));
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Mixer tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Mixer tab"));
         // The quality presets (#55): the Quality tab, the Game view's PC
         // toolbar with its preset picker and the dynres toggle.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Quality));
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Quality tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Quality tab"));
         {
             let app = h.state_mut();
             app.game_view.set_profile_tier(
@@ -1034,27 +1040,27 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         }
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("PC Game view"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("PC Game view"));
         // Asset groups (issue #56): the Memory tab measured, the Assets
         // panel's group chips, the scene settings' Asset groups.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Memory));
         h.run_steps(3);
         wait_for(&mut h, "the memory plans", |a| a.groups.measured());
-        crate::layout_audit::assert_clean(&h, size, true, &what("Memory tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Memory tab"));
         // The Accessibility tab (issue #60): simulation, colors, checklist.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Accessibility));
         h.run_steps(3);
         wait_for(&mut h, "the accessibility checklist", |a| {
             a.access.report.is_some()
         });
-        crate::layout_audit::assert_clean(&h, size, true, &what("Accessibility tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Accessibility tab"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Assets));
         h.state_mut().assets_tab = crate::panels::assets::AssetTab::Sprites;
         h.state_mut().groups.filter = Some("selftest_level".into());
         h.state_mut().cmds.push(Cmd::Select(None));
         h.state_mut().inspect_focus = Some("groups".into());
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("asset groups"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("asset groups"));
         // Shadows (ADR 0025): the scene's section with its tier lines, an
         // entity's Shadow component.
         h.state_mut().doc.scene.environment.shadows = Some(trino_scene::ShadowsDef::default());
@@ -1065,22 +1071,22 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().doc.scene.get_mut(&rock).unwrap().shadow = Some(rock_shadow);
         h.state_mut().inspect_focus = Some("shadows".into());
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("scene shadows"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("scene shadows"));
         h.state_mut().inspect_focus = None;
         h.state_mut().cmds.push(Cmd::Select(Some(rock.clone())));
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Shadow component"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Shadow component"));
         // The UI tab (#58): the self-test screen with a node selected (its
         // inspector), then on the 3DS (both screens) with another.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Ui));
         h.state_mut().ui_screens.selected = Some(vec![1, 0]);
         h.run_steps(4);
         assert!(h.query_by_label("UI preview").is_some());
-        crate::layout_audit::assert_clean(&h, size, true, &what("UI tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("UI tab"));
         h.state_mut().ui_screens.target = 1;
         h.state_mut().ui_screens.selected = Some(vec![2]);
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("UI tab on the 3DS"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("UI tab on the 3DS"));
         // The Localization tab (#59): the table, its issues and fonts, over
         // tables with a missing key, a fallback and a plural.
         let i18n = std::path::Path::new("assets/i18n");
@@ -1101,21 +1107,21 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Localization));
         h.run_steps(4);
         assert!(h.query_by_label("Preview language").is_some());
-        crate::layout_audit::assert_clean(&h, size, true, &what("Localization tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Localization tab"));
         // The Project tab (issue #61): both pages.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Project));
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Project › Achievements"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Project › Achievements"));
         h.state_mut().shipping.page = crate::shipping::Page::Packaging;
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Project › Packaging"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Project › Packaging"));
         h.state_mut().shipping.page = crate::shipping::Page::Physics;
         h.run_steps(3);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Project › Physics"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Project › Physics"));
         // The Profiler tab (issue #62): empty, then A and B compared.
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Profiler));
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Profiler (empty)"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Profiler (empty)"));
         let root = std::env::current_dir().unwrap();
         profiler_fixtures(&root, false);
         let p = &mut h.state_mut().profiler;
@@ -1123,21 +1129,21 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         p.open_b(&root.join("target/traces/b.log"), None);
         h.run_steps(4);
         assert!(h.query_by_label_contains("DIFF (B").is_some());
-        crate::layout_audit::assert_clean(&h, size, true, &what("Profiler A vs B"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Profiler A vs B"));
         // The Net tab and Play here's bar with a replay (issue #67).
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Net));
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Net tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Net tab"));
         // The Saves tab (issue #68), with a damaged slot pair.
         save_fixtures(&std::env::current_dir().unwrap().join("target/save"));
         h.state_mut().saves = Default::default();
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Saves));
         h.run_steps(4);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Saves tab"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Saves tab"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
         h.state_mut().record_play_here();
         h.run_steps(30);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Play here recording"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Play here recording"));
         let bytes = h
             .state_mut()
             .game_view
@@ -1151,7 +1157,7 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         std::fs::write(&file, bytes).unwrap();
         h.state_mut().replay_here(&file);
         h.run_steps(6);
-        crate::layout_audit::assert_clean(&h, size, true, &what("Play here replay"));
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Play here replay"));
         h.state_mut().cmds.push(crate::app::Cmd::StopPlayHere);
         h.run_steps(2);
         leave_temp_project(&repo);
@@ -1789,7 +1795,7 @@ fn animation_tab_previews_measures_and_exports() {
         h.run_steps(3);
         assert!(h.state().anim.anim_ref().unwrap().blend.is_some());
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             size,
             true,
             &format!("Animation tab at {}x{}", size.x, size.y),
@@ -1882,7 +1888,7 @@ fn animation_graph_mode_drives_writes_and_reloads() {
             Some(hop)
         );
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             size,
             true,
             &format!("Animation graph at {}x{}", size.x, size.y),
@@ -1963,6 +1969,64 @@ fn animation_clip_events_and_root_motion_write_the_manifest() {
     leave_temp_project(&repo);
 }
 
+/// Toasts float over whatever panel is under them (GitHub #72). A toast
+/// is laid out once at a provisional place on its first frame (egui's
+/// sizing pass for a new area), and that frame's labels are in the
+/// accessibility tree: a background rebake that failed under load put its
+/// error toasts over the Game view's toolbar in the very frame the layout
+/// audit read, and the audit called them overlapping widgets. They are on
+/// a floating layer, which the audit leaves out of its overlap check (and
+/// still holds to the window's edges).
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn toasts_float_over_the_layout_audit() {
+    use crate::log::Level;
+    // The layout audit's two sizes; 1600x1000 is the particle inspector's
+    // (where CI first saw it).
+    for size in [egui::vec2(960.0, 600.0), egui::vec2(1600.0, 1000.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        h.state_mut()
+            .cmds
+            .push(crate::app::Cmd::FocusTab(crate::app::Tab::Game));
+        h.run_steps(3);
+        for i in 0..3 {
+            h.state_mut().log.toast(
+                Level::Error,
+                format!("rebake failed ({i}): the bake's error, in a toast"),
+            );
+        }
+        // The toasts' first frame: what the flaky audits saw.
+        h.step();
+        let w = crate::layout_audit::widgets(&h, Some(&h.ctx));
+        let toasts: Vec<_> = w.iter().filter(|w| w.floating).collect();
+        assert!(
+            toasts.iter().any(|t| t.label.contains("rebake failed")),
+            "the toasts' labels are floating: {toasts:?}"
+        );
+        for t in &toasts {
+            eprintln!("toast widget {:?} `{}` {:?}", t.role, t.label, t.rect);
+        }
+        // They cover panel widgets: the overlap check used to fail here.
+        let solid: Vec<_> = w.iter().filter(|w| !w.floating).collect();
+        let covered = toasts.iter().any(|t| {
+            solid.iter().any(|s| {
+                let o = s.visible.intersect(t.visible);
+                o.width() > 2.0 && o.height() > 2.0
+            })
+        });
+        assert!(covered, "the toasts cover no widget: move them in the test");
+        let p = crate::layout_audit::problems(&w, size, true);
+        assert!(p.is_empty(), "{p:?}");
+        let shot = |what: &str| format!("toasts-{what}-{}x{}.png", size.x, size.y);
+        evidence(&mut h, &shot("first-frame"));
+        crate::layout_audit::assert_clean(&mut h, size, true, "toasts over the Game view");
+        evidence(&mut h, &shot("settled"));
+        leave_temp_project(&repo);
+    }
+}
+
 /// Particle effects in the editor, both ways: "+" writes the same file and
 /// manifest entry `cargo xtask particles new` writes; the inspector's
 /// preview bursts up to the previewed platform's cap; an edit lands in the
@@ -2002,6 +2066,15 @@ fn particle_effects_preview_caps_and_files() {
         )));
     h.run_steps(3);
     h.state_mut().particles_view.system.emitting = false;
+    // The preview ages particles by egui's frame time (a fixed 0.1 s a
+    // frame here, GitHub #72): long-lived sparks, so a burst is still all
+    // alive when the test counts it.
+    h.state_mut()
+        .particles
+        .get_mut("selftest-sparks")
+        .unwrap()
+        .life = (60.0, 60.0);
+    h.run_steps(2);
     for (label, cap) in [("N64 preview", 8), ("3DS preview", 16), ("PC preview", 24)] {
         click(&mut h, label);
         h.run_steps(2);
@@ -2052,7 +2125,12 @@ fn particle_effects_preview_caps_and_files() {
         12,
         "the preview rebuilt"
     );
-    crate::layout_audit::assert_clean(&h, egui::vec2(1600.0, 1000.0), true, "particle inspector");
+    crate::layout_audit::assert_clean(
+        &mut h,
+        egui::vec2(1600.0, 1000.0),
+        true,
+        "particle inspector",
+    );
     leave_temp_project(&repo);
 }
 
@@ -2152,7 +2230,7 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
                 "the reason under the row"
             );
             crate::layout_audit::assert_clean(
-                &h,
+                &mut h,
                 size,
                 true,
                 &format!("render path at {}x{}", size.x, size.y),
@@ -2174,7 +2252,7 @@ fn platform_budget_shows_rsp_reasons_and_unseen_draws() {
             h.run_steps(4);
         }
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             size,
             true,
             &format!("platform budget at {}x{}", size.x, size.y),
@@ -2337,7 +2415,7 @@ fn launcher_lists_recent_projects_opens_and_creates() {
         h.get_by_label_contains("folder not found");
         h.get_by_label_contains("opened 1 h ago");
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             size,
             true,
             &format!("launcher at {}x{}", size.x, size.y),

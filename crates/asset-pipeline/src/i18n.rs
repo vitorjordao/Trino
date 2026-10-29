@@ -435,6 +435,8 @@ pub struct FontCost {
     pub bytes: u64,
     /// TMEM on the N64, texture memory on the 3DS, VRAM on the PC.
     pub memory: String,
+    /// What it takes of `memory` (N64: its texels in TMEM).
+    pub memory_bytes: u64,
     pub budget: Option<u64>,
     pub fits: bool,
     pub group: String,
@@ -480,6 +482,7 @@ pub fn font_costs(
                 format: r.format.clone(),
                 bytes: r.bytes,
                 memory: r.memory.into(),
+                memory_bytes: r.memory_bytes,
                 budget: r.memory_budget,
                 fits: r.memory_budget.is_none_or(|b| r.memory_bytes <= b),
                 group: if decl.groups.is_empty() {

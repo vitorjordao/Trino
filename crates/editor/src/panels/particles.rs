@@ -5,8 +5,6 @@
 //! file (hot-reloaded everywhere); `cargo xtask particles` reads the same
 //! file and runs the same simulation.
 
-use std::time::Instant;
-
 use eframe::egui::{self, RichText, Vec2};
 use trino_asset_pipeline::Platform;
 use trino_asset_pipeline::particles::{MAX_PARTICLES, ParticlesDef, PlatformCap};
@@ -28,7 +26,6 @@ pub struct ParticlesView {
     pub platform: Platform,
     pub seed: u32,
     pub burst: usize,
-    pub last: Instant,
 }
 
 impl Default for ParticlesView {
@@ -40,7 +37,6 @@ impl Default for ParticlesView {
             platform: Platform::Pc,
             seed: 1,
             burst: 20,
-            last: Instant::now(),
         }
     }
 }
@@ -303,8 +299,10 @@ pub fn asset(app: &mut App, ui: &mut egui::Ui, name: &str) {
     // Live preview.
     let v = &mut app.particles_view;
     v.sync(name, &def);
-    let dt = v.last.elapsed().as_secs_f32().min(0.1);
-    v.last = Instant::now();
+    // egui's frame time, not the wall clock: a slow frame (a loaded CI
+    // machine) aged a burst past its particles' life between two test
+    // frames (GitHub #72), and a headless harness steps a fixed time.
+    let dt = ui.input(|i| i.stable_dt).min(0.1);
     v.step(dt);
     let w = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(

@@ -172,7 +172,25 @@ fn i18n_check_reports_each_kind_of_problem() {
     );
     assert!(has("error", "overflow", "pt-BR", "menu.play"), "{all:#?}");
     assert!(!has("error", "overflow", "en-US", "menu.play"), "{all:#?}");
-    assert!(has("warning", "font_budget", "*", ""), "{all:#?}");
+    // TMEM (GitHub #99): a warning past it (glyphs upload per run) and
+    // from 75 % (CI4 texels have 2 KB beside the palette).
+    let budget = |sev: &str, font: &str| {
+        all.iter().any(|i| {
+            i.0 == sev && i.1 == "font_budget" && i.4.starts_with(&format!("fonts/{font} on n64"))
+        })
+    };
+    assert!(budget("warning", "huge"), "{all:#?}");
+    assert!(
+        all.iter()
+            .any(|i| i.4.starts_with("fonts/huge") && i.4.contains("past TMEM")),
+        "{all:#?}"
+    );
+    assert!(budget("warning", "small"), "{all:#?}");
+    assert!(
+        all.iter()
+            .any(|i| i.1 == "font_budget" && i.4.contains("(90 %)")),
+        "{all:#?}"
+    );
     // Fixed: the check passes, and only warnings remain unless --strict.
     let lib = tmp.path().join("assets/i18n");
     std::fs::write(

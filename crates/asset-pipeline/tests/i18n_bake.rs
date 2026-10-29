@@ -218,7 +218,10 @@ fn the_font_report_sees_every_atlas_and_its_tmem() {
         .unwrap();
     assert_eq!(ui_pt.lang, "pt-BR");
     assert_eq!(ui_pt.memory, "TMEM");
-    assert_eq!(ui_pt.budget, Some(4096));
+    // A CI4 atlas (the N64's default for fonts): its texels have the 2 KB
+    // beside the palette, what the shim's resident text path checks (#99).
+    assert_eq!(ui_pt.budget, Some(2048));
+    assert!(ui_pt.memory_bytes <= ui_pt.bytes, "texels only, no palette");
     assert_eq!(ui_pt.group, "i18n-pt-br");
     let base = costs
         .iter()

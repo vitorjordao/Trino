@@ -364,7 +364,7 @@ fn platforms_tab_fits_wide_and_narrow_inspectors() {
         h.get_by_label("Scale on 3DS").click();
         h.run();
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 900.0),
             false,
             &format!("Platforms tab at {width} px"),
@@ -476,7 +476,7 @@ fn platform_tier_columns_fit_wide_and_narrow_inspectors() {
             Some([1.0; 3])
         );
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 1500.0),
             false,
             &format!("Platforms tab with tiers at {width} px"),
@@ -640,7 +640,7 @@ fn lod_and_impostor_panels_fit_narrow_inspectors() {
         h.state_mut().preview = Some(25.0);
         h.run();
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 700.0),
             false,
             &format!("LOD panel at {width} px"),
@@ -669,7 +669,7 @@ fn lod_and_impostor_panels_fit_narrow_inspectors() {
             );
         h.run();
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 400.0),
             false,
             &format!("impostor settings at {width} px"),
@@ -735,7 +735,7 @@ fn lod_tier_rows_follow_their_console_until_they_have_their_own() {
         h.get_by_label("Show New 3DS").click();
         h.run();
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 700.0),
             false,
             &format!("LOD panel with tiers at {width} px"),
@@ -813,9 +813,9 @@ fn particle_editor_sets_fields_and_per_platform_caps() {
     );
     assert!(h.state().changes >= 3);
     for width in [260.0, 340.0, 480.0] {
-        let h = pfx_harness(width);
+        let mut h = pfx_harness(width);
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 900.0),
             false,
             &format!("particle editor at {width} px"),
@@ -864,7 +864,7 @@ fn particle_tier_caps_follow_their_console_until_they_have_their_own() {
         h.get_by_label("Show New 3DS").click();
         h.run();
         crate::layout_audit::assert_clean(
-            &h,
+            &mut h,
             eframe::egui::vec2(width, 900.0),
             false,
             &format!("particle editor with tiers at {width} px"),

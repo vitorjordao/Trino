@@ -121,6 +121,11 @@ impl N64Assets {
     /// A DFS file's bytes (`/replay.trec`), decompressed if the bake
     /// compressed it. `None` when it isn't there.
     pub fn read(dfs_relative_path: &str) -> Option<Vec<u8>> {
+        // libdragon's `asset_load` asserts on a missing file (`must_open`):
+        // a project without `[n64] rsp_arena_kb` hung at boot (#110).
+        if !Self::exists(dfs_relative_path) {
+            return None;
+        }
         let mut path = String::from("rom:");
         path.push_str(dfs_relative_path);
         read_bytes(&path)

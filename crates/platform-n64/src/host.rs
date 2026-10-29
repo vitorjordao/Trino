@@ -74,6 +74,14 @@ impl N64Host {
     pub fn boot() -> Self {
         runtime::init();
         runtime::log("TRINO_BOOT\n");
+        // `trino.toml` `[n64] rsp_arena_kb` (GitHub #110): the RSP copies'
+        // region, first, while the heap is one block.
+        if let Some(kb) = N64Assets::read("/rsp_arena")
+            .and_then(|b| core::str::from_utf8(&b).ok()?.trim().parse::<u32>().ok())
+        {
+            let ok = N64Renderer::reserve_rsp_arena(kb * 1024);
+            runtime::log(&format!("TRINO_RSP_ARENA:{kb}KB ok={ok}\n"));
+        }
         let mut host = N64Host {
             renderer: N64Renderer::new(),
             audio: N64Audio::new(),

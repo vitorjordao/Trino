@@ -496,6 +496,13 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     if test_mode {
         std::fs::write(fsdir.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // `[n64] rsp_arena_kb` (GitHub #110): read by `N64Host::boot`.
+    let arena = fsdir.join("rsp_arena");
+    match p.n64_rsp_arena_kb {
+        Some(kb) => std::fs::write(&arena, kb.to_string()).map_err(|e| e.to_string())?,
+        None if arena.exists() => std::fs::remove_file(&arena).map_err(|e| e.to_string())?,
+        None => {}
+    }
     // `replay run` / `run --record` (issue #67): the session's files.
     crate::replay::stage(&fsdir)?;
     // Compress in place what the groups ask for (after mksprite made the

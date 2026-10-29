@@ -28,6 +28,9 @@
 //! [n64]
 //! package = "my-game-n64" # staticlib crate (cargo -p)
 //! save = "eeprom16k"             # ed64romconfig save type
+//! rsp_arena_kb = 384      # RSP mesh copies' own RDRAM, reserved at boot
+//!                         # (optional; GitHub #110: size it from the
+//!                         # self-test's `TRINO_HEAP … rsp=` peak)
 //!
 //! [3ds]
 //! package = "my-game-3ds" # bin crate (cargo -p)
@@ -125,6 +128,9 @@ pub struct Project {
     pub pc_package: String,
     pub n64_package: String,
     pub n64_save: String,
+    /// `[n64] rsp_arena_kb`: KB the ROM reserves for RSP mesh copies at boot
+    /// (`N64Host::boot`; `None` = they take the heap).
+    pub n64_rsp_arena_kb: Option<u32>,
     pub n3ds_package: String,
     pub n3ds_bin: String,
     pub n3ds_icon: Option<PathBuf>,
@@ -364,6 +370,8 @@ struct N64Section {
     package: String,
     #[serde(default = "default_save")]
     save: String,
+    #[serde(default)]
+    rsp_arena_kb: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -485,6 +493,7 @@ impl Project {
             pc_package: "trino-app-pc".into(),
             n64_package: "trino-app-n64".into(),
             n64_save: default_save(),
+            n64_rsp_arena_kb: None,
             n3ds_package: "trino-app-3ds".into(),
             n3ds_bin: "trino-3ds".into(),
             n3ds_icon: None,
@@ -578,6 +587,7 @@ impl Project {
         let n64 = f.n64.unwrap_or(N64Section {
             package: String::new(),
             save: default_save(),
+            rsp_arena_kb: None,
         });
         let n3ds = f.n3ds.unwrap_or(N3dsSection {
             package: String::new(),
@@ -685,6 +695,7 @@ impl Project {
             manifest: None,
             n64_package: n64.package,
             n64_save: n64.save,
+            n64_rsp_arena_kb: n64.rsp_arena_kb,
             n3ds_package: n3ds.package,
             n3ds_bin: n3ds.bin,
             n3ds_speedup: n3ds.speedup,
@@ -815,6 +826,13 @@ watch = ["game"]
         let p = Project::parse(SAMPLE, "/g".into(), "/e".into()).unwrap();
         assert!(!p.is_engine);
         assert_eq!(p.n64_save, "eeprom16k");
+        assert_eq!(p.n64_rsp_arena_kb, None, "the heap, unless asked");
+        let arena = SAMPLE.replace(
+            "package = \"my-game-n64\"",
+            "package = \"my-game-n64\"\nrsp_arena_kb = 256",
+        );
+        let a = Project::parse(&arena, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(a.n64_rsp_arena_kb, Some(256));
         assert_eq!(
             p.n64_staticlib(),
             "target/mips-nintendo64-none/release/libmy_game_n64.a"

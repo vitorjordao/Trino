@@ -98,7 +98,7 @@ pub struct BakedFont {
     pub glyphs: Vec<Glyph>,
 }
 
-/// Atlas rows wrap at this width (N64 `max_texture_dim` is 256).
+/// Atlas sides stay within this (N64 `max_texture_dim` is 256).
 const ATLAS_WIDTH: u32 = 256;
 
 impl FontDecl {
@@ -319,18 +319,8 @@ fn bake_ttf(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
         });
     }
 
-    let (mut x, mut y) = (0u32, 0u32);
-    let mut placed = Vec::new();
-    for cell in &cells {
-        if x + cell.w > ATLAS_WIDTH {
-            x = 0;
-            y += line_height;
-        }
-        placed.push((x, y));
-        x += cell.w;
-    }
-    let height = (y + line_height).next_power_of_two();
-    let width = ATLAS_WIDTH;
+    let widths: Vec<u32> = cells.iter().map(|c| c.w).collect();
+    let (width, height, placed) = pack_shelves(&widths, line_height);
     let mut rgba = vec![0u8; (width * height * 4) as usize];
     let mut glyphs = Vec::new();
     for (cell, &(px, py)) in cells.iter().zip(&placed) {
@@ -368,6 +358,60 @@ fn bake_ttf(source: &Path, decl: &FontDecl) -> Result<BakedFont, String> {
         ascent as u16,
         glyphs,
     )
+}
+
+/// Atlas widths [`pack_shelves`] tries: whole 16-texel steps, so an I4
+/// row is a whole number of the N64's 8-byte TMEM lines.
+const WIDTH_STEP: u32 = 16;
+
+/// Pack glyph cells `line_height` tall and `widths` wide into shelves:
+/// the atlas width (a multiple of [`WIDTH_STEP`] up to [`ATLAS_WIDTH`])
+/// with the fewest texels and a height within [`ATLAS_WIDTH`] too, the widest cells first into the first shelf
+/// with room. The height is the shelves', rounded up to 4 texels (BCn and
+/// KTX2 blocks), not to a power of two: the N64 clamps text rectangles and
+/// the 3DS's `tex3ds` pads the texture itself. Returns the width, the
+/// height and each cell's top-left corner, in `widths`' order.
+///
+/// Before GitHub #99 the shelves were always 256 wide, filled in codepoint
+/// order, and the height went up to a power of two: 61 glyphs of 11 px
+/// Roboto Condensed (13 px lines) needed a second shelf, and 26 lines
+/// became 32 — 4 KB of I4, the N64's whole TMEM.
+pub fn pack_shelves(widths: &[u32], line_height: u32) -> (u32, u32, Vec<(u32, u32)>) {
+    let widest = widths.iter().copied().max().unwrap_or(0);
+    let mut order: Vec<usize> = (0..widths.len()).collect();
+    // Widest first; equal widths keep their order (deterministic).
+    order.sort_by_key(|&i| core::cmp::Reverse(widths[i]));
+    let pack = |width: u32| {
+        let mut shelves: Vec<u32> = Vec::new(); // used width of each shelf
+        let mut placed = vec![(0, 0); widths.len()];
+        for &i in &order {
+            let w = widths[i];
+            let shelf = match shelves.iter().position(|&used| used + w <= width) {
+                Some(s) => s,
+                None => {
+                    shelves.push(0);
+                    shelves.len() - 1
+                }
+            };
+            placed[i] = (shelves[shelf], shelf as u32 * line_height);
+            shelves[shelf] += w;
+        }
+        let height = (shelves.len().max(1) as u32 * line_height).next_multiple_of(4);
+        (width, height, placed)
+    };
+    let first = widest.next_multiple_of(WIDTH_STEP).max(WIDTH_STEP);
+    let last = ATLAS_WIDTH.max(first);
+    (first..=last)
+        .step_by(WIDTH_STEP as usize)
+        .map(pack)
+        // No taller than the N64's largest texture side either: a 16×332
+        // atlas drew the glyphs below row 256 wrong there (the football
+        // template's clock colon). A font too big for 256×256 keeps the
+        // widest atlas, as before.
+        .filter(|(w, h, _)| *h <= ATLAS_WIDTH || *w == last)
+        // Fewest texels; on a tie the wider atlas (fewer shelves).
+        .min_by_key(|(w, h, _)| (w * h, core::cmp::Reverse(*w)))
+        .expect("the widest atlas is always a candidate")
 }
 
 /// Make every pixel white, keeping alpha (tint colors text at draw time).
@@ -560,8 +604,20 @@ mod tests {
         let a = font.glyph('A').unwrap();
         assert!(a.w > 0 && a.advance >= a.w, "{a:?}");
         assert_eq!(font.glyph(' ').unwrap().w, 0);
-        assert_eq!(baked.width, 256);
-        assert!(baked.height.is_power_of_two());
+        assert!(
+            baked.width.is_multiple_of(16) && baked.width <= 256,
+            "{}",
+            baked.width
+        );
+        assert_eq!(baked.height % 4, 0);
+        // 95 ASCII glyphs in less than the old 256-wide shelves' power of
+        // two (256x64 at this size).
+        assert!(
+            baked.width * baked.height < 256 * 64,
+            "{}x{}",
+            baked.width,
+            baked.height
+        );
         // Thresholded: alpha is 0 or 255 only.
         assert!(
             baked
@@ -588,6 +644,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The shelf packer (GitHub #99): every cell inside the atlas, none
+    /// overlapping, the fewest texels among the widths it may pick.
+    #[test]
+    fn shelves_pack_tight_and_apart() {
+        // castle64's pt-BR glyph widths are ~2..10 px on 13 px lines.
+        let widths: Vec<u32> = (0..61).map(|i| 2 + (i * 7) % 9).collect();
+        let (w, h, at) = pack_shelves(&widths, 13);
+        assert!(
+            w.is_multiple_of(16) && w <= 256 && h.is_multiple_of(4),
+            "{w}x{h}"
+        );
+        let total: u32 = widths.iter().map(|w| w * 13).sum();
+        assert!(w * h >= total);
+        // The old packer: 256 wide, rows in order, a power of two tall.
+        assert!(w * h < 256 * 32, "{w}x{h}");
+        for (i, (&(x, y), &cw)) in at.iter().zip(&widths).enumerate() {
+            assert!(x + cw <= w && y + 13 <= h, "cell {i} at {x},{y}");
+            for (&(x2, y2), &cw2) in at[i + 1..].iter().zip(&widths[i + 1..]) {
+                assert!(y != y2 || x + cw <= x2 || x2 + cw2 <= x, "cells overlap");
+            }
+        }
+        // Deterministic, and a glyph wider than the narrowest width fits.
+        assert_eq!(pack_shelves(&widths, 13).2, at);
+        let (w, _, _) = pack_shelves(&[40, 3], 10);
+        assert!(w >= 48);
+        // Nothing to pack: one empty shelf.
+        assert_eq!(pack_shelves(&[], 10).1, 12);
+        // Never taller than the N64's 256-texel side when a wider atlas
+        // fits: 120 narrow glyphs on 26 px lines would be 16 wide and
+        // ~1 500 tall by area alone.
+        let narrow = vec![5u32; 120];
+        let (w, h, _) = pack_shelves(&narrow, 26);
+        assert!(h <= 256, "{w}x{h}");
     }
 
     #[test]

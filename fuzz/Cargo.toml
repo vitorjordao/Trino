@@ -280,3 +280,17 @@ path = "fuzz_targets/pc_bundle.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "asset_index"
+path = "fuzz_targets/asset_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "t3au_shim"
+path = "fuzz_targets/t3au_shim.rs"
+test = false
+doc = false
+bench = false

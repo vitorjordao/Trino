@@ -26,6 +26,7 @@
 #include <arpa/inet.h>
 #include <3ds.h>
 #include <citro2d.h>
+#include "t3au_header.h"
 
 // tri3d.v.pica compiled by picasso and embedded as a C array by
 // `cargo xtask build 3ds` (target/3ds/tri3d_shbin.h).
@@ -1460,7 +1461,7 @@ uint32_t trino_touch(void)
 // (woken by ndsp every audio frame). Every wave buffer carries its ADPCM
 // context, so loops and chunk seams decode exactly like the bake's preview.
 
-#define T3AU_HEADER 60
+#define T3AU_HEADER TRINO_T3AU_HEADER
 #define TRINO_NDSP_CHANNELS 16
 #define TRINO_STREAM_BUFS 3
 #define TRINO_MAX_STREAMS 4
@@ -1525,8 +1526,19 @@ void* trino_wav_load(const char* romfs_path)
     FILE* f = fopen(romfs_path, "rb");
     if (!f) return NULL;
     uint8_t h[T3AU_HEADER];
-    if (fread(h, 1, sizeof(h), f) != sizeof(h) || memcmp(h, "T3AU", 4) != 0 || h[4] > 1 ||
-        h[7] != 1 || strlen(romfs_path) >= sizeof(((trino_wav_t*)0)->path)) {
+    // The header check is `t3au_header.h` (issue #121): the pipeline's
+    // `T3au::parse` rules, fuzzed against it on the host (`t3au_shim`).
+    // The file's size is part of it: a header must describe its own data
+    // (issue #68), since the DSP reads `nsamples` from the buffer whatever
+    // was allocated, and a stream reads its chunks from the file.
+    trino_t3au_header_t t;
+    long size = -1;
+    if (fread(h, 1, sizeof(h), f) == sizeof(h) && fseek(f, 0, SEEK_END) == 0) {
+        size = ftell(f);
+    }
+    if (size < 0 || fseek(f, T3AU_HEADER, SEEK_SET) != 0 ||
+        !trino_t3au_parse(h, (uint64_t)size, &t) ||
+        strlen(romfs_path) >= sizeof(((trino_wav_t*)0)->path)) {
         fclose(f);
         return NULL;
     }
@@ -1535,38 +1547,29 @@ void* trino_wav_load(const char* romfs_path)
         fclose(f);
         return NULL;
     }
-    w->adpcm = h[4];
-    w->bus = h[5];
-    w->looped = h[6] & 1;
-    w->sample_rate = rd32(h + 8);
-    w->nsamples = rd32(h + 12);
-    w->data_bytes = rd32(h + 16);
-    w->chunk_samples = rd32(h + 20);
-    w->ncontexts = rd32(h + 24);
-    for (int i = 0; i < 16; i++) w->coefs[i] = (u16)rd16(h + 28 + i * 2);
-    // Streams play in whole ADPCM frames (14 samples) per chunk.
-    w->stream = (h[6] & 2) && w->chunk_samples && w->nsamples &&
-                (!w->adpcm || (w->chunk_samples % 14 == 0 &&
-                               w->ncontexts == (w->nsamples + w->chunk_samples - 1) / w->chunk_samples));
-    // The header must describe its own data (issue #68, the same checks as
-    // the pipeline's `T3au::parse`): the DSP reads `nsamples` from the
-    // buffer, whatever was allocated.
-    uint64_t need = w->adpcm ? ((uint64_t)w->nsamples + 13) / 14 * 8 : (uint64_t)w->nsamples * 2;
-    int ok = w->ncontexts <= (1u << 20) && (w->stream || need <= w->data_bytes) &&
-             (!w->stream || !w->adpcm || w->ncontexts > 0);
-    if (ok && w->ncontexts) {
+    w->adpcm = t.adpcm;
+    w->bus = t.bus;
+    w->looped = t.looped;
+    w->stream = t.stream;
+    w->sample_rate = t.sample_rate;
+    w->nsamples = t.nsamples;
+    w->data_bytes = t.data_bytes;
+    w->chunk_samples = t.chunk_samples;
+    w->ncontexts = t.ncontexts;
+    for (int i = 0; i < 16; i++) w->coefs[i] = (u16)t.coefs[i];
+    int ok = 1;
+    if (w->ncontexts) {
         w->contexts = malloc(w->ncontexts * sizeof(ndspAdpcmData));
         ok = w->contexts != NULL;
         for (uint32_t i = 0; ok && i < w->ncontexts; i++) {
             uint8_t c[8];
             ok = fread(c, 1, 8, f) == 8;
-            w->contexts[i].index = (u16)rd16(c);
-            w->contexts[i].history0 = rd16(c + 2);
-            w->contexts[i].history1 = rd16(c + 4);
+            trino_t3au_context(c, &w->contexts[i].index, &w->contexts[i].history0,
+                               &w->contexts[i].history1);
         }
         if (ok) s_resident += w->ncontexts * sizeof(ndspAdpcmData);
     }
-    w->data_offset = T3AU_HEADER + w->ncontexts * 8;
+    w->data_offset = t.data_offset;
     if (ok && w->stream) {
         strcpy(w->path, romfs_path);
         if (w->adpcm) w->start = w->contexts[0];

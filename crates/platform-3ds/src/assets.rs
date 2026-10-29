@@ -35,6 +35,7 @@ use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use trino_core::asset::{IndexKind, IndexLine};
 use trino_core::bundle::{Bundle, Entry, EntryKind, HEADER_LEN};
 use trino_core::group::HeapMeter;
 use trino_core::{GroupId, GroupTable, MemoryReport};
@@ -283,39 +284,35 @@ impl N3dsAssets {
         // What the engine holds before any asset (the planner's reserve).
         let before = heap_used();
         for line in index.lines() {
-            let mut cols = line.split('\t');
-            let (Some(id_hex), Some(kind), Some(file)) = (cols.next(), cols.next(), cols.next())
-            else {
+            // `trino_core::asset::IndexLine`: the parse the N64 shares and
+            // the `asset_index` fuzz target covers on the host (#121).
+            let Some(line) = IndexLine::parse(line) else {
                 continue;
             };
-            if !trino_core::asset::loads_on(cols.next(), tier) {
+            if !line.loads_on(tier) {
                 continue;
             }
-            let Ok(id) = u32::from_str_radix(id_hex, 16) else {
-                continue;
-            };
-            let path = romfs(file);
-            match kind {
-                "group" => {
+            let id = line.id;
+            let path = romfs(line.file);
+            let kind = match line.kind {
+                IndexKind::Group => {
                     if platform.groups.table.add(GroupId(id)) {
                         platform.groups.files.insert(id, path);
                     }
                     continue;
                 }
-                "boot" => {
+                IndexKind::Boot => {
                     load_boot_bundle(&path, tier, renderer, audio, platform);
                     continue;
                 }
                 // The project's mix (`assets/audio.toml`): bus volumes and
                 // duck rules, applied once the sounds are in.
-                "mixer" => {
+                IndexKind::Mixer => {
                     mixer = read_bytes(&path);
                     continue;
                 }
-                _ => {}
-            }
-            let Some(kind) = EntryKind::parse(kind) else {
-                continue;
+                IndexKind::Entry(kind) => kind,
+                IndexKind::Compression | IndexKind::Unknown(_) => continue,
             };
             let loaded = load_one(kind, id, Bytes::File(&path), renderer, audio);
             boot_loaded(kind, id, loaded, platform);

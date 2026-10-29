@@ -9,9 +9,11 @@
 //! - `fuzz run <target>|all [--time S] [--jobs N]`: libFuzzer through
 //!   cargo-fuzz (nightly, `cargo install cargo-fuzz`), with ASan, the
 //!   corpus and the committed seeds; crashes land in `fuzz/artifacts/<t>/`;
+//! - `fuzz seeds [<target>..]`: write the writers' seeds (`seedgen.rs`)
+//!   into `fuzz/seeds/` without baking (a new `Seeds::Committed` target);
 //! - `fuzz repro [<target>] <file> [--json]`: replay one input;
 //! - `fuzz keep <file>`: copy a crash into `fuzz/regressions/<target>/`, which
-//!   `cargo test -p trino-fuzz` replays on every PR.
+//!   `cargo test -p trino-fuzz` replays on every PR;
 //!
 //! The stable commands run the `trino-fuzz` binary (it links the PC crates,
 //! which xtask itself does not, so the console jobs need no ALSA).
@@ -74,7 +76,7 @@ pub fn run(root: &Path, rest: &[&str]) -> ExitCode {
     };
     match rest.first().copied() {
         Some("list") | None => trino_fuzz(root, &[&["list"], &rest[1.min(rest.len())..]].concat()),
-        Some(cmd @ ("smoke" | "repro" | "corpus")) => {
+        Some(cmd @ ("smoke" | "repro" | "corpus" | "seeds")) => {
             let mut args = vec![cmd];
             args.extend_from_slice(&rest[1..]);
             trino_fuzz(root, &args)
@@ -129,7 +131,7 @@ pub fn run(root: &Path, rest: &[&str]) -> ExitCode {
         }
         Some(other) => {
             eprintln!(
-                "xtask fuzz: unknown command `{other}` (list, corpus, smoke, run, repro, keep)"
+                "xtask fuzz: unknown command `{other}` (list, corpus, seeds, smoke, run, repro, keep, coverage)"
             );
             ExitCode::FAILURE
         }

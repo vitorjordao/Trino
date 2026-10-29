@@ -231,6 +231,13 @@ pub const TARGETS: &[Target] = &[
         seeds: Seeds::Files(&["quality", "access", "txt"]),
     },
     Target {
+        name: "asset_index",
+        formats: &["index.tsv"],
+        run: c::asset_index,
+        max_len: 8192,
+        seeds: Seeds::Committed,
+    },
+    Target {
         name: "access_pack",
         formats: &["access save"],
         run: c::access_pack,
@@ -290,6 +297,14 @@ pub const TARGETS: &[Target] = &[
         name: "t3au",
         formats: &["T3AU"],
         run: host_targets::t3au,
+        max_len: 1 << 16,
+        seeds: Seeds::Committed,
+    },
+    #[cfg(feature = "host")]
+    Target {
+        name: "t3au_shim",
+        formats: &["T3AU (3DS shim)"],
+        run: host_targets::t3au_shim,
         max_len: 1 << 16,
         seeds: Seeds::Committed,
     },

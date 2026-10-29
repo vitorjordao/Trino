@@ -121,11 +121,13 @@ fn compile_shader(root: &Path, dkp: &Path) -> Result<(), String> {
 fn compile_shim(root: &Path, dkp: &Path) -> Result<(), String> {
     compile_shader(root, dkp)?;
     let shim_src = root.join("crates/platform-3ds/shim/trino_shim_3ds.c");
+    // Included by the shim; the host fuzzes it too (`t3au_shim`, #121).
+    let t3au_h = root.join("crates/platform-3ds/shim/t3au_header.h");
     let shader_h = root.join("target/3ds/tri3d_shbin.h");
     let tnl_h = root.join("target/3ds/tnl3d_shbin.h");
     let water_h = root.join("target/3ds/water_shbin.h");
     let shim_obj = root.join("target/3ds/shim.o");
-    let newest_input = [&shim_src, &shader_h, &tnl_h, &water_h]
+    let newest_input = [&shim_src, &t3au_h, &shader_h, &tnl_h, &water_h]
         .iter()
         .filter_map(|p| p.metadata().and_then(|m| m.modified()).ok())
         .max();

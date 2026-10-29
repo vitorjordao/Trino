@@ -76,6 +76,39 @@ pub fn generated() -> Vec<(&'static str, String, Vec<u8>)> {
     let pad = trino_core::NetPad::from_bytes([3; trino_core::NET_PAD_LEN]);
     put("netpad", "pad", pad.to_bytes().to_vec());
 
+    // Console asset indexes (`index.tsv`, issue #121), in the bake's form:
+    // the N64's (compression levels, wav64 sounds with codec and bus, a tier
+    // twin, groups) and the 3DS's (a packed boot bundle, the mixer).
+    put(
+        "asset_index",
+        "n64",
+        b"00000002\tcompression\tlibdragon\n\
+          0d5c1f2a\tsprite\t0d5c1f2a.sprite\n\
+          3b7a01c4\tsound\t3b7a01c4.wav64\t\tvadpcm\tsfx\n\
+          77e0aa10\tmusic\t77e0aa10.wav64\t\topus\tmusic\n\
+          5a5a0001\tmodel\t5a5a0001.tmdl\n\
+          5a5a0002\tmodel\t5a5a0002.tmdl\texpanded\n\
+          9e3779b9\tblob\t9e3779b9.base.blob\tbase\n\
+          9e3779b9\tblob\t9e3779b9.expanded.blob\texpanded\n\
+          1234abcd\tfont\t1234abcd.tfnt\n\
+          00000000\tmixer\taudio/mixer\n\
+          c0ffee01\tgroup\tgroups/level1.tbnd\n"
+            .to_vec(),
+    );
+    put(
+        "asset_index",
+        "3ds",
+        b"8a1e2b3c\tboot\tgroups/boot.tbnd\r\n\
+          3b7a01c4\tsound\t3b7a01c4.t3au\r\n\
+          0d5c1f2a\tsprite\t0d5c1f2a.t3x\r\n\
+          5a5a0002\tmodel\t5a5a0002.tmdl\tbase\r\n\
+          c0ffee01\tgroup\tgroups/level1.tbnd\r\n\
+          zz\tblob\tbad-id.blob\r\n\
+          00000001\tdeluxe\tunknown-kind\r\n\
+          00000001\tblob\r\n"
+            .to_vec(),
+    );
+
     // A trace packet.
     let mut ring = trino_core::trace::TraceRing::<64>::default();
     ring.zone("frame", 0, 10, 200);
@@ -123,7 +156,39 @@ pub fn generated_host() -> Vec<(&'static str, String, Vec<u8>)> {
     if let Ok(e) = a::encode(trino_asset_pipeline::Platform::N3ds, &settings, &master, 1)
         && let Some(blob) = e.blob
     {
-        out.push(("t3au", "tone".to_string(), blob));
+        out.push(("t3au", "tone".to_string(), blob.clone()));
+        out.push(("t3au_shim", "adpcm".to_string(), blob));
+    }
+    // The shim's other paths (issue #121): a streamed DSP-ADPCM sound over
+    // three chunks (contexts), PCM16 whole and streamed.
+    let long = a::Master {
+        rate: 16000,
+        samples: (0..30000)
+            .map(|i| ((i as f32) * 0.03).sin() * 0.4)
+            .collect(),
+    };
+    let short = a::Master {
+        rate: 8000,
+        samples: (0..600).map(|i| ((i as f32) * 0.2).sin() * 0.3).collect(),
+    };
+    for (name, codec, stream, m) in [
+        ("adpcm-stream", a::Codec::DspAdpcm, true, &long),
+        ("pcm", a::Codec::Pcm, false, &short),
+        ("pcm-stream", a::Codec::Pcm, true, &short),
+    ] {
+        let s = a::AudioSettings {
+            codec,
+            auto: false,
+            stream,
+            looped: !stream,
+            bus: trino_core::Bus::Music,
+            ..settings
+        };
+        if let Ok(e) = a::encode(trino_asset_pipeline::Platform::N3ds, &s, m, 1)
+            && let Some(blob) = e.blob
+        {
+            out.push(("t3au_shim", name.to_string(), blob));
+        }
     }
     // The PC's player files, as the runner writes them.
     use trino_platform_pc::{audio, input, system};

@@ -30,6 +30,10 @@ trino-scene = { workspace = true, optional = true }
 trino-asset-pipeline = { workspace = true, optional = true }
 trino-net = { workspace = true, optional = true }
 
+[build-dependencies]
+# The 3DS shim's T3AU header check, compiled for the host (build.rs, #121).
+cc = "1.2"
+
 [[bin]]
 name = "trino-fuzz"
 path = "src/main.rs"

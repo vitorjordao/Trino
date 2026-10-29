@@ -376,6 +376,10 @@ pub const T3AU_HEADER_LEN: usize = 60;
 /// A streamed 3DS sound plays in chunks of this many DSP-ADPCM frames
 /// (14 336 samples, 8 KB of linear memory each; three in flight).
 pub const N3DS_CHUNK_FRAMES: usize = 1024;
+/// The most chunk contexts a `T3AU` holds (the 3DS shim mallocs them).
+pub const T3AU_MAX_CONTEXTS: usize = 1 << 20;
+/// The longest stream chunk, in samples (the 3DS shim allocates three).
+pub const T3AU_MAX_CHUNK: usize = 1 << 24;
 
 /// The 3DS container (`T3AU`, little-endian): `"T3AU"`, u8 codec (0 PCM16,
 /// 1 DSP-ADPCM), u8 bus, u8 flags (bit 0 loop, bit 1 stream), u8 channels
@@ -465,7 +469,16 @@ impl T3au {
             c => return Err(format!("T3AU: codec {c}")),
         };
         let bus = Bus::from_index(b[5] as usize).ok_or("T3AU: bus")?;
+        // The 3DS shim plays mono only, and bounds what a header may make it
+        // allocate (`t3au_header.h`, the same rules: the `t3au_shim` fuzz
+        // target holds the two to each other, issue #121).
+        if b[7] != 1 {
+            return Err(format!("T3AU: {} channels", b[7]));
+        }
         let (data_len, ctx_count) = (u32_at(16) as usize, u32_at(24) as usize);
+        if ctx_count > T3AU_MAX_CONTEXTS || u32_at(20) as usize > T3AU_MAX_CHUNK {
+            return Err("T3AU: too many contexts, or a chunk too long".into());
+        }
         let ctx_end = ctx_count
             .checked_mul(8)
             .and_then(|n| n.checked_add(T3AU_HEADER_LEN))

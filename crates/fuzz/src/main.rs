@@ -8,7 +8,10 @@
 //! - `corpus [--out <dir>] [--commit-seeds]`: bake castle64's, the
 //!   showcase's and Solid Eleven's assets for the PC and the Web, sort every
 //!   blob (and the consoles' staged files, when built) into one folder per
-//!   target, add the writers' seeds and the repo's text files.
+//!   target, add the writers' seeds and the repo's text files;
+//! - `seeds [<target>..]`: write only the writers' seeds (`seedgen.rs`) of
+//!   the named targets (default: every `Seeds::Committed` one) into
+//!   `fuzz/seeds/<target>/`, without baking anything.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,8 +32,9 @@ fn main() -> ExitCode {
         Some("smoke") => smoke(&args[1..], json),
         Some("repro") => repro(&args[1..], json),
         Some("corpus") => corpus(&args[1..], json),
+        Some("seeds") => write_seeds(&args[1..]),
         Some(other) => {
-            eprintln!("trino-fuzz: unknown command `{other}` (list, smoke, repro, corpus)");
+            eprintln!("trino-fuzz: unknown command `{other}` (list, smoke, repro, corpus, seeds)");
             ExitCode::FAILURE
         }
     }
@@ -493,6 +497,54 @@ fn corpus(args: &[&str], json: bool) -> ExitCode {
             println!("{n:<18} {c:>5} input(s)");
         }
         println!("corpus in {}", out.display());
+    }
+    ExitCode::SUCCESS
+}
+
+/// The writers' seeds of `names` (default: every `Seeds::Committed`
+/// target) into `fuzz/seeds/<target>/`, replacing what was there.
+fn write_seeds(names: &[&str]) -> ExitCode {
+    let chosen: Vec<&Target> = TARGETS
+        .iter()
+        .filter(|t| {
+            if names.is_empty() {
+                matches!(t.seeds, Seeds::Committed)
+            } else {
+                names.contains(&t.name)
+            }
+        })
+        .collect();
+    if let Some(bad) = names.iter().find(|n| trino_fuzz::find(n).is_none()) {
+        eprintln!("trino-fuzz seeds: no target `{bad}`");
+        return ExitCode::FAILURE;
+    }
+    let made: Vec<_> = trino_fuzz::seedgen::generated()
+        .into_iter()
+        .chain(trino_fuzz::seedgen::generated_host())
+        .collect();
+    for t in chosen {
+        let seeds: Vec<&Vec<u8>> = made
+            .iter()
+            .filter(|(n, _, _)| *n == t.name)
+            .map(|(_, _, b)| b)
+            .collect();
+        if seeds.is_empty() {
+            eprintln!(
+                "trino-fuzz seeds: {} has no writer seed in seedgen.rs",
+                t.name
+            );
+            return ExitCode::FAILURE;
+        }
+        let dir = trino_fuzz::repo_root().join("fuzz/seeds").join(t.name);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        for b in &seeds {
+            let _ = std::fs::write(
+                dir.join(format!("{:08x}", trino_core::save::checksum(b))),
+                b,
+            );
+        }
+        println!("{:<18} {} seed(s)", t.name, seeds.len());
     }
     ExitCode::SUCCESS
 }

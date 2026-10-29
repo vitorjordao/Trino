@@ -38,7 +38,13 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
     `cargo xtask scene export` (the `scene_codegen` guard);
   - **The draw memo:** decide it in `trino_core::memo::MemoKey::new`, which has all 16
     key words in use, so a big field must be excluded;
-  - **The RSP:** decide it in `rsp_eligible_mv`. The palette (2026-10-15) did all three.
+  - **The RSP:** decide it in `rsp_eligible_mv`. The palette (2026-10-15) did all three,
+    and later moved onto the overlay (GitHub #122, ADR 0018 §9). The recipe for a
+    per-vertex input on the RSP: a spare lane of the mesh copy's vertex (the slot sits in
+    the normal row's fourth half, which `n · l` never reads), a second command ID with a
+    longer payload in the colored and textured builds only (`TrinoCmd_DrawPal`), so the
+    commands without it keep their size and the white and water overlays their bytes,
+    and a flag word the copy brings into `DRAW` that the vertex loop tests per pass.
 - A per-vertex T&L input that is unused by most draws gets resolved once per draw into
   `Setup`, and the vertex reads it through a predictable `Option` branch. Don't add a
   const generic: it would double every `tessellate_joints` body on the N64's 16 KB

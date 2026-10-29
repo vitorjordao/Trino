@@ -21,13 +21,20 @@
 # switch to it, and the colored loop in the same overlay made every
 # white-light frame pay for the bigger code (measured in ares, 2026-10-16).
 #
+# The colored and textured builds (not the water one: its IMEM is full)
+# also take TrinoCmd_DrawPal (GitHub #122): the same draw with a palette
+# table after its words (PAL_SIZE bytes, see PAL below); each vertex's
+# color is multiplied by its color slot's entry before the light, as
+# trino_core::tessellate does. The white overlay keeps its bytes.
+#
 # Mesh data (built once by the CPU at register, see the N64 renderer) is a
 # table of segments of at most SEG_VERTS vertices; each segment is one
 # DMA: its 32-byte vertices, then 3 local u8 indices per triangle.
 #
 #   vertex  +0  x, y, z, 1   s15.16 integer parts
 #           +8  x, y, z, 0   s15.16 fractional parts
-#           +16 nx, ny, nz, 0  s16, s0.15
+#           +16 nx, ny, nz, slot  s0.15; slot * 8 (the palette entry's
+#                                 offset, 0 without slots)
 #           +24 r, g, b, a, 0, 0, 0, 0  u8
 #           +32 u, v, 0, 0  s5.10 (TRINO_TEXTURED only: 40-byte vertices)
 ##############################################################################
@@ -54,6 +61,10 @@
 #else
 #define DRAW_CMD_SIZE   0x6C
 #endif
+#if defined(TRINO_COLORED) && !defined(TRINO_WATER)
+#define TRINO_PALETTE
+#define PAL_SIZE        0x28    // 5 entries of r, g, b, a (u16: c * 257), slot 0 white
+#endif
 #define TRI_SLOT        0xB0    // RDPQ_CMD_STAGING's size: the routine writes up to it
 #define WBLK_SIZE       0x240   // the water block (rsp::WATER_BLOCK)
 #define WBLK_PART       0x180   // its per-frame part's start (rsp::WATER_FRAME_PART)
@@ -63,6 +74,9 @@
     RSPQ_BeginOverlayHeader
         RSPQ_DefineCommand TrinoCmd_TestTri, 4                  # 0x0
         RSPQ_DefineCommand TrinoCmd_Draw,    DRAW_CMD_SIZE      # 0x1
+#ifdef TRINO_PALETTE
+        RSPQ_DefineCommand TrinoCmd_DrawPal, DRAW_CMD_SIZE + PAL_SIZE   # 0x2
+#endif
     RSPQ_EndOverlayHeader
 
     .align 4
@@ -141,7 +155,8 @@ TEST_VTX:
     #   +0x00 cmd | cull (0 = cull front, 1 = cull back, 2 = none)
     #   +0x04 segment table (RDRAM, walked an entry per segment)
     #   +0x08 segment count | triangle command
-    #   +0x0C unused                  +0x10 matrix columns, integer parts
+    #   +0x0C palette flag (TrinoCmd_DrawPal's commands: 1; else 0)
+    #   +0x10 matrix columns, integer parts
     #   +0x30 matrix columns, fractional parts
     #   +0x50 light (s0.15, model space, toward the light) x, y, z, 0
     #   +0x58 tint r, g, b, 0 (s0.15)  +0x60 ambient, 1 - ambient, tint a, 0
@@ -161,8 +176,17 @@ TEST_VTX:
 #ifdef TRINO_WATER
     #   +0xB0 the water block (RDRAM, WBLK below)   +0xB4 unused
 #endif
+#ifdef TRINO_PALETTE
+    # PAL (DRAW + DRAW_CMD_SIZE, TrinoCmd_DrawPal only): entry s for slot s,
+    # r, g, b, a as u16 (c * 257: vmudl of a u8 << 7 color gives c p / 255
+    # in the luv layout), entry 0 white.
     .align 4
 DRAW:           .ds.b DRAW_CMD_SIZE
+PAL:            .ds.b PAL_SIZE
+#else
+    .align 4
+DRAW:           .ds.b DRAW_CMD_SIZE
+#endif
 #else
     .align 4
 DRAW:           .ds.b 0x70
@@ -232,6 +256,12 @@ TrinoCmd_TestTri:
     # TrinoCmd_Draw: T&L + rasterize one static mesh draw.
     #############################################################
     .func TrinoCmd_Draw
+#ifdef TRINO_PALETTE
+TrinoCmd_DrawPal:
+    # The draw and its palette table (PAL follows DRAW): the same copy.
+    j draw_copy
+    li t2, DRAW_CMD_SIZE + PAL_SIZE
+#endif
 TrinoCmd_Draw:
     #define seg_ptr   s5
     #define seg_left  s6
@@ -241,9 +271,17 @@ TrinoCmd_Draw:
     #define idx       fp
 
     # Copy the command (DRAW_CMD_SIZE bytes) into DRAW.
+#ifdef TRINO_PALETTE
+    li t2, DRAW_CMD_SIZE
+draw_copy:
+    addiu t0, rspq_dmem_buf_ptr, %lo(RSPQ_DMEM_BUFFER)
+    subu t0, t2
+    li t1, %lo(DRAW)
+#else
     addiu t0, rspq_dmem_buf_ptr, %lo(RSPQ_DMEM_BUFFER) - DRAW_CMD_SIZE
     li t1, %lo(DRAW)
     li t2, DRAW_CMD_SIZE
+#endif
 1:  lw t3, 0(t0)
     addiu t0, 4
     addiu t2, -4
@@ -399,6 +437,10 @@ draw_segment:
     li dst, %lo(VTX_OUT)
 #ifdef TRINO_COLORED
     li dptr, %lo(DRAW)
+#endif
+#ifdef TRINO_PALETTE
+    #define palette t7
+    lw palette, 0x0C(dptr)          # nonzero: recolor the slots
 #endif
 
 transform_vertex:
@@ -1017,6 +1059,22 @@ water_fog:
     vmulf vkt, vtint, vk
     vadd vkt, vkt, vta
     luv vcol.e0, 24, src            # A's color, then B's (A's pad bytes)
+#ifdef TRINO_PALETTE
+    # The palette: each color times its slot's entry, (c * 257 p) >> 16,
+    # rounded to a whole u8 like the CPU's (c p + 127) / 255.
+    beqz palette, 1f
+    lhu t0, 22(src)                 # A's slot * 8 (the delay slot: harmless)
+    lhu t1, VTX_IN_SIZE + 22(src)
+    addiu t0, %lo(PAL)
+    addiu t1, %lo(PAL)
+    ldv vtmp.e0, 0, t0
+    ldv vtmp.e4, 0, t1
+    vmudl vcol, vcol, vtmp
+    vadd vcol, vcol, K64
+    vmudl vcol, vcol, K512
+    vmudn vcol, vcol, K128
+1:
+#endif
     vmulf vcol, vcol, vkt
     vadd vcol, vcol, pa_emis        # emissive, saturating
     # Fog: color += (fog - color) * f on red, green and blue.

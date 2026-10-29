@@ -1466,7 +1466,9 @@ pub enum RspReject {
     /// A textured draw the CPU path would split (an edge spanning
     /// [`DEPTH_SPLIT`] of view depth: it splits every textured draw).
     Textured,
-    /// A palette on a mesh with color slots.
+    /// A palette on a water surface with color slots: the colored and
+    /// textured overlays recolor slots (`TrinoCmd_DrawPal`, GitHub #122),
+    /// the water overlay has no IMEM left for it.
     Palette,
     /// No bounding sphere.
     NoBounds,
@@ -1508,7 +1510,7 @@ impl RspReject {
             RspReject::Fog => "fog needing splits",
             RspReject::Translucent => "translucent tint",
             RspReject::Textured => "texture needing splits",
-            RspReject::Palette => "palette",
+            RspReject::Palette => "palette on water",
             RspReject::NoBounds => "no bounds",
             RspReject::Offscreen => "off screen",
             RspReject::NearPlane => "crosses the near plane",
@@ -1630,8 +1632,8 @@ impl RspFog {
 /// draws and fog that needs no split it does: [`rsp_fog_check`]). Its whole
 /// bounding sphere must be inside the RSP band and past the near plane, or
 /// failing that every one of its vertices ([`rsp_hull_check`]), so no
-/// triangle could have been clipped. A palette on a mesh with
-/// color slots stays on the CPU too (the overlay draws baked colors). Only for meshes
+/// triangle could have been clipped. A palette on a mesh with color slots
+/// takes the colored overlay's palette command ([`rsp_palette`]). Only for meshes
 /// [`rsp_mesh_supported`] accepted (checked once; this runs per draw). It
 /// lives in the core so host tests can predict the console's work split
 /// exactly (`perf_budget`).
@@ -1794,10 +1796,6 @@ pub fn rsp_check_mv(
     if params.tint.a < 255 {
         return Err(RspReject::Translucent);
     }
-    // The overlay reads baked vertex colors only.
-    if params.palette.is_some() && mesh.has_slots() {
-        return Err(RspReject::Palette);
-    }
     let (c, r) = mesh.bounds().ok_or(RspReject::NoBounds)?;
     let c = mv.transform_point(c);
     let s = model.axis_scales_sq();
@@ -1895,6 +1893,17 @@ pub fn rsp_color_terms(ctx: &TnlContext, params: &ModelParams) -> RspColor {
             fog,
         },
     }
+}
+
+/// The palette an RSP draw recolors its mesh's color slots with: the draw's
+/// [`ModelParams::palette`] when the mesh has slots, else `None` (a palette
+/// on a mesh without slots changes nothing). The N64 sends such a draw
+/// through the colored or textured overlay's palette command (GitHub #122):
+/// each vertex's color times its slot's entry, as [`tessellate`] does
+/// before tint and lighting.
+#[inline]
+pub fn rsp_palette(mesh: &Mesh, params: &ModelParams) -> Option<crate::Palette> {
+    params.palette.filter(|_| mesh.has_slots())
 }
 
 /// Whether the RSP may fog a draw ([`rsp_check`] under fog): the overlay
@@ -2220,9 +2229,6 @@ pub fn rsp_rigid_draws(
     }
     if params.texture.is_some() {
         return Err(RspReject::Textured);
-    }
-    if params.palette.is_some() && mesh.has_slots() {
-        return Err(RspReject::Palette);
     }
     let mut n = 0;
     for (j, b) in bounds.iter().enumerate().take(mesh.joint_count()) {
@@ -3949,6 +3955,21 @@ pub(crate) mod tests {
         let rigid = Mesh::from_tmdl(&blob).unwrap();
         assert_eq!(rsp_rigid_check(&rigid), Ok(()));
         assert_eq!(rsp_plan(&ctx, &rigid, &id, &plain), Ok((2, 12)));
+        // Recolored slots keep the parts on the RSP (GitHub #122: a crowd of
+        // animated characters, each its own palette).
+        let mut slotted_blob = blob.clone();
+        section(
+            &mut slotted_blob,
+            b"SLOT",
+            &std::vec![2u8; rigid.vertex_count],
+        );
+        let slotted = Mesh::from_tmdl(&slotted_blob).unwrap();
+        let recolored = ModelParams {
+            palette: Some([Color::rgb(200, 40, 40); 4]),
+            ..plain
+        };
+        assert!(slotted.has_slots());
+        assert_eq!(rsp_plan(&ctx, &slotted, &id, &recolored), Ok((2, 12)));
         let mut parts = 0;
         for j in 0..2 {
             rsp_part_split(&rigid, j, &mut |_, t| parts += t.len());

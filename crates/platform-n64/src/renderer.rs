@@ -17,8 +17,8 @@ use trino_core::render3d::{
     RspPart, ScreenTri, TexBind, TnlContext, TnlScratch, TnlStats, WaterRsp, face_normal,
     flat_normal, flat_ratios, painter_index, painter_key, ring_on_rsp, ripple_over_surface,
     rsp_band, rsp_color, rsp_color_terms, rsp_eligible_mv, rsp_hull_inside, rsp_mesh_supported,
-    rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws, rsp_water_margin, rsp_water_mesh_check,
-    water_plane, water_rings_with, water_rsp, water_rsp_frame, water_vertex,
+    rsp_palette, rsp_part_bounds, rsp_rigid_check, rsp_rigid_draws, rsp_water_margin,
+    rsp_water_mesh_check, water_plane, water_rings_with, water_rsp, water_rsp_frame, water_vertex,
 };
 use trino_core::shadow::{self as sh, BLOB_TEXTURE_SIZE, ShadowPlan};
 use trino_core::text::{BitmapFont, GlyphIndex};
@@ -720,7 +720,11 @@ impl N64Renderer {
         let mut i = 0;
         while i < self.pending_rsp.len() {
             let w = &self.pending_rsp[i];
-            if w[0] & rsp::TEXTURED != 0 {
+            if w[0] & rsp::PALETTE != 0 {
+                let p = &self.pending_rsp;
+                submit_palette(&self.sprites, w, &p[i + 1], &p[i + 2]);
+                i += 3;
+            } else if w[0] & rsp::TEXTURED != 0 {
                 submit_textured(&self.sprites, w, &self.pending_rsp[i + 1]);
                 i += 2;
             } else if w[0] & rsp::COLORED != 0 {
@@ -917,6 +921,14 @@ impl N64Renderer {
         self.memo_gen = self.memo_gen.wrapping_add(1);
     }
 
+    /// A copy of a registered mesh's TMDL blob (the self-test builds
+    /// variants of the game's meshes from it, e.g. with color slots).
+    #[cold]
+    #[inline(never)]
+    pub fn mesh_blob(&self, model: ModelId) -> Option<Vec<u8>> {
+        self.meshes.get(&model.0).map(|(b, _)| b.clone())
+    }
+
     /// RSP oracle: draw `model` through the overlay with its screen
     /// vertices copied back, and compare them with the CPU path's
     /// projection and lighting. `Ok` carries the worst differences.
@@ -966,9 +978,26 @@ impl N64Renderer {
         // float in an `Option` payload, whose garbage the FPU traps on once
         // LLVM hoists the math out of the branch (see `RspFog`).
         let terms = rsp_color_terms(&self.tnl_ctx, params);
-        let colored = textured || rsp_color(&self.tnl_ctx, params).is_some();
-        match tex {
-            Some((id, ptr, size)) if textured => unsafe {
+        let palette = rsp_palette(&mesh, params);
+        let colored = textured || palette.is_some() || rsp_color(&self.tnl_ctx, params).is_some();
+        // A palette (GitHub #122): the palette command of either overlay.
+        let table = palette.map(|p| rsp::palette_entry(&p));
+        let mut w = words;
+        if table.is_some() {
+            rsp::mark_palette(&mut w);
+        }
+        match (tex, &table) {
+            (Some((id, ptr, size)), Some(p)) if textured => unsafe {
+                let e = rsp::tex_entry(&terms, &mv, size, [0.0, 0.0], [id, 0, 0]);
+                w[0] |= rsp::TEXTURED;
+                ffi::trino_3d_texture_ex(ptr, core::ptr::null_mut(), 0);
+                ffi::trino_rsp_draw_palette(w.as_ptr(), e.as_ptr(), p.as_ptr());
+            },
+            (_, Some(p)) => unsafe {
+                let c = rsp::color_words(&terms, &mv);
+                ffi::trino_rsp_draw_palette(w.as_ptr(), c.as_ptr(), p.as_ptr());
+            },
+            (Some((id, ptr, size)), None) if textured => unsafe {
                 let e = rsp::tex_entry(&terms, &mv, size, [0.0, 0.0], [id, 0, 0]);
                 ffi::trino_3d_texture_ex(ptr, core::ptr::null_mut(), 0);
                 ffi::trino_rsp_draw_textured(words.as_ptr(), e.as_ptr());
@@ -1007,7 +1036,16 @@ impl N64Renderer {
             let lit = n.dot(d.light);
             let lit = if lit > 0.0 { lit } else { 0.0 };
             let (amb, dif, e) = (terms.ambient, terms.diffuse, terms.emissive);
+            // The slot's entry first, as the CPU path does: (c p + 127) / 255.
             let c = mesh.color(g);
+            let c = match palette {
+                Some(p) if mesh.slot(g) > 0 => {
+                    let q = p[mesh.slot(g) as usize - 1];
+                    let mul = |a: u8, b: u8| ((a as u32 * b as u32 + 127) / 255) as u8;
+                    Color::rgba(mul(c.r, q.r), mul(c.g, q.g), mul(c.b, q.b), c.a)
+                }
+                _ => c,
+            };
             let t = params.tint;
             let ch = |v: u8, t: u8, i: usize| {
                 let x = v as f32 * (t as f32 / 255.0) * (amb[i] + dif[i] * lit) + e[i] as f32;
@@ -1178,6 +1216,30 @@ fn submit_textured(
         ffi::trino_3d_texture_ex(base.ptr, detail, bind[2]);
         ffi::trino_rsp_draw_textured(w.as_ptr(), carrier.as_ptr());
     }
+}
+
+/// One palette RSP command (GitHub #122): a colored or a textured one (its
+/// texture bound first, as [`submit_textured`] does) with the palette
+/// table in the entry after its carrier.
+#[cold]
+#[inline(never)]
+fn submit_palette(
+    sprites: &BTreeMap<u32, SpriteEntry>,
+    w: &[u32; rsp::DRAW_WORDS],
+    carrier: &[u32; rsp::DRAW_WORDS],
+    palette: &[u32; rsp::DRAW_WORDS],
+) {
+    if w[0] & rsp::TEXTURED != 0 {
+        let bind = &carrier[rsp::TEX_BIND..rsp::TEX_BIND + 3];
+        let Some(base) = sprites.get(&bind[0]) else {
+            return;
+        };
+        let detail = sprites
+            .get(&bind[1])
+            .map_or(core::ptr::null_mut(), |e| e.ptr);
+        unsafe { ffi::trino_3d_texture_ex(base.ptr, detail, bind[2]) };
+    }
+    unsafe { ffi::trino_rsp_draw_palette(w.as_ptr(), carrier.as_ptr(), palette.as_ptr()) };
 }
 
 /// A frame's counters on the trace (issue #62): no code at all without the
@@ -1618,6 +1680,16 @@ impl Renderer for N64Renderer {
                 let entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], bind);
                 let mut words = words;
                 words[0] |= rsp::TEXTURED;
+                // Recolored slots (never remembered: `MemoKey` refuses a
+                // palette): the table rides in a third entry.
+                if let Some(p) = rsp_palette(&mesh, params) {
+                    rsp::mark_palette(&mut words);
+                    self.pending_rsp.push(words);
+                    self.pending_rsp.push(entry);
+                    self.queue_rsp(rsp::palette_entry(&p));
+                    self.count_rsp(model, t0, tris);
+                    return;
+                }
                 if let Some(k) = key {
                     let mut e = [0u32; MEMO_ENTRY];
                     e.copy_from_slice(&entry[..MEMO_ENTRY]);
@@ -1635,6 +1707,20 @@ impl Renderer for N64Renderer {
                 }
                 self.pending_rsp.push(words);
                 self.queue_rsp(entry);
+                self.count_rsp(model, t0, tris);
+                return;
+            }
+            // A palette (GitHub #122): the colored overlay's palette
+            // command, whatever the light, its color words and then its
+            // table in the next two entries (never remembered).
+            if let Some(p) = rsp_palette(&mesh, params) {
+                let c = rsp_color_terms(&self.tnl_ctx, params);
+                let mut words = words;
+                words[0] |= rsp::COLORED;
+                rsp::mark_palette(&mut words);
+                self.pending_rsp.push(words);
+                self.pending_rsp.push(rsp::color_entry(&c, &mv));
+                self.queue_rsp(rsp::palette_entry(&p));
                 self.count_rsp(model, t0, tris);
                 return;
             }
@@ -1986,8 +2072,16 @@ impl N64Renderer {
                 return false;
             }
         }
-        // The color words are the same for every part.
-        let color = rsp_color(&self.tnl_ctx, params).map(|c| rsp::color_entry(&c, matrix));
+        // The color words are the same for every part; a palette (GitHub
+        // #122) takes them whatever the light, and its table.
+        let palette = rsp_palette(mesh, params).map(|p| rsp::palette_entry(&p));
+        let color = match palette {
+            Some(_) => Some(rsp::color_entry(
+                &rsp_color_terms(&self.tnl_ctx, params),
+                matrix,
+            )),
+            None => rsp_color(&self.tnl_ctx, params).map(|c| rsp::color_entry(&c, matrix)),
+        };
         self.frame_stats.models += 1;
         for (k, p) in s.parts[..n].iter().enumerate() {
             // The whole build is charged to the first part.
@@ -2005,13 +2099,20 @@ impl N64Renderer {
             let mut words =
                 rsp::draw_words(&self.tnl_ctx, &p.mv, &p.draw, params.tint, rm, cull, 0);
             let tris = rm.tris();
-            match &color {
-                Some(c) => {
+            match (&color, &palette) {
+                (Some(c), Some(p)) => {
+                    words[0] |= rsp::COLORED;
+                    rsp::mark_palette(&mut words);
+                    self.pending_rsp.push(words);
+                    self.pending_rsp.push(*c);
+                    self.queue_rsp(*p);
+                }
+                (Some(c), None) => {
                     words[0] |= rsp::COLORED;
                     self.pending_rsp.push(words);
                     self.queue_rsp(*c);
                 }
-                None => self.queue_rsp(words),
+                (None, _) => self.queue_rsp(words),
             }
             self.count_rsp(model, t, tris);
         }

@@ -42,8 +42,9 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
 ## Game code
 
 - `AccessBlob::get(platform)` in `update_with`, then `data.color(name, settings.cvd)` /
-  `data.palette([..4], cvd)` → the tint or palette the draw already has. A tint keeps an
-  N64 draw on the RSP; a palette moves it to the CPU T&L (`RspReject::Palette`).
+  `data.palette([..4], cvd)` → the tint or palette the draw already has. Both keep an
+  N64 draw on the RSP (a palette through the colored overlay's palette command since
+  GitHub #122; not on water).
 - Fixed colors (club kits): compare as the player sees them,
   `access::delta_e_seen(cvd, a, b)` (Solid Eleven's `dress_for`).
 - Captions: `captions.configure(blob, &settings)`, `let mut c = self.captions;

@@ -18,7 +18,10 @@
 //!   shading mode;
 //! - `micro-tris`: the same grid with every triangle listed twice (same
 //!   vertices, 900 triangles): the per-triangle cost, and a 900-triangle
-//!   batch for sort + submit.
+//!   batch for sort + submit;
+//! - `micro-palette`: a crowd of 16 small slotted figures (6×6 vertices,
+//!   50 triangles each), each recolored by its own palette (GitHub #122):
+//!   the CPU T&L against the RSP's palette command in the same ROM.
 
 extern crate alloc;
 
@@ -40,6 +43,21 @@ const BUMPY: ModelId = ModelId::from_path("micro/bumpy");
 /// [`GRID`] as a rigid mesh of two joints (left and right halves, the
 /// middle column duplicated): the RSP draws it as two parts.
 const RIGID: ModelId = ModelId::from_path("micro/rigid");
+/// [`GRID`] with color slots (`SLOT`, GitHub #122): slot
+/// `(x / 4 + y / 4) % 5`, so every slot 0..=4 shows in bands.
+const GRID_SLOTS: ModelId = ModelId::from_path("micro/grid_slots");
+/// [`RIGID`] with the same slots: a recolored rigid draw, a part per joint.
+const RIGID_SLOTS: ModelId = ModelId::from_path("micro/rigid_slots");
+/// castle64's textured self-test card with slots: the textured overlay's
+/// palette command.
+const CARD_SLOTS: ModelId = ModelId::from_path("micro/card_slots");
+/// One figure of the `micro-palette` crowd: 6×6 vertices, 50 triangles,
+/// slots `(x + y) % 5` (several per face).
+const FIGURE: ModelId = ModelId::from_path("micro/figure");
+/// Figures in the `micro-palette` crowd (a 4×4 block).
+const CROWD: usize = 16;
+/// Figure side in vertices.
+const FIGURE_N: usize = 6;
 
 /// Grid side in vertices. At most 16: two rows (32 vertices) fit the
 /// T&L's 32-slot direct-mapped vertex cache, so every vertex is
@@ -82,6 +100,40 @@ fn tmdl(positions: &[Vec3], indices: &[u16], center: Vec3, radius: f32) -> Vec<u
     }
     b
 }
+
+/// Slot of grid vertex `(x, y)` in [`GRID_SLOTS`] and [`RIGID_SLOTS`].
+fn grid_slot(x: usize, y: usize) -> u8 {
+    ((x / 4 + y / 4) % 5) as u8
+}
+
+/// `blob` with a `SLOT` section (one color slot per vertex) appended.
+fn with_slots(mut blob: Vec<u8>, slots: &[u8]) -> Vec<u8> {
+    blob.extend_from_slice(b"SLOT");
+    blob.extend_from_slice(&(slots.len() as u32).to_le_bytes());
+    blob.extend_from_slice(slots);
+    blob
+}
+
+/// Figure `k`'s palette: four colors of its own (a crowd recolored per
+/// character, the accessibility and kit swaps of a real game).
+fn crowd_palette(k: usize) -> trino_core::Palette {
+    let c = |a: usize, b: usize| (a * 37 + b * 61) as u8;
+    [
+        Color::rgb(c(k, 1), 255 - c(k, 2), 90),
+        Color::rgb(40, c(k, 3), 255 - c(k, 4)),
+        Color::rgb(255 - c(k, 5), 200, c(k, 6)),
+        Color::rgb(c(k, 7), c(k, 8), c(k, 9)),
+    ]
+}
+
+/// The palette the RSP checks recolor with: saturated, unlike the grid's
+/// own colors, so a missing multiply shows.
+const CHECK_PALETTE: trino_core::Palette = [
+    Color::rgb(230, 40, 40),
+    Color::rgb(40, 200, 60),
+    Color::rgb(50, 70, 230),
+    Color::rgb(250, 220, 30),
+];
 
 /// The camera looks down +Z from the origin, so view space = world space
 /// and a front face (CCW on screen) goes "up, then right" from its first
@@ -147,11 +199,44 @@ fn register_meshes(r: &mut N64Renderer) -> bool {
         }
     }
     debug_assert_eq!(idx2.len() / 3, BATCH_TRIS);
+    let grid_slots: Vec<u8> = (0..GRID_N * GRID_N)
+        .map(|i| grid_slot(i % GRID_N, i / GRID_N))
+        .collect();
+    // The figure: ~0.25 wide at z = 6 (about 9 px), its own grid.
+    let fstep = 0.05f32;
+    let fhalf = fstep * (FIGURE_N - 1) as f32 * 0.5;
+    let mut fpos = Vec::new();
+    let mut fslots = Vec::new();
+    for y in 0..FIGURE_N {
+        for x in 0..FIGURE_N {
+            fpos.push(Vec3::new(
+                x as f32 * fstep - fhalf,
+                y as f32 * fstep - fhalf,
+                0.0,
+            ));
+            fslots.push(((x + y) % 5) as u8);
+        }
+    }
+    let mut fidx = Vec::new();
+    for y in 0..FIGURE_N - 1 {
+        for x in 0..FIGURE_N - 1 {
+            let i = (y * FIGURE_N + x) as u16;
+            let w = FIGURE_N as u16;
+            fidx.extend_from_slice(&[i, i + w, i + 1, i + 1, i + w, i + w + 1]);
+        }
+    }
+    let figure = with_slots(tmdl(&fpos, &fidx, Vec3::ZERO, fhalf * 1.5), &fslots);
     r.register_mesh(TRI.0, tri)
         && r.register_mesh(GRID.0, tmdl(&pos, &idx, Vec3::ZERO, r_grid))
         && r.register_mesh(GRID2.0, tmdl(&pos, &idx2, Vec3::ZERO, r_grid))
         && r.register_mesh(BUMPY.0, tmdl(&bumpy, &bidx, Vec3::ZERO, r_grid))
-        && r.register_mesh(RIGID.0, rigid_grid(&pos, n_grid_half(), r_grid))
+        && r.register_mesh(RIGID.0, rigid_grid(&pos, n_grid_half(), r_grid, false))
+        && r.register_mesh(
+            GRID_SLOTS.0,
+            with_slots(tmdl(&pos, &idx, Vec3::ZERO, r_grid), &grid_slots),
+        )
+        && r.register_mesh(RIGID_SLOTS.0, rigid_grid(&pos, n_grid_half(), r_grid, true))
+        && r.register_mesh(FIGURE.0, figure)
 }
 
 #[derive(Clone, Copy)]
@@ -161,6 +246,7 @@ enum Set {
     Trs,
     Yaw,
     Grid(ModelId, Shading),
+    Crowd,
 }
 
 const SCENES: &[(&str, Set)] = &[
@@ -172,6 +258,7 @@ const SCENES: &[(&str, Set)] = &[
     ("micro-unlit", Set::Grid(GRID, Shading::Unlit)),
     ("micro-flat", Set::Grid(GRID, Shading::Flat)),
     ("micro-tris", Set::Grid(GRID2, Shading::Gouraud)),
+    ("micro-palette", Set::Crowd),
 ];
 
 /// Position of small draw `k` (8×8 block at z = 6, or behind the camera).
@@ -217,6 +304,16 @@ fn render(r: &mut N64Renderer, set: Set) {
                 ..ModelParams::DEFAULT
             };
             r.draw_model_matrix(model, &m, Material::VertexLit, &p);
+        }
+        Set::Crowd => {
+            for k in 0..CROWD {
+                let at = Vec3::new((k % 4) as f32 * 0.4 - 0.6, (k / 4) as f32 * 0.4 - 0.6, 6.0);
+                let p = ModelParams {
+                    palette: Some(crowd_palette(k)),
+                    ..ModelParams::DEFAULT
+                };
+                r.draw_model_matrix(FIGURE, &translation(at), Material::VertexLit, &p);
+            }
         }
     }
     r.end_frame();
@@ -383,12 +480,47 @@ fn rsp_checks(r: &mut N64Renderer) {
         ..ModelParams::DEFAULT
     };
     let textured = r.rsp_oracle(card, &grid, &unlit);
+    // Palettes (GitHub #122): the colored overlay's palette command under
+    // the white light and under the warm one with a glow, and the textured
+    // overlay's on a slotted copy of the card.
+    let recolor = ModelParams {
+        palette: Some(CHECK_PALETTE),
+        ..ModelParams::DEFAULT
+    };
+    let palette = r.rsp_oracle(GRID_SLOTS, &grid, &recolor);
+    r.set_light(&WARM);
+    let warm_palette = r.rsp_oracle(
+        GRID_SLOTS,
+        &grid,
+        &ModelParams {
+            palette: Some(CHECK_PALETTE),
+            ..GLOW
+        },
+    );
+    setup(r);
+    let card_slots = r.mesh_blob(card).map(|b| {
+        let n = trino_core::render3d::Mesh::from_tmdl(&b).map_or(0, |m| m.vertex_count);
+        let slots: Vec<u8> = (0..n).map(|i| (i % 5) as u8).collect();
+        with_slots(b, &slots)
+    });
+    let card_ok = card_slots.is_some_and(|b| r.register_mesh(CARD_SLOTS.0, b));
+    let unlit_recolor = ModelParams {
+        palette: Some(CHECK_PALETTE),
+        ..unlit
+    };
+    let textured_palette = match card_ok {
+        true => r.rsp_oracle(CARD_SLOTS, &grid, &unlit_recolor),
+        false => Err("no slotted card".into()),
+    };
     for (what, res) in [
         ("colored emissive", colored),
         ("double-sided back", flipped),
         ("fog", fogged),
         ("flat squashed", faces),
         ("textured", textured),
+        ("palette", palette),
+        ("palette warm", warm_palette),
+        ("palette textured", textured_palette),
     ] {
         match res {
             Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
@@ -436,6 +568,36 @@ fn rsp_checks(r: &mut N64Renderer) {
         r.draw_model_matrix(RIGID, &grid, Material::VertexLit, &ModelParams::DEFAULT);
         r.end_frame();
     });
+    // The palette draws, each also proven to have taken the RSP (a draw
+    // left on the CPU would pass the pixel check trivially).
+    let recolored: [(&str, ModelId, ModelParams); 3] = [
+        ("palette", GRID_SLOTS, recolor),
+        ("palette rigid", RIGID_SLOTS, recolor),
+        ("palette textured", CARD_SLOTS, unlit_recolor),
+    ];
+    for (what, model, params) in recolored {
+        if model == CARD_SLOTS && !card_ok {
+            continue;
+        }
+        let draw = |r: &mut N64Renderer| {
+            r.begin_frame(Color::BLACK);
+            setup(r);
+            r.draw_model_matrix(model, &grid, Material::VertexLit, &params);
+            r.end_frame();
+        };
+        pixel_check(r, what, &draw);
+        draw(r);
+        let rsp = r.stats().tnl.rsp_draws;
+        if rsp == 0 {
+            runtime::log(&alloc::format!(
+                "TRINO_TEST_FAIL:rsp {what}: the palette draw stayed on the CPU\n"
+            ));
+        } else {
+            runtime::log(&alloc::format!(
+                "TRINO_RSP:{what} on the RSP: {rsp} commands\n"
+            ));
+        }
+    }
     setup(r);
 }
 
@@ -519,9 +681,10 @@ fn n_grid_half() -> usize {
 
 /// [`RIGID`]: the grid's two halves, each with its own copy of the middle
 /// column, and a `SKEL` of two identity joints (the bind pose; no clips).
-fn rigid_grid(pos: &[Vec3], half: usize, radius: f32) -> Vec<u8> {
+fn rigid_grid(pos: &[Vec3], half: usize, radius: f32, slotted: bool) -> Vec<u8> {
     let mut verts = Vec::new();
     let mut joint = Vec::new();
+    let mut slots = Vec::new();
     let mut idx = Vec::new();
     for (j, cols) in [(0u8, 0..half + 1), (1, half..GRID_N)].into_iter() {
         let base = verts.len() as u16;
@@ -530,6 +693,7 @@ fn rigid_grid(pos: &[Vec3], half: usize, radius: f32) -> Vec<u8> {
             for x in cols.clone() {
                 verts.push(pos[y * GRID_N + x]);
                 joint.push(j);
+                slots.push(grid_slot(x, y));
             }
         }
         for y in 0..GRID_N - 1 {
@@ -557,7 +721,7 @@ fn rigid_grid(pos: &[Vec3], half: usize, radius: f32) -> Vec<u8> {
     b.extend_from_slice(b"SKEL");
     b.extend_from_slice(&(skel.len() as u32).to_le_bytes());
     b.extend_from_slice(&skel);
-    b
+    if slotted { with_slots(b, &slots) } else { b }
 }
 
 /// The water overlay against the CPU path (`rsp_water_oracle`): castle64's

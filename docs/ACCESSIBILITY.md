@@ -74,8 +74,9 @@ if let Some(d) = self.access.data() {
 }
 ```
 
-The same draw, no shader, the same on every target. (A draw with a palette leaves the
-N64's RSP as any palette draw does; a tint stays on it.) When the colors are fixed
+The same draw, no shader, the same on every target. (On the N64 a palette draw stays
+on the RSP, through the colored overlay's palette command, GitHub #122; so does a
+tint.) When the colors are fixed
 content — kits a club owns — compare them as the player sees them instead:
 `trino_core::access::delta_e_seen(cvd, a, b)` (Solid Eleven's `dress_for`).
 

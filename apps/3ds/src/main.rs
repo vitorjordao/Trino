@@ -48,6 +48,8 @@ mod n3ds {
             run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
             return;
         }
+        // The player's progress in its SD folder (issues #119, #121).
+        game.set_saves(true);
 
         // Play (or replay / record, issue #67) through the engine's host
         // loop; `run 3ds --trace` names the session after castle64.

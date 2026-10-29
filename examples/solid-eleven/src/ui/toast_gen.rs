@@ -9,12 +9,12 @@ use trino_core::ui::{
 #[allow(unused_imports)]
 use trino_core::{Color, FontId, ModelId, Screen, SpriteId, TextAlign};
 
-pub static NODES: [UiNode<'static>; 5] = [
+pub static NODES: [UiNode<'static>; 7] = [
     // 0: Overlay
     UiNode {
         kind: NodeKind::Overlay,
         parent: NONE,
-        end: 5,
+        end: 7,
         ..UiNode::DEFAULT
     },
     // 1: Rect
@@ -55,6 +55,27 @@ pub static NODES: [UiNode<'static>; 5] = [
         parent: 3,
         end: 5,
         color: Some(Color::rgba(230, 50, 70, 255)),
+        text: "{}",
+        bind: "text",
+        ..UiNode::DEFAULT
+    },
+    // 5: Rect
+    UiNode {
+        kind: NodeKind::Rect { border: 1, border_color: Color::rgba(255, 190, 40, 255) },
+        parent: 0,
+        end: 7,
+        anchor: Anchor::Bottom,
+        offset: (0, -28),
+        padding: [12, 2, 12, 2],
+        visible_if: "warn",
+        ..UiNode::DEFAULT
+    },
+    // 6: Text '{}'
+    UiNode {
+        kind: NodeKind::Text,
+        parent: 5,
+        end: 7,
+        color: Some(Color::rgba(255, 190, 40, 255)),
         text: "{}",
         bind: "text",
         ..UiNode::DEFAULT

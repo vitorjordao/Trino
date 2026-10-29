@@ -64,7 +64,15 @@ fn starter_screens_match_their_goldens_on_every_profile() {
     let golden = root.join("tests/golden/pc");
     let bless = std::env::var("TRINO_BLESS").is_ok();
     let mut failures = Vec::new();
-    for screen in ["title", "pause", "options", "controls", "about", "crash"] {
+    for screen in [
+        "title",
+        "pause",
+        "options",
+        "controls",
+        "about",
+        "crash",
+        "save_notice",
+    ] {
         let def = starter(screen);
         for family in [Family::N64, Family::N3ds, Family::Pc] {
             let opts = ShotOptions {

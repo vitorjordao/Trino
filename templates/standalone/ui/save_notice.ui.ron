@@ -1,0 +1,34 @@
+// What the save read found, told once at start (issue #121): the newest
+// save was damaged and the one before it loaded, the save couldn't be read
+// at all (the game starts over), or it came from a newer version (this one
+// won't overwrite it). The game picks the line with `recovered`,
+// `corrupted` or `newer` (`Platform::save_status`, `save::load_game`).
+(
+    version: 1,
+    name: "save_notice",
+    focus: "ok",
+    on_back: "ok",
+    preview: {"recovered": Bool(true)},
+    root: (
+        children: [
+            (kind: Rect(), anchor: Fill, bleed: true, color: Some((0, 0, 0, 220))),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 196, 80, 255))),
+                anchor: Center,
+                padding: (12, 10, 12, 12),
+                children: [
+                    (
+                        kind: Stack(gap: 6, align: Center),
+                        children: [
+                            (kind: Text, key: "save.title", text: "Your save", align: Center, size: (Px(260), Fit), overflow: Wrap, color: Some((255, 196, 80, 255))),
+                            (kind: Text, key: "save.recovered", text: "The last save was damaged. The game loaded the one before it.", visible_if: "recovered", align: Center, size: (Px(260), Fit), overflow: Wrap),
+                            (kind: Text, key: "save.corrupted", text: "The save was damaged and could not be read. The game starts over.", visible_if: "corrupted", align: Center, size: (Px(260), Fit), overflow: Wrap),
+                            (kind: Text, key: "save.newer", text: "This save is from a newer version of the game. This one won't overwrite it.", visible_if: "newer", align: Center, size: (Px(260), Fit), overflow: Wrap),
+                            (kind: Button, id: "ok", key: "save.ok", text: "OK", on_click: "ok", min: (90, 18), padding: (6, 3, 6, 3)),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

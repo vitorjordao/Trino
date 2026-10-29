@@ -53,6 +53,11 @@ fn standalone_project_builds_tests_and_runs() {
     };
     let tests = run(&["test", "--offline"], &[]);
     assert!(tests.contains("moves_with_dpad ... ok"), "{tests}");
+    // The versioned save and its notice (issue #121).
+    assert!(
+        tests.contains("the_save_notice_says_what_the_read_found ... ok"),
+        "{tests}"
+    );
 
     let display = ["DISPLAY", "WAYLAND_DISPLAY"]
         .iter()

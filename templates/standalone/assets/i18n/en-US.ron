@@ -59,5 +59,10 @@ Strings(
         "ach.corner.desc": "Reach a corner of the screen.",
         "presence.title": "On the title screen",
         "presence.playing": "Playing",
+        "save.title": "Your save",
+        "save.recovered": "The last save was damaged. The game loaded the one before it.",
+        "save.corrupted": "The save was damaged and could not be read. The game starts over.",
+        "save.newer": "This save is from a newer version of the game. This one won't overwrite it.",
+        "save.ok": "OK",
     },
 )

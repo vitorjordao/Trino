@@ -60,9 +60,13 @@ mod web {
             }
         }
 
-        fn make(self, screen: Vec2) -> Box<dyn Game> {
+        /// `saves`: castle64 keeps the player's progress (issue #121).
+        fn make(self, screen: Vec2, saves: bool) -> Box<dyn Game> {
             match self {
-                Which::Castle64 => Box::new(castle64::Castle64Game::new(screen)),
+                Which::Castle64 => {
+                    let g = castle64::Castle64Game::new(screen);
+                    Box::new(if saves { g.with_saves() } else { g })
+                }
                 Which::Showcase => Box::new(showcase::ShowcaseGame::with_screen(screen)),
                 Which::SolidEleven => Box::new(solid_eleven::SolidElevenGame::new(screen)),
             }
@@ -99,7 +103,10 @@ mod web {
             crate::selftest::start(host);
             return Ok(());
         }
-        let mut game = which.make(host.screen());
+        // The progress in `localStorage` (issue #121), but never in a smoke
+        // run (`?frames`), a replay or a recording.
+        let saves = !query.has("frames") && !query.has("replay") && !query.has("record");
+        let mut game = which.make(host.screen(), saves);
         let label = match which {
             Which::Castle64 => "castle64",
             Which::Showcase => "showcase",

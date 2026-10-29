@@ -49,6 +49,9 @@ mod n64 {
 
         if N64Assets::exists("/test_mode") {
             run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
+        } else {
+            // The player's progress on the EEPROM (issue #121).
+            game.set_saves(true);
         }
 
         // Play (or replay / record, issue #67) through the engine's host

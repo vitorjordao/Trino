@@ -31,6 +31,7 @@
 pub mod bot;
 mod levels;
 pub mod perf;
+pub mod progress;
 pub mod selftest;
 
 use core::fmt::Write as _;
@@ -241,6 +242,23 @@ pub struct Castle64Game {
     ach_state: AchievementState,
     reported: (u32, u32, u32, usize),
     stomps: u32,
+    /// The save (issue #121): off unless the host asks
+    /// ([`with_saves`](Castle64Game::with_saves)), so tests, self-tests,
+    /// benchmarks and replays never read or write the player's progress.
+    saves: SaveState,
+}
+
+/// Where castle64's save stands (`progress`).
+#[derive(Clone, Copy, Default)]
+struct SaveState {
+    on: bool,
+    loaded: bool,
+    /// The medium holds a newer version's save: never overwrite it.
+    blocked: bool,
+    /// The progress last handed to `save_begin`.
+    written: Option<progress::Progress>,
+    /// What the boot's read found (`Platform::save_status`).
+    status: trino_core::SaveStatus,
 }
 
 /// castle64's achievements (`assets/achievements.ron`).
@@ -302,9 +320,97 @@ impl Castle64Game {
             ach_state: AchievementState::EMPTY,
             reported: (0, 0, 0, usize::MAX),
             stomps: 0,
+            saves: SaveState {
+                on: false,
+                loaded: false,
+                blocked: false,
+                written: None,
+                status: trino_core::SaveStatus::Unknown,
+            },
         };
         game.goto_level(0);
         game
+    }
+
+    /// Read the progress at the first update and save it when it moves
+    /// (issue #121). The playing hosts turn it on; tests, the self-tests,
+    /// the perf scenes and replays leave it off.
+    pub fn with_saves(mut self) -> Self {
+        self.set_saves(true);
+        self
+    }
+
+    /// [`with_saves`](Self::with_saves) in place: the consoles' hosts use
+    /// it, so the game is never moved by value on the N64's 64 KB stack.
+    pub fn set_saves(&mut self, on: bool) {
+        self.saves.on = on;
+    }
+
+    /// What the boot's save read found (`Unknown` before it, or with saves
+    /// off).
+    pub fn save_status(&self) -> trino_core::SaveStatus {
+        self.saves.status
+    }
+
+    /// The progress as the save holds it.
+    pub fn progress(&self) -> progress::Progress {
+        progress::Progress {
+            stars: self.stars,
+            coins: self.coins_taken,
+            stomps: self.stomps,
+        }
+    }
+
+    /// Load the save once, then write the progress whenever it changed,
+    /// one EEPROM block a frame on the N64 (`save_begin` + `save_step`).
+    fn persist(&mut self, platform: &mut dyn Platform) {
+        if !self.saves.on {
+            return;
+        }
+        if !self.saves.loaded {
+            self.saves.loaded = true;
+            let mut buf = [0u8; progress::MAX];
+            if let Ok(l) = trino_core::save::load_game(self, platform, &mut buf, progress::VERSION)
+            {
+                self.saves.status = l.status;
+                if l.from > progress::VERSION {
+                    self.saves.blocked = true;
+                    platform.log("castle64: the save is from a newer version: not saving\n");
+                } else if let Some((p, ach)) = progress::Progress::decode(&buf[..l.len]) {
+                    self.stars = p.stars;
+                    self.coins_taken = p.coins;
+                    self.stomps = p.stomps;
+                    if let Some(a) = ach {
+                        platform.restore_achievements(&a);
+                    }
+                }
+                match l.status {
+                    trino_core::SaveStatus::RecoveredFromBackup => {
+                        platform.log("castle64: the save came back from its backup\n")
+                    }
+                    trino_core::SaveStatus::Corrupted => {
+                        platform.log("castle64: the save was damaged: starting over\n")
+                    }
+                    _ => {}
+                }
+            }
+            self.saves.written = Some(self.progress());
+        }
+        let now = self.progress();
+        if !self.saves.blocked && self.saves.written != Some(now) {
+            let table = AchievementTable::from_platform(platform).unwrap_or(self.ach_table);
+            let state = platform.achievements();
+            let mut data = [0u8; progress::MAX];
+            let mut tagged = [0u8; progress::MAX];
+            if let Some(n) = now.encode(&table, &state, &mut data)
+                && let Some(k) =
+                    trino_core::save::write_versioned(progress::VERSION, &data[..n], &mut tagged)
+                && platform.save_begin(&tagged[..k]).is_ok()
+            {
+                self.saves.written = Some(now);
+            }
+        }
+        let _ = platform.save_step(2_000);
     }
 
     /// Back to the state [`new`](Self::new) builds, in place (a replay
@@ -335,6 +441,8 @@ impl Castle64Game {
         self.ach_state = AchievementState::EMPTY;
         self.reported = (0, 0, 0, usize::MAX);
         self.stomps = 0;
+        // A replay or a recording starts here: it never touches the save.
+        self.saves = SaveState::default();
         self.goto_level(0);
     }
 
@@ -526,6 +634,8 @@ impl Game for Castle64Game {
         audio: &mut dyn Audio,
         dt: f32,
     ) {
+        // The save first: the first frame already plays the loaded progress.
+        self.persist(platform);
         // Select opens the Graphics page where the host offers presets;
         // the game waits while it is up.
         if !self.graphics.is_open()
@@ -572,6 +682,12 @@ impl Game for Castle64Game {
         self.captions = captions;
         self.report_services(platform);
         self.toast.update(platform, dt);
+    }
+
+    /// castle64 saved nothing before version 1: an untagged save (version
+    /// 0) has nothing to bring forward, so the game starts over.
+    fn migrate_save(&mut self, _from: u16, _data: &mut [u8], _len: usize) -> Option<usize> {
+        None
     }
 
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
@@ -1734,6 +1850,142 @@ mod tests {
             blob: Box::leak(blob.into_boxed_slice()),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
         }
+    }
+
+    /// A console as castle64's save sees it (issue #121): the achievements'
+    /// table, session services and an in-memory save medium.
+    struct SaveHost {
+        host: ServicesHost,
+        save: Vec<u8>,
+        writes: u32,
+        status: trino_core::SaveStatus,
+    }
+
+    impl Platform for SaveHost {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+        fn blob(&self, id: trino_core::BlobId) -> Option<&'static [u8]> {
+            self.host.blob(id)
+        }
+        fn services(&self) -> Option<&trino_core::HostedServices> {
+            Some(&self.host.services)
+        }
+        fn services_mut(&mut self) -> Option<&mut trino_core::HostedServices> {
+            Some(&mut self.host.services)
+        }
+        fn save_capacity(&self) -> usize {
+            2032
+        }
+        fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, trino_core::SaveError> {
+            let n = self.save.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.save[..n]);
+            Ok(n)
+        }
+        fn save_write(&mut self, data: &[u8]) -> Result<(), trino_core::SaveError> {
+            self.save = data.to_vec();
+            self.writes += 1;
+            Ok(())
+        }
+        fn save_status(&self) -> trino_core::SaveStatus {
+            self.status
+        }
+    }
+
+    fn save_host(save: Vec<u8>) -> SaveHost {
+        SaveHost {
+            host: services_host(),
+            save,
+            writes: 0,
+            status: trino_core::SaveStatus::Ok,
+        }
+    }
+
+    fn frame(g: &mut Castle64Game, p: &mut dyn Platform) {
+        let mut a = CountAudio {
+            sounds: 0,
+            music: 0,
+        };
+        g.update_with(p, &InputState::default(), &mut a, 1.0 / 60.0);
+    }
+
+    /// Issue #121: castle64's progress and achievements survive a restart
+    /// (a console keeps the achievements only in the game's save), in a
+    /// versioned save.
+    #[test]
+    fn the_progress_survives_a_restart() {
+        let screen = Vec2::new(320.0, 240.0);
+        let mut p = save_host(Vec::new());
+        let mut g = Castle64Game::new(screen).with_saves();
+        frame(&mut g, &mut p);
+        assert_eq!(p.writes, 0, "nothing to save yet");
+        g.stars = 0b101;
+        g.coins_taken[1] = 0b1011;
+        g.stomps = 2;
+        frame(&mut g, &mut p);
+        frame(&mut g, &mut p);
+        assert_eq!(p.writes, 1, "one write per change");
+        assert_eq!(
+            trino_core::save::split_version(&p.save).0,
+            progress::VERSION
+        );
+        assert!(p.achievements().is_unlocked(0), "FIRST_COIN");
+        // A new boot on the same medium, its session achievements empty.
+        let mut q = save_host(p.save.clone());
+        assert!(!q.achievements().is_unlocked(0));
+        let mut h = Castle64Game::new(screen).with_saves();
+        frame(&mut h, &mut q);
+        assert_eq!(h.progress(), g.progress());
+        assert_eq!(h.save_status(), trino_core::SaveStatus::Ok);
+        assert!(q.achievements().is_unlocked(0), "restored from the save");
+        assert!(q.achievements().is_unlocked(2), "FIRST_STAR");
+        assert_eq!(q.writes, 0, "loading writes nothing");
+    }
+
+    /// Tests, self-tests and replays never touch the player's save: saves
+    /// are off unless the host turns them on, and `reset` turns them off.
+    #[test]
+    fn saves_are_off_unless_the_host_asks() {
+        let screen = Vec2::new(320.0, 240.0);
+        let mut p = save_host(Vec::new());
+        let mut g = Castle64Game::new(screen);
+        g.stars = 1;
+        frame(&mut g, &mut p);
+        assert_eq!(
+            (p.writes, g.save_status()),
+            (0, trino_core::SaveStatus::Unknown)
+        );
+        let mut g = Castle64Game::new(screen).with_saves();
+        frame(&mut g, &mut p);
+        g.reset();
+        g.stars = 1;
+        frame(&mut g, &mut p);
+        assert_eq!(p.writes, 0, "a replay starts from reset");
+    }
+
+    /// An untagged save (version 0: castle64 never wrote one) starts over;
+    /// a newer version's save is never overwritten.
+    #[test]
+    fn foreign_and_newer_saves() {
+        let screen = Vec2::new(320.0, 240.0);
+        let mut p = save_host(b"trino-save-v1".to_vec());
+        let mut g = Castle64Game::new(screen).with_saves();
+        frame(&mut g, &mut p);
+        assert_eq!(g.stars, 0);
+        g.stars = 1;
+        frame(&mut g, &mut p);
+        assert_eq!(p.writes, 1, "replaced by the first progress");
+        let mut newer = [0u8; 16];
+        let k = trino_core::save::write_versioned(progress::VERSION + 1, b"future", &mut newer)
+            .unwrap();
+        let mut p = save_host(newer[..k].to_vec());
+        let mut g = Castle64Game::new(screen).with_saves();
+        frame(&mut g, &mut p);
+        g.stars = 1;
+        frame(&mut g, &mut p);
+        assert_eq!(p.writes, 0);
+        assert_eq!(p.save, newer[..k]);
     }
 
     /// A coin reports the stat and unlocks FIRST_COIN once, with one popup;

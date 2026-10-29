@@ -144,8 +144,20 @@ pub struct Report {
 pub struct Toast {
     pub text: S,
     pub good: bool,
+    /// Amber, neither good nor bad: the save came back from its backup
+    /// (issue #121).
+    pub warn: bool,
     pub left: f32,
 }
+
+/// The engine-level version of Solid Eleven's save (`trino_core::save::
+/// write_versioned`, issue #121). Version 0 is the career image as written
+/// before the tag (`SE11` v1 to v3); [`Career::load`] still reads it, and
+/// `migrate_save` rewrites it as the current image.
+pub const SAVE_FORMAT: u16 = 1;
+
+/// A save buffer: the career image and the version tag.
+const SAVE_BUF: usize = SAVE_MAX + trino_core::save::VERSION_HEADER;
 
 /// Menu cursors.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
@@ -291,6 +303,9 @@ pub struct SolidElevenGame {
     /// Waiting for a save to be written / have we read the save yet.
     save_dirty: bool,
     loaded: bool,
+    /// The medium holds a save from a newer build (`from > SAVE_FORMAT`):
+    /// never overwrite it (issue #121).
+    pub save_blocked: bool,
     music: Option<bool>,
     /// Seconds since full time (the report follows).
     after_full_time: f32,
@@ -388,6 +403,7 @@ impl SolidElevenGame {
             prev: InputState::default(),
             save_dirty: false,
             loaded: false,
+            save_blocked: false,
             music: None,
             after_full_time: 0.0,
             sub_asked: false,
@@ -516,7 +532,20 @@ impl SolidElevenGame {
         self.toast = Some(Toast {
             text,
             good,
+            warn: false,
             left: 1.8,
+        });
+    }
+
+    /// What the save read found, said once at boot (issue #121): restored
+    /// from its backup (amber), damaged (a new career, red) or written by a
+    /// newer version (red; this build won't overwrite it).
+    fn save_notice(&mut self, text: S, warn: bool) {
+        self.toast = Some(Toast {
+            text,
+            good: false,
+            warn,
+            left: 4.0,
         });
     }
 
@@ -1214,6 +1243,7 @@ impl SolidElevenGame {
                     self.toast = Some(Toast {
                         text: S::PointsLeft,
                         good: false,
+                        warn: false,
                         left: 1.0,
                     });
                 }
@@ -1563,17 +1593,34 @@ impl SolidElevenGame {
     fn persist(&mut self, platform: &mut dyn Platform) {
         if !self.loaded {
             self.loaded = true;
-            let mut buf = [0u8; SAVE_MAX];
-            if let Ok(n) = platform.save_read(&mut buf)
-                && let Some((career, settings)) = Career::load(&buf[..n])
-            {
-                self.world = career;
-                self.settings = Settings::from_bytes(settings);
-                self.career_on = settings[3] == 1;
+            let mut buf = [0u8; SAVE_BUF];
+            // Versioned (issue #121): an untagged save is version 0, which
+            // `migrate_save` brings forward.
+            if let Ok(l) = trino_core::save::load_game(self, platform, &mut buf, SAVE_FORMAT) {
+                if l.from > SAVE_FORMAT {
+                    self.save_blocked = true;
+                    self.save_notice(S::SaveNewer, false);
+                } else {
+                    if let Some((career, settings)) = Career::load(&buf[..l.len]) {
+                        self.world = career;
+                        self.settings = Settings::from_bytes(settings);
+                        self.career_on = settings[3] == 1;
+                    }
+                    match l.status {
+                        trino_core::SaveStatus::RecoveredFromBackup => {
+                            self.save_notice(S::SaveRecovered, true)
+                        }
+                        trino_core::SaveStatus::Corrupted => {
+                            self.save_notice(S::SaveCorrupted, false)
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         // Never write during a match (the EEPROM steals frame time).
         if self.save_dirty
+            && !self.save_blocked
             && !matches!(
                 self.scene,
                 Scene::Match | Scene::Pause | Scene::HalfTime | Scene::Substitutions { .. }
@@ -1584,13 +1631,30 @@ impl SolidElevenGame {
             let mut st = self.settings.bytes();
             st[3] = self.career_on as u8;
             let n = self.world.save(st, &mut buf);
-            let _ = platform.save_begin(&buf[..n]);
+            let mut tagged = [0u8; SAVE_BUF];
+            if let Some(k) = trino_core::save::write_versioned(SAVE_FORMAT, &buf[..n], &mut tagged)
+            {
+                let _ = platform.save_begin(&tagged[..k]);
+            }
         }
         let _ = platform.save_step(2_000);
     }
 }
 
 impl Game for SolidElevenGame {
+    /// Version 0 (the career image from before the engine's version tag,
+    /// `SE11` v1 to v3) becomes the current image (issue #121).
+    fn migrate_save(&mut self, from: u16, data: &mut [u8], len: usize) -> Option<usize> {
+        if from != 0 {
+            return None;
+        }
+        let (career, settings) = Career::load(data.get(..len)?)?;
+        let mut img = [0u8; SAVE_MAX];
+        let n = career.save(settings, &mut img);
+        data.get_mut(..n)?.copy_from_slice(&img[..n]);
+        Some(n)
+    }
+
     fn update(&mut self, input: &InputState, audio: &mut dyn Audio, dt: f32) {
         self.step(input, audio, dt);
         self.prev = *input;

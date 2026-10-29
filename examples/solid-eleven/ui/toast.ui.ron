@@ -1,6 +1,7 @@
 // Solid Eleven's toast (issue #95): a short message over any menu (a
-// transfer, a save), lime when it went well, red when it didn't, growing
-// with the player's text scale.
+// transfer, a save), lime when it went well, red when it didn't, amber for
+// a warning (a save restored from its backup, issue #121), growing with the
+// player's text scale.
 //   cargo xtask ui export examples/solid-eleven/ui/toast.ui.ron examples/solid-eleven/src/ui/toast_gen.rs
 (
     version: 1,
@@ -29,6 +30,14 @@
                 padding: (12, 2, 12, 2),
                 visible_if: "bad",
                 children: [(kind: Text, bind: "text", text: "{}", color: Some((230, 50, 70, 255)))],
+            ),
+            (
+                kind: Rect(border: 1, border_color: Some((255, 190, 40, 255))),
+                anchor: Bottom,
+                offset: (0, -28),
+                padding: (12, 2, 12, 2),
+                visible_if: "warn",
+                children: [(kind: Text, bind: "text", text: "{}", color: Some((255, 190, 40, 255)))],
             ),
         ],
     ),

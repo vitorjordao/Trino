@@ -9,7 +9,10 @@ name: Robustness
 # mutation run (crates/fuzz/tests/targets.rs).
 #
 # A PR that touches this file or the fuzz crates runs it too, with short
-# budgets, so the workflow is proven before it lands on main.
+# budgets, so the workflow is proven before it lands on main. Each fuzz
+# shard then measures its targets' coverage over their corpus (issue #121,
+# `cargo xtask fuzz coverage`, the `fuzz-coverage-<shard>` artifact). The
+# platform crates' ASan run is weekly: `robustness-weekly.yml`.
 
 on:
   schedule:
@@ -95,6 +98,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          # llvm-cov / llvm-profdata for `cargo fuzz coverage` (#121).
+          components: llvm-tools-preview
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -116,17 +122,42 @@ jobs:
           restore-keys: fuzz-corpus-${{ matrix.shard }}-
       - name: Seed the corpus (first run)
         run: test -d fuzz/corpus/tmdl || cargo xtask fuzz corpus
-      - name: Fuzz this shard's targets
+      - name: This shard's targets
+        id: shard
         run: |
           targets=$(grep -A1 '^\[\[bin\]\]' fuzz/Cargo.toml | sed -n 's/^name = "\(.*\)"/\1/p')
-          i=0; failed=""
+          mine=""; i=0
           for t in $targets; do
-            if [ $((i % 6)) -eq ${{ matrix.shard }} ]; then
-              cargo xtask fuzz run "$t" --time "$FUZZ_SECONDS" || failed="$failed $t"
-            fi
+            if [ $((i % 6)) -eq ${{ matrix.shard }} ]; then mine="$mine $t"; fi
             i=$((i + 1))
           done
+          echo "targets=$mine" >> "$GITHUB_OUTPUT"
+      - name: Fuzz this shard's targets
+        run: |
+          failed=""
+          for t in ${{ steps.shard.outputs.targets }}; do
+            cargo xtask fuzz run "$t" --time "$FUZZ_SECONDS" || failed="$failed $t"
+          done
           if [ -n "$failed" ]; then echo "crashes in:$failed"; exit 1; fi
+      # Line, function and region coverage of each target over its corpus
+      # (issue #121): `fuzz/coverage/summary.{json,md}` and a per-file
+      # `report.txt` per target. A PR measures the shard's first target only.
+      - name: Coverage of this shard's targets
+        if: success() || failure()
+        run: |
+          set -- ${{ steps.shard.outputs.targets }}
+          if [ "${{ github.event_name }}" = pull_request ]; then set -- "$1"; fi
+          cargo xtask fuzz coverage "$@"
+          cat fuzz/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: fuzz-coverage-${{ matrix.shard }}
+          path: |
+            fuzz/coverage/summary.json
+            fuzz/coverage/summary.md
+            fuzz/coverage/*/report.txt
+          if-no-files-found: ignore
       # A crash's input, for `cargo xtask fuzz repro <file>` and then
       # `fuzz keep <file>` beside the fix.
       - uses: actions/upload-artifact@v4

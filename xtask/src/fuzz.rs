@@ -138,6 +138,9 @@ pub fn run(root: &Path, rest: &[&str]) -> ExitCode {
     }
 }
 
+/// Targets that draw on a GPU (`trino_fuzz::gpu_targets`).
+const GPU_TARGETS: &[&str] = &["pc_renderer"];
+
 /// One libFuzzer run: the corpus folder (written to) and the committed
 /// seeds (read). Bounded time and memory per input, like the invariants
 /// say.
@@ -166,11 +169,20 @@ fn libfuzzer(root: &Path, name: &str, max_len: u64, time: u64, jobs: u32) -> boo
     if jobs > 1 {
         cmd.arg(format!("-fork={jobs}")).arg("-ignore_crashes=0");
     }
+    // The GPU target runs the (uninstrumented) Vulkan driver, whose
+    // allocations outlive the input and the process: LeakSanitizer blames
+    // them per input (`-detect_leaks`) and at exit (`ASAN_OPTIONS`).
+    let gpu = GPU_TARGETS.contains(&name);
+    if gpu {
+        cmd.arg("-detect_leaks=0");
+    }
     // basis_universal's transcoder reaches the binaries through two crates;
     // ASan reports the duplicated globals as an ODR violation, not a bug.
-    if std::env::var_os("ASAN_OPTIONS").is_none() {
-        cmd.env("ASAN_OPTIONS", "detect_odr_violation=0");
+    let mut asan = std::env::var("ASAN_OPTIONS").unwrap_or_else(|_| "detect_odr_violation=0".into());
+    if gpu {
+        asan.push_str(":detect_leaks=0");
     }
+    cmd.env("ASAN_OPTIONS", asan);
     println!("fuzz {name}: {time} s");
     match cmd.status() {
         Ok(s) => s.success(),

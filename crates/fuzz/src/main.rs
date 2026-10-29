@@ -145,7 +145,7 @@ pub fn smoke_target(t: &Target, iters: usize, seed: u64) -> (usize, Vec<(Vec<u8>
         }
     }
     let mut rng = mutate::Rng::new(seed ^ trino_core::asset_id(t.name) as u64);
-    for k in 0..iters {
+    for k in 0..trino_fuzz::iters_for(t.name, iters) {
         let a = &inputs[k % inputs.len()];
         let b = &inputs[rng.below(inputs.len())];
         let m = mutate::mutate(&mut rng, a, b, t.max_len);

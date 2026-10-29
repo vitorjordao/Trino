@@ -17,6 +17,8 @@
 
 pub mod core_targets;
 #[cfg(feature = "host")]
+pub mod gpu_targets;
+#[cfg(feature = "host")]
 pub mod host_targets;
 pub mod mutate;
 pub mod seedgen;
@@ -348,6 +350,14 @@ pub const TARGETS: &[Target] = &[
     },
     #[cfg(feature = "host")]
     Target {
+        name: "pc_renderer",
+        formats: &["PC renderer uploads", "KTX2"],
+        run: gpu_targets::pc_renderer,
+        max_len: 1 << 16,
+        seeds: Seeds::Committed,
+    },
+    #[cfg(feature = "host")]
+    Target {
         name: "net",
         formats: &["lobby line", "ggrs message", "net config"],
         run: host_targets::net,
@@ -355,6 +365,20 @@ pub const TARGETS: &[Target] = &[
         seeds: Seeds::Committed,
     },
 ];
+
+/// Targets whose every input costs a GPU frame: the stable mutation run
+/// (`crates/fuzz/tests/targets.rs`, `fuzz smoke`) gives them fewer
+/// iterations.
+pub const SLOW_TARGETS: &[&str] = &["pc_renderer"];
+
+/// How many of `iters` mutations the stable runs give target `name`.
+pub fn iters_for(name: &str, iters: usize) -> usize {
+    if SLOW_TARGETS.contains(&name) {
+        iters.min(48)
+    } else {
+        iters
+    }
+}
 
 /// A target by name.
 pub fn find(name: &str) -> Option<&'static Target> {

@@ -102,8 +102,10 @@ jobs:
           workspaces: |
             . -> target
             fuzz -> target
+      # Lavapipe for `pc_renderer` (issue #121: the PC renderer's uploads
+      # and a frame); every shard, since targets go round-robin.
       - name: Install Linux system deps
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mesa-vulkan-drivers
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked --version 0.13.2
       # The corpus grows run after run: each shard keeps its own.

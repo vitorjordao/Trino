@@ -19,6 +19,7 @@ host = [
     "dep:trino-scene",
     "dep:trino-asset-pipeline",
     "dep:trino-net",
+    "dep:pollster",
 ]
 
 [dependencies]
@@ -29,6 +30,8 @@ trino-runner-pc = { workspace = true, optional = true }
 trino-scene = { workspace = true, optional = true }
 trino-asset-pipeline = { workspace = true, optional = true }
 trino-net = { workspace = true, optional = true }
+# The `pc_renderer` target's headless device (issue #121).
+pollster = { workspace = true, optional = true }
 
 [build-dependencies]
 # The 3DS shim's T3AU header check, compiled for the host (build.rs, #121).

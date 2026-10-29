@@ -294,3 +294,10 @@ path = "fuzz_targets/t3au_shim.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "pc_renderer"
+path = "fuzz_targets/pc_renderer.rs"
+test = false
+doc = false
+bench = false

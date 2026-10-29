@@ -415,33 +415,41 @@ pub fn parse(file: &[u8]) -> Result<Ktx2Info, String> {
 /// level.
 pub fn ktx2_to_basis(file: &[u8]) -> Result<Vec<u8>, String> {
     let info = parse(file)?;
+    // Every offset and length comes from the file: a span outside it is an
+    // error, not a panic (the `pc_renderer` fuzz target, issue #121).
+    fn span(b: &[u8], at: usize, len: usize) -> Result<&[u8], String> {
+        at.checked_add(len)
+            .and_then(|end| b.get(at..end))
+            .ok_or_else(|| "truncated KTX2 data".to_string())
+    }
     let u64_at = |at: usize| u64::from_le_bytes(file[at..at + 8].try_into().unwrap()) as usize;
-    let (level_at, level_len) = (u64_at(80), u64_at(88));
-    let level = &file[level_at..level_at + level_len];
-    let (sgd_at, sgd_len) = (u64_at(64), u64_at(72));
-    let sgd = &file[sgd_at..sgd_at + sgd_len];
+    let level = span(file, u64_at(80), u64_at(88))?;
+    let sgd = span(file, u64_at(64), u64_at(72))?;
     let mut slices: Vec<(u8, &[u8])> = Vec::new();
     let mut codebooks: [&[u8]; 3] = [&[], &[], &[]];
     let (mut endpoints, mut selectors) = (0u16, 0u16);
     match info.mode {
         Ktx2Mode::Uastc => slices.push((0, level)),
         Ktx2Mode::Etc1s => {
+            let desc = 20;
+            let books = desc + 20;
+            if sgd.len() < books {
+                return Err("truncated KTX2 supercompression data".into());
+            }
             let r = |at: usize| u32::from_le_bytes(sgd[at..at + 4].try_into().unwrap()) as usize;
             endpoints = u16::from_le_bytes([sgd[0], sgd[1]]);
             selectors = u16::from_le_bytes([sgd[2], sgd[3]]);
             let (ep, sel, tab) = (r(4), r(8), r(12));
-            let desc = 20;
             let (rgb_at, rgb_len, a_at, a_len) =
                 (r(desc + 4), r(desc + 8), r(desc + 12), r(desc + 16));
-            let books = desc + 20;
             codebooks = [
-                &sgd[books..books + ep],
-                &sgd[books + ep..books + ep + sel],
-                &sgd[books + ep + sel..books + ep + sel + tab],
+                span(sgd, books, ep)?,
+                span(sgd, books + ep, sel)?,
+                span(sgd, books + ep + sel, tab)?,
             ];
-            slices.push((0, &level[rgb_at..rgb_at + rgb_len]));
+            slices.push((0, span(level, rgb_at, rgb_len)?));
             if a_len > 0 {
-                slices.push((1, &level[a_at..a_at + a_len]));
+                slices.push((1, span(level, a_at, a_len)?));
             }
         }
     }
@@ -539,6 +547,21 @@ mod tests {
                 ]
             })
             .collect()
+    }
+
+    #[test]
+    fn spans_past_the_file_are_errors_not_panics() {
+        // Issue #121 (`pc_renderer`): an ETC1S codebook length past the
+        // supercompression data, and a level past the file.
+        let e = encode(Ktx2Mode::Etc1s, 8, 8, &image(8, 8, false)).unwrap();
+        let sgd_at = u64::from_le_bytes(e.ktx2[64..72].try_into().unwrap()) as usize;
+        let mut books = e.ktx2.clone();
+        books[sgd_at + 4..sgd_at + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode(&books).is_err());
+        let mut level = e.ktx2.clone();
+        level[88..96].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(ktx2_to_basis(&level).is_err());
+        assert!(decode(&e.ktx2).is_ok());
     }
 
     #[test]

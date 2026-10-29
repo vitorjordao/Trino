@@ -3710,12 +3710,22 @@ impl PcRenderer {
     /// Upload an RGBA8 texture for `id`. Re-uploading the same id replaces
     /// the content (this is what makes asset live-reload work: handles are
     /// stable, content is swapped in place).
+    ///
+    /// A size the device can't make (0, or past
+    /// `max_texture_dimension_2d`) or pixel data of another length uploads
+    /// nothing and logs why (issue #121: it reached wgpu's validation,
+    /// which aborts): what a damaged or modded asset file can ask for.
     pub fn upload_sprite(&mut self, id: SpriteId, width: u32, height: u32, rgba: &[u8]) {
-        assert_eq!(
-            rgba.len(),
-            (width * height * 4) as usize,
-            "sprite {id:?}: pixel data does not match {width}x{height} RGBA8"
-        );
+        if !self.sprite_size_ok(id, width, height) {
+            return;
+        }
+        if rgba.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            eprintln!(
+                "[trino] sprite {id:?}: {} bytes of pixels do not make {width}x{height} RGBA8; not uploaded",
+                rgba.len()
+            );
+            return;
+        }
         let alpha = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
         self.install_sprite(
             id,
@@ -3771,7 +3781,8 @@ impl PcRenderer {
     /// Upload a block-compressed texture for `id` (`width` and `height`
     /// multiples of 4, `blocks` in row-major order), replacing any previous
     /// one. Returns `false` and uploads nothing when the renderer doesn't
-    /// sample `format` ([`PcRenderer::supports_compressed`]): the caller
+    /// sample `format` ([`PcRenderer::supports_compressed`]), or the size
+    /// or the block data is not a texture it can make (logged): the caller
     /// uploads decoded RGBA8 instead. `alpha`: whether some texel blends
     /// (a model drawn with it stays on the CPU path); `None` reads it from
     /// BC blocks, and takes the ETC2 RGBA and ASTC formats as blending.
@@ -3787,16 +3798,23 @@ impl PcRenderer {
         if !self.supports_compressed(format) {
             return false;
         }
-        assert!(
-            width.is_multiple_of(4) && height.is_multiple_of(4) && width > 0 && height > 0,
-            "sprite {id:?}: {width}x{height} is not whole 4x4 blocks"
-        );
+        // Sizes and lengths a bad file can carry: refused (the caller then
+        // uploads the decoded pixels) instead of failing wgpu's validation.
+        if !self.sprite_size_ok(id, width, height) {
+            return false;
+        }
+        if !width.is_multiple_of(4) || !height.is_multiple_of(4) {
+            eprintln!("[trino] sprite {id:?}: {width}x{height} is not whole 4x4 blocks");
+            return false;
+        }
         let row = width / 4 * format.block_bytes();
-        assert_eq!(
-            blocks.len(),
-            (row * height / 4) as usize,
-            "sprite {id:?}: block data does not match {width}x{height} {format:?}"
-        );
+        if blocks.len() as u64 != u64::from(row) * u64::from(height / 4) {
+            eprintln!(
+                "[trino] sprite {id:?}: {} bytes of blocks do not make {width}x{height} {format:?}",
+                blocks.len()
+            );
+            return false;
+        }
         let alpha = alpha.unwrap_or_else(|| match format {
             CompressedFormat::Bc1 | CompressedFormat::Bc3 | CompressedFormat::Bc7 => {
                 gpu_tnl::bc_alpha(format, blocks)
@@ -3806,6 +3824,19 @@ impl PcRenderer {
         });
         self.install_sprite(id, (width, height), format.wgpu(), blocks, row, alpha);
         true
+    }
+
+    /// Whether the device makes a `width`×`height` texture (each side 1 to
+    /// `max_texture_dimension_2d`); logs why not.
+    fn sprite_size_ok(&self, id: SpriteId, width: u32, height: u32) -> bool {
+        let max = self.device.limits().max_texture_dimension_2d;
+        let ok = (1..=max).contains(&width) && (1..=max).contains(&height);
+        if !ok {
+            eprintln!(
+                "[trino] sprite {id:?}: {width}x{height} is no texture this GPU makes (1 to {max} a side); not uploaded"
+            );
+        }
+        ok
     }
 
     /// The sprite textures held now: how many, their GPU bytes, how many

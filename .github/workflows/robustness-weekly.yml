@@ -1,0 +1,52 @@
+name: Robustness (weekly)
+
+# Issue #121: AddressSanitizer over the platform crates' host tests, once a
+# week (the nightly `robustness.yml` covers trino-core and the asset
+# pipeline). The PC renderer, the PC platform and its runner reach C and
+# Vulkan through wgpu and cpal: their tests run under ASan, with the
+# standard library instrumented too (build-std), and Mesa's lavapipe as the
+# GPU so the renderer's tests draw instead of skipping.
+# The consoles' crates add their host tests (pads, tiers, worker, save
+# folders). ~45 min cold. A PR runs it only when it changes this file
+# (GitHub dispatches only workflows already on the default branch, so the
+# PR trigger is what proves a change before it lands).
+
+on:
+  schedule:
+    - cron: "41 4 * * 0"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/robustness-weekly.yml
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  asan-platform:
+    name: AddressSanitizer (platform crates)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: asan-platform
+      - name: Install Linux system deps (+ lavapipe)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mesa-vulkan-drivers
+      - run: >
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p trino-platform-pc -p trino-render-wgpu -p trino-runner-pc
+          -p trino-platform-3ds -p trino-platform-n64 --no-fail-fast
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+          # Leaks are not what this looks for (the drivers and 'static
+          # blobs leak by design); out-of-bounds and use-after-free are.
+          # basis_universal is linked through two crates (ODR, not a bug).
+          ASAN_OPTIONS: detect_odr_violation=0:detect_leaks=0
+          # Lavapipe: the renderer's tests draw (as in ci.yml's desktop job).
+          TRINO_REQUIRE_GPU: "1"

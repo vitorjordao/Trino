@@ -150,8 +150,39 @@ Each input is in `fuzz/regressions/<target>/` and replays in `cargo test`.
   cut: ares and Azahar can't cut power mid-write. The `save recovery` step also cuts a
   `save_begin` short after one step (a real power cut's state on the N64), and the host
   tests cut writes at every byte (`save_slots.rs`, `save_recovery.rs`).
-- **The C side of the 3DS T3AU loader** is checked by hand against `T3au::parse`, not
-  fuzzed (it is C).
+- **The C side of the 3DS T3AU loader** was checked by hand against `T3au::parse`, not
+  fuzzed (it is C). Issue #121 fuzzes it: see the addendum.
+
+## Addendum: issue #121 (fuzzing and CI follow-ups)
+
+- **C under the fuzzer.** The shim's T3AU header check is `t3au_header.h` (`<stdint.h>`
+  only), included by `trino_shim_3ds.c` and compiled for the host by `crates/fuzz`
+  (`build.rs`, `cc`; ASan under `cargo fuzz`, libFuzzer coverage with clang). The
+  `t3au_shim` target is differential against `T3au::parse`. They disagreed (streams with
+  no data-size check, any bus, any file length, u32 sums, the pipeline taking any channel
+  count): both now apply one rule set, the shim reading the file's size.
+- **Console-only parsing moves to the core.** The N64's and 3DS's `index.tsv` lines are
+  `trino_core::asset::IndexLine` (+ `Locator`, `SoundColumns`), shared by both loaders
+  and fuzzed by `asset_index`. Code behind a console `cfg` is otherwise never fuzzed.
+- **`pc_renderer`**: the PC renderer's uploads (RGBA8, BC, TMDL, TFNT, KTX2 through the
+  native transcoder) and one frame, on a lazily created headless device per thread,
+  skipped without an adapter. Uploads the device can't make are refused and logged at
+  the API (they reached wgpu's validation, which aborts); `ktx2_to_basis` checks its
+  spans.
+- **Slow targets.** `ron` paid six full-document parses per input; scenes and prefabs are
+  `ron_scene` (26 → 58–76 exec/s, `ron_scene` 50–65). `tsn2_decode` is bounded by
+  lewton's setup-header decode; it decodes at most 16 384 samples now (81–85 →
+  136–162 exec/s). Its 120 s run found lewton reserving a codebook's table from the
+  header (40 GB from 23 KB): `trino_core::vorbis::check` bounds Vorbis setup headers
+  before every lewton call.
+- **Coverage per target** (`cargo xtask fuzz coverage`, each nightly shard after fuzzing,
+  the `fuzz-coverage-<shard>` artifact): lines, functions and regions of the engine
+  files a target reaches.
+- **Miri** also runs `save_recovery` and `save_slots` (their exhaustive loops stride
+  under `cfg(miri)`: 1112 s → 170 s for `save_slots`), and **ASan** covers the platform
+  crates' host tests weekly (`robustness-weekly.yml`, lavapipe; locally on RADV every
+  platform-pc, runner-pc, render-wgpu and console host test passed with no memory
+  error).
 
 ## Addendum (2026-10-29): saves per game, versioned games, power cuts (GitHub #119, #121)
 

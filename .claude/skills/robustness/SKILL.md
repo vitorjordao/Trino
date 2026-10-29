@@ -34,19 +34,58 @@ cargo xtask fuzz smoke [<t>..] [--iters N] [--json]   # stable mutation run, 10 
 cargo xtask fuzz run <t>|all [--time 60] [--jobs N]   # libFuzzer + ASan + overflow checks (nightly, cargo install cargo-fuzz)
 cargo xtask fuzz repro [<t>] <file> [--json]          # replay one input (its folder names the target)
 cargo xtask fuzz keep <file>                # copy a crash into fuzz/regressions/<t>/ (replayed by cargo test)
+cargo xtask fuzz seeds [<t>..]              # write the writers' seeds (seedgen.rs) into fuzz/seeds/, no bake
+cargo xtask fuzz coverage [<t>..|all] [--json]        # cargo fuzz coverage + llvm-cov: fuzz/coverage/summary.{json,md}, <t>/report.txt
 TRINO_FUZZ_ITERS=20000 cargo test -p trino-fuzz --test targets   # the PR test, harder
 ```
+
+`fuzz coverage` needs `rustup component add llvm-tools-preview --toolchain nightly`.
+Dependencies, std and the harness are filtered out. The headline is **the code regions
+of the functions the corpus entered** ("of the code this parser reaches, how much
+ran"); the reached files' whole-file lines/functions/regions are beside it but count
+every unrelated function a reached file holds (`mem.rs`, the allocator counter, shows
+up in every target). C code (`t3au_check.c`) isn't instrumented for coverage. First
+local numbers (corpus of one 60 s run each): `asset_index` 97.7%, `t3au_shim` 99.0%,
+`tsn2_decode` 84.9% of reached-function regions; read `fuzz/coverage/<t>/report.txt`
+for the files.
 
 `fuzz run` passes `-a` (debug assertions): an overflowing size product panics instead
 of wrapping. Five of the bugs found were products that wrap a 32-bit `usize` (the N64,
 the 3DS, wasm32) and only the overflow checks saw them on a 64-bit host. The stable
 test runs in the dev profile, which keeps overflow checks on.
 
+### Targets that aren't one Rust parser (issue #121)
+
+- **C:** `t3au_shim` compiles the 3DS shim's own header check
+  (`crates/platform-3ds/shim/t3au_header.h`, `<stdint.h>` only, included by the shim) on
+  the host (`crates/fuzz/build.rs`, `c/t3au_check.c`) and is **differential** against
+  `T3au::parse`: both accept or both refuse, and what both accept reads the same. Under
+  `cargo fuzz` the C gets `-fsanitize=address` (gcc links against rustc's ASan runtime
+  fine) and, with clang, `-fsanitize=fuzzer-no-link` (gcc has no libFuzzer coverage:
+  there the Rust side's branches steer). A C rule that changes changes in both, or the
+  differential fails. `TRINO_T3AU_BUSES` is pinned to `Bus::COUNT` by a test.
+- **Console-only Rust:** code behind `cfg(target_os = "none"|"horizon")` never runs on
+  the host. Move the pure part into `trino-core` (the asset index lines are
+  `trino_core::asset::IndexLine`, used by both loaders) and fuzz that (`asset_index`).
+- **GPU:** `pc_renderer` keeps one headless `PcRenderer` per thread, **leaked** (a
+  thread-local drop at exit polls wgpu after its TLS is gone and panics), skips without
+  an adapter (asserts under `TRINO_REQUIRE_GPU`), uses fixed ids and re-uploads default
+  sprites per input (an input's frame must not depend on the one before), and gets 48
+  mutations in the stable runs (`trino_fuzz::iters_for`, `SLOW_TARGETS`). `xtask fuzz
+  run` turns LeakSanitizer off for it (`-detect_leaks=0` and `ASAN_OPTIONS
+  detect_leaks=0`: the Vulkan driver's allocations; the exit-time leak report otherwise
+  "crashes" on the empty input). ~200–240 exec/s on RADV and on lavapipe
+  (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`, what CI has); the first
+  input, device and pipelines included, takes ~0.5 s, far under libFuzzer's 10 s.
+- **Vorbis check vs real files:** every baked TSN2 of the engine and Solid Eleven (21
+  Vorbis) and the pipeline's encoder at q −1..10 × 8–48 kHz pass `vorbis::check`.
+
 ### Adding a format (the `engine-feature` checklist item)
 
 1. A body in `core_targets.rs` (or `host_targets.rs`): parse, then use every accessor.
 2. A `Target` in `TARGETS` whose `formats` names the magic; `Seeds::Magic(&[b"XXXX"])`
-   when a bake writes it, else `Seeds::Committed` and a writer seed in `seedgen.rs`.
+   when a bake writes it, else `Seeds::Committed` and a writer seed in `seedgen.rs`
+   (`cargo xtask fuzz seeds <t>` writes them without the full corpus bake).
 3. `fuzz/fuzz_targets/<t>.rs` and a `[[bin]]` in `fuzz/Cargo.toml`
    (`cargo_fuzz_has_a_binary_per_target` fails otherwise).
 4. `cargo xtask fuzz corpus --commit-seeds`, then `cargo test -p trino-fuzz`.
@@ -90,6 +129,42 @@ test runs in the dev profile, which keeps overflow checks on.
   save read as older). CI's fresh corpus finds what a warm local one doesn't: download
   `fuzz-artifacts-<shard>` (`gh run download <run> -n fuzz-artifacts-2`; the run id is the
   latest push's), repro, fix, `fuzz keep`.
+- Issue #121:
+  - **The 3DS shim's T3AU check disagreed with the pipeline** (`t3au_shim`): a streamed
+    sound had no data-size check (a 2-byte file queued 14 336-sample chunks to the DSP),
+    any bus byte and any file length passed, `nsamples + chunk - 1` summed in u32, a
+    PCM chunk's byte count could wrap; the pipeline took any channel count. One rule set
+    now (exact length, bus, mono, contexts ≤ 2^20, chunk ≤ 2^24).
+  - **`PcRenderer::upload_sprite`** with a zero side or one past
+    `max_texture_dimension_2d` reached wgpu's validation (abort); lengths were checked
+    with a u32 product. Refused and logged now; `upload_sprite_compressed` returns false.
+  - **`ktx2::ktx2_to_basis`** sliced the level and ETC1S codebooks unchecked.
+  - **lewton's OOM** (`tsn2_decode`, 120 s run): it reserves a codebook's lookup table
+    from the header (2^40 values from a 23 KB file) before reading it.
+    `trino_core::vorbis::check` bounds the setup header before every lewton call (PC
+    decode and stream, the Web, the pipeline). Third-party allocations from header
+    counts need a check in front; the fuzzer's `-malloc_limit_mb` is what finds them.
+  - Allocation OOMs show a useless stack without a symbolizer: `addr2line -e
+    fuzz/target/x86_64-unknown-linux-gnu/release/<t> -f -C -i <addrs>` names the frames
+    (rustup's llvm-tools ship no `llvm-symbolizer`).
+
+### Measured (issue #121)
+
+libFuzzer `-O -a` for 60 s on a frozen corpus (120 s grown from the seeds), twice,
+on a 14 GB laptop shared with another build (noisy: compare ratios):
+
+| target | before (exec/s) | after (exec/s) | why |
+|---|---|---|---|
+| `ron` | 26, 26 | 58, 76 | scenes and prefabs moved to `ron_scene` (each full RON parse of a ~20 KB scene ≈ 1 ms natively; `ron` paid six) |
+| `ron_scene` | — | 65, 50 | Scene parse + round trip + prefab |
+| `tsn2_decode` | 85, 81 | 162, 136 | lewton's setup header (~0.9 ms natively per input) is the floor; the body decodes ≤ 16 384 samples (`decode_blob_limit`) |
+| `asset_index` | — | 10 202 | |
+| `t3au_shim` | — | 9 601 | |
+| `pc_renderer` | — | 180–240 | one GPU frame per input |
+
+What makes a target slow: profile its body natively over the corpus (time each parser
+with a throwaway example in `crates/fuzz/examples/`), then split what dominates into its
+own target or bound it. Under ASan + `-a` expect ~10x the native time.
 
 ## Saves
 
@@ -164,10 +239,25 @@ test runs in the dev profile, which keeps overflow checks on.
 ```
 MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-ignore-leaks" \
   CARGO_TARGET_DIR=target/miri cargo +nightly miri test -p trino-core --lib     # ~6 min, 285 tests
+MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-ignore-leaks" \
+  CARGO_TARGET_DIR=target/miri cargo +nightly miri test -p trino-core --test save_recovery --test save_slots  # ~3 min
 ASAN_OPTIONS=detect_odr_violation=0:detect_leaks=0 RUSTFLAGS=-Zsanitizer=address \
   CARGO_TARGET_DIR=target/asan cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu \
   -p trino-core -p trino-asset-pipeline --no-fail-fast                          # ~20 min cold, 64 test binaries
+# weekly (robustness-weekly.yml): the platform crates, GPU tests on the machine's adapter
+ASAN_OPTIONS=detect_odr_violation=0:detect_leaks=0 RUSTFLAGS=-Zsanitizer=address \
+  CARGO_TARGET_DIR=target/asan cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu \
+  -p trino-platform-pc -p trino-render-wgpu -p trino-runner-pc -p trino-platform-3ds -p trino-platform-n64 --no-fail-fast
 ```
+
+- Issue #121, locally on RADV (4 jobs, ~13 min cold for the three runs): platform-pc's
+  lib + 21 test binaries, runner-pc's lib + 5, render-wgpu's 58 lib tests, the 3DS's 12
+  and the N64's 3 host tests: no memory error. Vulkan drivers run uninstrumented under
+  ASan without complaint; leaks stay off (`detect_leaks=0`: the drivers keep theirs).
+- Miri's `save_slots` took 1112 s with its every-byte power-cut loop; the loops stride
+  under `cfg(miri)` (every 13th body byte and the whole header; every 7th bit/byte in
+  `save_recovery`), 170 s + 6 s. Clippy rejects `c % STRIDE` with a constant 1
+  (`modulo_one`): `c.is_multiple_of(STRIDE)`.
 
 - `rustup component add --toolchain nightly miri rust-src` first.
 - `-Zmiri-ignore-leaks` and ASan's `detect_leaks=0`: tests leak `'static` blobs on

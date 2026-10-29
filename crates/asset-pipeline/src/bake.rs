@@ -64,6 +64,10 @@ pub struct BakedEntry {
     /// A sprite's 3DS preview file (PC bakes only, when its 3DS format
     /// loses something: `crate::texture::N3dsFormat::preview`).
     pub preview_3ds: Option<String>,
+    /// A sprite's N64 format (PC bakes only, `crate::texture::N64Format`
+    /// name): what the PC's strict mode checks TMEM by on the N64 profile
+    /// (GitHub #125).
+    pub n64_format: Option<String>,
     /// A sprite's BCn blocks (PC bakes only, when its PC format is BCn).
     pub compressed: Option<String>,
     /// A sprite's KTX2 file (Web bakes only, when its Web format is
@@ -154,6 +158,19 @@ pub fn bake_all_with(
             // `xtask/src/{n64,n3ds}.rs`).
             let file = format!("{id:08x}.sprite");
             let changed = write_if_changed(&out_dir.join(&file), &tspr(w, h, &rgba))?;
+            // The N64's own master when it overrides this one (its format is
+            // chosen from what the N64 build stages).
+            let n64 = match platform {
+                Platform::Pc => {
+                    let n64 = resolve_source(assets_root, Platform::N64, &decl.file)?;
+                    if n64 == source {
+                        None
+                    } else {
+                        Some(decode_png(&n64)?)
+                    }
+                }
+                _ => None,
+            };
             let t = bake_texture(
                 out_dir,
                 id,
@@ -162,6 +179,7 @@ pub fn bake_all_with(
                 crate::texture::Source::Sprite,
                 &|p| decl.settings(p),
                 (w, h, &rgba),
+                n64.as_ref().map(|(w, h, px)| (*w, *h, &px[..])),
             )?;
             Ok(BakedEntry {
                 logical: logical.clone(),
@@ -170,6 +188,7 @@ pub fn bake_all_with(
                 file,
                 format: t.format,
                 preview_3ds: t.preview_3ds,
+                n64_format: t.n64_format,
                 compressed: t.compressed,
                 ktx2: t.ktx2,
                 graded: None,
@@ -247,6 +266,7 @@ pub fn bake_all_with(
                 file,
                 format,
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -285,6 +305,7 @@ pub fn bake_all_with(
                 file,
                 format: "TMIX".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -322,6 +343,7 @@ pub fn bake_all_with(
                 file,
                 format: "TEXT".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -359,6 +381,7 @@ pub fn bake_all_with(
                 file,
                 format: "TEXT".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -399,6 +422,7 @@ pub fn bake_all_with(
                             file,
                             format,
                             preview_3ds: None,
+                            n64_format: None,
                             compressed: None,
                             ktx2: None,
                             graded: None,
@@ -462,6 +486,7 @@ pub fn bake_all_with(
                 file,
                 format: "TMDL".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded,
@@ -507,6 +532,7 @@ pub fn bake_all_with(
                 crate::texture::Source::FontAtlas,
                 &|p| decl.settings(p),
                 (font.width, font.height, &font.rgba),
+                None,
             )?;
             Ok(vec![
                 BakedEntry {
@@ -516,6 +542,7 @@ pub fn bake_all_with(
                     file: sprite_file,
                     format: t.format,
                     preview_3ds: t.preview_3ds,
+                    n64_format: t.n64_format,
                     compressed: t.compressed,
                     ktx2: t.ktx2,
                     graded: None,
@@ -529,6 +556,7 @@ pub fn bake_all_with(
                     file: table_file,
                     format: "TFNT".into(),
                     preview_3ds: None,
+                    n64_format: None,
                     compressed: None,
                     ktx2: None,
                     graded: None,
@@ -562,6 +590,7 @@ pub fn bake_all_with(
                 file,
                 format: "RAW".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -595,6 +624,7 @@ pub fn bake_all_with(
                 file,
                 format: "TPFX".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -631,6 +661,7 @@ pub fn bake_all_with(
                     file,
                     format: "TLUT".into(),
                     preview_3ds: None,
+                    n64_format: None,
                     compressed: None,
                     ktx2: None,
                     graded: None,
@@ -669,6 +700,7 @@ pub fn bake_all_with(
                 file,
                 format: "TSCN".into(),
                 preview_3ds: None,
+                n64_format: None,
                 compressed: None,
                 ktx2: None,
                 graded: None,
@@ -690,6 +722,16 @@ pub fn bake_all_with(
         e.groups = manifest.bundles_of(&e.logical);
     }
     write_bundles(&manifest, platform, out_dir, &report).map_err(|e| BakeError(vec![e]))?;
+
+    // A sprite whose N64 format changed with no new byte (a manifest edit)
+    // still counts as changed: a running PC host re-uploads it and learns
+    // the format its strict mode checks (GitHub #125).
+    let before = std::fs::read_to_string(out_dir.join("index.toml")).unwrap_or_default();
+    for e in report.entries.iter_mut().filter(|e| e.kind == "sprite") {
+        if !e.changed && n64_format_in(&before, &e.logical) != e.n64_format.as_deref() {
+            e.changed = true;
+        }
+    }
 
     // index.toml: deterministic (BTreeMap iteration order), snapshot-testable.
     let mut index = String::from("version = 1\n");
@@ -714,11 +756,27 @@ pub fn bake_all_with(
             let names: Vec<String> = e.groups.iter().map(|g| format!("\"{g}\"")).collect();
             index.push_str(&format!("groups = [{}]\n", names.join(", ")));
         }
+        if let Some(f) = &e.n64_format {
+            index.push_str(&format!("n64_format = \"{f}\"\n"));
+        }
     }
     write_if_changed(&out_dir.join("index.toml"), index.as_bytes())
         .map_err(|e| BakeError(vec![e]))?;
 
     Ok(report)
+}
+
+/// The `n64_format` an earlier `index.toml` gave the sprite `logical`.
+fn n64_format_in<'a>(index: &'a str, logical: &str) -> Option<&'a str> {
+    let key = format!("logical = \"{logical}\"\n");
+    index
+        .split("[[asset]]")
+        .filter(|a| a.contains(&key) && a.contains("kind = \"sprite\""))
+        .find_map(|a| {
+            a.lines()
+                .find_map(|l| l.strip_prefix("n64_format = \""))
+                .and_then(|v| v.strip_suffix('"'))
+        })
 }
 
 /// `groups/<name>.tbnd` for every group but boot (issue #56): each entry's
@@ -787,6 +845,7 @@ fn tspr(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
 struct BakedTexture {
     format: String,
     preview_3ds: Option<String>,
+    n64_format: Option<String>,
     compressed: Option<String>,
     ktx2: Option<String>,
     changed: bool,
@@ -800,12 +859,14 @@ fn bake_texture(
     source: crate::texture::Source,
     settings: &dyn Fn(Platform) -> crate::texture::TextureSettings,
     (w, h, rgba): (u32, u32, &[u8]),
+    n64: Option<(u32, u32, &[u8])>,
 ) -> Result<BakedTexture, String> {
     let choose = |p: Platform| crate::texture::choose(p, logical, source, &settings(p), w, h, rgba);
     let choice = choose(platform)?;
     let mut t = BakedTexture {
         format: choice.format,
         preview_3ds: None,
+        n64_format: None,
         compressed: None,
         ktx2: None,
         changed: false,
@@ -824,6 +885,21 @@ fn bake_texture(
     if platform != Platform::Pc {
         return Ok(t);
     }
+    // The N64's format too (GitHub #125): strict mode on the N64 profile
+    // checks TMEM by it. A texture the N64 can't take has none (strict
+    // mode then assumes 16-bit texels, as before).
+    let (nw, nh, npx) = n64.unwrap_or((w, h, rgba));
+    t.n64_format = crate::texture::choose(
+        Platform::N64,
+        logical,
+        source,
+        &settings(Platform::N64),
+        nw,
+        nh,
+        npx,
+    )
+    .ok()
+    .map(|c| c.format);
     if let Some(bc) = crate::texture::BcFormat::parse(&t.format) {
         let file = format!("{id:08x}.bc");
         let mut blob = b"TBCN".to_vec();

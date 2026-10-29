@@ -366,6 +366,10 @@ pub struct PcRenderer {
     tri_buf: wgpu::Buffer,
     tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
+    /// Each sprite's N64 format as its bake chose it
+    /// ([`PcRenderer::set_texture_format`]): what strict mode on the N64
+    /// profile checks TMEM by (GitHub #125). Kept across re-uploads.
+    texture_formats: HashMap<u32, trino_core::TexelFormat>,
     /// Sprite textures as 3D textures (base + detail layer, their samplers),
     /// by texture state.
     tex3d: HashMap<TexKey, wgpu::BindGroup>,
@@ -2283,6 +2287,7 @@ impl PcRenderer {
             tri_buf,
             tri_capacity,
             sprites: HashMap::new(),
+            texture_formats: HashMap::new(),
             tex3d: HashMap::new(),
             tex3d_bgl,
             tex3d_nearest,
@@ -2922,6 +2927,19 @@ impl PcRenderer {
     /// Defaults to off; `TRINO_STRICT=1` enables it.
     pub fn set_strict(&mut self, on: bool) {
         self.strict = on;
+    }
+
+    /// The N64 format the bake chose for sprite `id` (the PC index's
+    /// `n64_format`, `trino_asset_pipeline::N64Format::texel_format`), or
+    /// `None` to forget it. Strict mode on the N64 profile checks a texture
+    /// by it: a CI texture's texels have TMEM's lower 2 KB (the palette
+    /// takes the upper half), a 4-bit one takes half a 16-bit one's bytes
+    /// (GitHub #125). Without it, the check assumes 16-bit texels.
+    pub fn set_texture_format(&mut self, id: SpriteId, format: Option<trino_core::TexelFormat>) {
+        match format {
+            Some(f) => self.texture_formats.insert(id.0, f),
+            None => self.texture_formats.remove(&id.0),
+        };
     }
 
     /// Override the main screen's safe area ([`Renderer::safe_area`]);
@@ -5654,6 +5672,7 @@ impl PcRenderer {
             texture_budget(
                 TextureBudget {
                     sprites: &self.sprites,
+                    formats: &self.texture_formats,
                     caps: &self.caps,
                     strict: self.strict,
                     profile: self.profile,
@@ -5790,6 +5809,7 @@ impl PcRenderer {
 /// mesh being drawn, so it works while a mesh is borrowed).
 struct TextureBudget<'a> {
     sprites: &'a HashMap<u32, SpriteEntry>,
+    formats: &'a HashMap<u32, trino_core::TexelFormat>,
     caps: &'a Caps,
     strict: bool,
     profile: SimProfile,
@@ -5891,11 +5911,24 @@ fn texture_budget(r: TextureBudget<'_>, t: SpriteId, tiled: bool) {
                  not power-of-two sized — consoles can only tile POT textures."
             );
         }
-        if let Err(e) = r.caps.validate_texture(w as u16, h as u16, bpp) {
+        // The N64 profile checks the format the N64 bake chose (GitHub
+        // #125); without one, 16-bit texels (the worst case it can tell).
+        let format = r
+            .formats
+            .get(&t.0)
+            .filter(|_| r.profile == SimProfile::N64)
+            .copied();
+        let checked = match format {
+            Some(f) => r.caps.validate_texture_as(w as u16, h as u16, f),
+            None => r.caps.validate_texture(w as u16, h as u16, bpp),
+        };
+        if let Err(e) = checked {
+            let as_ = format.map_or(String::new(), |f| format!(" as {f:?}"));
             panic!(
-                "strict mode: 3D texture {t:?} ({w}x{h}) busts the {:?} profile \
+                "strict mode: 3D texture {t:?} ({w}x{h}{as_}) busts the {:?} profile \
                  budget: {e:?}. One texture per draw must fit texture memory \
-                 (N64 TMEM: 4 KB — e.g. 32x32 RGBA16 or 64x64 CI4).",
+                 (N64 TMEM: 4 KB, and 2 KB for the texels of a CI4/CI8 texture \
+                 beside its palette — e.g. 32x32 RGBA16, 64x64 I4 or 64x64 CI4).",
                 r.profile
             );
         }
@@ -6236,6 +6269,7 @@ impl Renderer for PcRenderer {
             texture_budget(
                 TextureBudget {
                     sprites: &self.sprites,
+                    formats: &self.texture_formats,
                     caps: &self.caps,
                     strict: self.strict,
                     profile: self.profile,
@@ -6246,17 +6280,34 @@ impl Renderer for PcRenderer {
             );
         }
         if let (Some(t), Some(d), true) = (texture, params.detail, self.strict) {
-            // Base and detail share texture memory (the N64's TMEM), at
-            // worst 16-bit texels; the console drops a detail that doesn't
-            // fit, strict mode says so.
-            let bytes = |id: SpriteId| self.sprites.get(&id.0).map_or(0, |e| e.size.0 * e.size.1);
-            let bpp = if self.caps.color_depth_bits <= 16 {
-                2
-            } else {
-                4
+            // Base and detail share texture memory (the N64's TMEM), each
+            // in the format its N64 bake chose (else 16-bit texels); the
+            // console drops a detail that doesn't fit, strict mode says so.
+            let n64 = self.profile == SimProfile::N64;
+            let format = |id: SpriteId| {
+                self.texture_formats
+                    .get(&id.0)
+                    .filter(|_| n64)
+                    .copied()
+                    .unwrap_or(trino_core::TexelFormat::worst_for(&self.caps))
             };
-            let total = (bytes(t) + bytes(d.sprite)) * bpp;
-            if total > self.caps.texture_memory_bytes {
+            if format(t).paletted() {
+                panic!(
+                    "strict mode: texture {t:?} has a detail layer ({:?}) but is a \
+                     {:?} texture on the N64: its palette takes TMEM's upper half and \
+                     the console draws it without the detail. Give a detailed base a \
+                     16-bit or intensity format (RGBA5551, I4, I8).",
+                    d.sprite,
+                    format(t)
+                );
+            }
+            let texels = |id: SpriteId| {
+                self.sprites.get(&id.0).map_or(0, |e| {
+                    self.caps.texture_texels(format(id), e.size.0, e.size.1).0
+                })
+            };
+            let total = texels(t) + texels(d.sprite);
+            if total > self.caps.texture_memory_bytes as u64 {
                 panic!(
                     "strict mode: texture {t:?} with detail {:?} needs {total} bytes of \
                      texture memory together, over the {:?} profile's {} (N64 TMEM: \
@@ -6640,6 +6691,7 @@ impl Renderer for PcRenderer {
         texture_budget(
             TextureBudget {
                 sprites: &self.sprites,
+                formats: &self.texture_formats,
                 caps: &self.caps,
                 strict: self.strict,
                 profile: self.profile,

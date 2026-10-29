@@ -292,6 +292,53 @@ fn strict_mode_rejects_a_detail_pair_over_the_n64_tmem() {
     assert!(msg.contains("detail") && msg.contains("TMEM"), "{msg}");
 }
 
+/// GitHub #125: the base and detail count in the formats the N64 bake
+/// chose. A 64×64 I4 base (2 KB) with an 8×8 detail fits, where 16-bit
+/// texels (8 KB) would not; a palette base can't take a detail at all (its
+/// palette fills TMEM's upper half and the console draws it without one).
+#[test]
+fn strict_mode_counts_the_detail_pair_in_their_n64_formats() {
+    use trino_core::TexelFormat;
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::N64) else {
+        return;
+    };
+    setup(&mut r);
+    r.set_strict(true);
+    r.upload_sprite(BIG, 64, 64, &vec![200; 64 * 64 * 4]);
+    r.set_texture_format(BIG, Some(TexelFormat::I4));
+    r.set_texture_format(GRAIN, Some(TexelFormat::I4));
+    let p = ModelParams {
+        texture: Some(BIG),
+        detail: Some(DetailTexture::new(GRAIN, 2)),
+        ..base()
+    };
+    frame(&mut r, &[(0.0, p)], &CAMERA);
+    // The same pair without formats is 16-bit texels: 8.3 KB.
+    r.set_texture_format(BIG, None);
+    let unknown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame(&mut r, &[(0.0, p)], &CAMERA);
+    }));
+    assert!(unknown.is_err(), "64×64 at 16 bits + detail is over 4 KB");
+    // A CI4 base the same size as the I4 one: rejected for its palette.
+    r.set_texture_format(BIG, Some(TexelFormat::Ci4));
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        frame(&mut r, &[(0.0, p)], &CAMERA);
+    }))
+    .expect_err("a palette base must not take a detail layer");
+    let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(msg.contains("palette") && msg.contains("Ci4"), "{msg}");
+    // Formats are the N64's: the 3DS profile keeps its own rule.
+    let Some(mut r3) = headless(SimProfile::N3ds) else {
+        return;
+    };
+    setup(&mut r3);
+    r3.set_strict(true);
+    r3.upload_sprite(BIG, 64, 64, &vec![200; 64 * 64 * 4]);
+    r3.set_texture_format(BIG, Some(TexelFormat::Ci4));
+    frame(&mut r3, &[(0.0, p)], &CAMERA);
+}
+
 fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let file = std::fs::File::create(path).unwrap();

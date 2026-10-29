@@ -28,6 +28,9 @@ struct IndexEntry {
     /// The non-boot groups it is in (issue #56); empty = `boot`.
     #[serde(default)]
     groups: Vec<String>,
+    /// A sprite's N64 format (PC bakes, GitHub #125).
+    #[serde(default)]
+    n64_format: Option<String>,
 }
 
 /// A sprite's PC blocks (`<id>.bc`, `crate::texture::BcFormat`).
@@ -184,6 +187,22 @@ fn read_index(out_dir: &Path) -> Result<IndexFile, String> {
         return Err(format!("unsupported index version {}", index.version));
     }
     Ok(index)
+}
+
+/// Every sprite's N64 format in a PC bake's index (grouped ones too), as
+/// the core's [`trino_core::TexelFormat`]: what a PC host hands
+/// `PcRenderer::set_texture_format`, so strict mode on the N64 profile
+/// checks TMEM as the console holds each texture (GitHub #125).
+pub fn texture_formats(out_dir: &Path) -> Result<Vec<(u32, trino_core::TexelFormat)>, String> {
+    Ok(read_index(out_dir)?
+        .assets
+        .iter()
+        .filter(|e| e.kind == "sprite")
+        .filter_map(|e| {
+            let f = crate::texture::N64Format::parse(e.n64_format.as_deref()?)?;
+            Some((e.id, f.texel_format()))
+        })
+        .collect())
 }
 
 fn load_where(out_dir: &Path, keep: impl Fn(&IndexEntry) -> bool) -> Result<LoadedAssets, String> {

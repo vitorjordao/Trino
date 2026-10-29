@@ -101,6 +101,10 @@ pub struct Project {
     /// manifest `n64` format (`None`: a palette, which can't share TMEM).
     /// The budget HUD's water lines read it.
     pub tmem: BTreeMap<u32, Option<u32>>,
+    /// Each sprite's N64 format as the PC bake chose it (the index's
+    /// `n64_format`): what the renderers' strict mode on the N64 profile
+    /// checks TMEM by (GitHub #125).
+    pub n64_formats: BTreeMap<u32, trino_core::TexelFormat>,
     /// The grading LUTs (`luts/x` -> (id, TLUT), issue #64), and the scene
     /// files the consoles' bake grades (`bake_grading` on `[scenes.*]`).
     pub luts: BTreeMap<String, (u32, Vec<u8>)>,
@@ -123,6 +127,7 @@ impl Project {
             music: Vec::new(),
             fonts: BTreeMap::new(),
             tmem: BTreeMap::new(),
+            n64_formats: BTreeMap::new(),
             luts: BTreeMap::new(),
             bake_grading: Vec::new(),
             collision: BTreeMap::new(),
@@ -197,6 +202,9 @@ impl Project {
             }
         }
         let manifest = Manifest::load(&self.manifest_path()).ok();
+        if let Ok(formats) = pipeline::texture_formats(&self.baked_dir()) {
+            self.n64_formats = formats.into_iter().collect();
+        }
         let mut n = 0;
         for s in assets.sprites {
             n += 1;
@@ -314,6 +322,9 @@ impl Project {
 
     /// Upload every asset into a renderer (new viewport / profile switch).
     pub fn upload_all(&self, r: &mut PcRenderer) {
+        for (&id, &f) in &self.n64_formats {
+            r.set_texture_format(trino_core::SpriteId(id), Some(f));
+        }
         for s in self.sprites.values() {
             r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
         }
@@ -376,6 +387,8 @@ impl Project {
     pub fn upload_some(&self, r: &mut PcRenderer, logicals: &[String]) {
         for l in logicals {
             if let Some(s) = self.sprites.get(l) {
+                let format = self.n64_formats.get(&s.id).copied();
+                r.set_texture_format(trino_core::SpriteId(s.id), format);
                 r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
             }
             if let Some(m) = self.models.get(l) {

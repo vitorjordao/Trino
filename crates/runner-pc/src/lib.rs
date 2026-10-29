@@ -381,6 +381,11 @@ pub fn upload_assets(
             e.message
         );
     }
+    // Every sprite's N64 format, grouped ones too (GitHub #125): strict
+    // mode on the N64 profile checks TMEM by it.
+    for (id, format) in trino_asset_pipeline::texture_formats(baked_dir).unwrap_or_default() {
+        renderer.set_texture_format(trino_core::SpriteId(id), Some(format));
+    }
     let target = sprite_platform(renderer);
     let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
     // A re-upload replaces: take the old bytes off, count the new.

@@ -68,10 +68,11 @@ fn bake_produces_deterministic_index_snapshot() {
     let beep_id = asset_id("sounds/beep");
     // Sprites bake before sounds; within a kind, manifest (BTreeMap) order.
     // A 1x1 sprite can't be BCn (whole 4x4 blocks), so the PC keeps RGBA8;
-    // the 3DS's `auto` takes a smaller format, whose preview is recorded.
+    // the 3DS's `auto` takes a smaller format, whose preview is recorded;
+    // the N64's format (its default, CI4) is what PC strict mode checks.
     let expected = format!(
         "version = 1\n\n\
-         [[asset]]\nlogical = \"sprites/player\"\nid = {player_id}\nkind = \"sprite\"\nfile = \"{player_id:08x}.sprite\"\nformat = \"RGBA8\"\npreview_3ds = \"{player_id:08x}.3ds.sprite\"\n\n\
+         [[asset]]\nlogical = \"sprites/player\"\nid = {player_id}\nkind = \"sprite\"\nfile = \"{player_id:08x}.sprite\"\nformat = \"RGBA8\"\npreview_3ds = \"{player_id:08x}.3ds.sprite\"\nn64_format = \"CI4\"\n\n\
          [[asset]]\nlogical = \"sounds/beep\"\nid = {beep_id}\nkind = \"sound\"\nfile = \"{beep_id:08x}.sound\"\nformat = \"VORBIS\"\n"
     );
     // Snapshot: byte-exact. If this changes, the loader and every platform
@@ -81,6 +82,35 @@ fn bake_produces_deterministic_index_snapshot() {
     // Second bake with no changes touches nothing.
     let report2 = bake_all(&root, Platform::Pc, &out).unwrap();
     assert!(report2.changed_ids().is_empty());
+}
+
+/// GitHub #125: a manifest edit that only moves a sprite's N64 format
+/// writes no new blob byte, yet the sprite counts as changed once, so a
+/// running PC host re-uploads it and its strict mode learns the format.
+#[test]
+fn an_n64_format_change_alone_reports_the_sprite_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, out) = (dir.path().join("assets"), dir.path().join("out"));
+    fixture(&root);
+    bake_all(&root, Platform::Pc, &out).unwrap();
+    let manifest = root.join("manifest.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, text.replace("n64 = \"CI4\"", "n64 = \"I8\"")).unwrap();
+    let player = asset_id("sprites/player");
+    let report = bake_all(&root, Platform::Pc, &out).unwrap();
+    assert_eq!(report.changed_ids(), vec![player]);
+    let index = std::fs::read_to_string(out.join("index.toml")).unwrap();
+    assert!(index.contains("n64_format = \"I8\""), "{index}");
+    assert_eq!(
+        trino_asset_pipeline::texture_formats(&out).unwrap(),
+        vec![(player, trino_core::TexelFormat::I8)]
+    );
+    assert!(
+        bake_all(&root, Platform::Pc, &out)
+            .unwrap()
+            .changed_ids()
+            .is_empty()
+    );
 }
 
 #[test]

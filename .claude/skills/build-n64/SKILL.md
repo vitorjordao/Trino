@@ -84,6 +84,14 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
     the table fails the N64 bake (the editor's texture test caught a gray card);
   - out-of-line helpers for code called per field or per player (`StateHasher`, the
     TREC per-player codecs): ~5 KB.
+  - **test-only meshes go in last and come out whole** (#122): the palette checks' five
+    slotted meshes (~55 KB with their RSP and flat copies), registered at boot, took the
+    block the 900-triangle batch reserve needed; registered right after the reserve,
+    the batch's other buffers then grew past them and the water step's 43 KB found
+    only 38 KB (`top=` 81 → 38 KB). Registered after every scene that grows the batch
+    and forgotten after (`N64Renderer::unregister_mesh`, then a few empty frames: the
+    renderer frees a copy four frames after its last use), `top=` is the same before
+    and after (`TRINO_HEAP … the palette meshes`).
   - the RSP mesh copies can have their own region of uncached RDRAM, reserved before
     any mesh registers: `N64Renderer::reserve_rsp_arena(bytes)` before
     `N64Renderer::new`, or `trino.toml` `[n64] rsp_arena_kb = N` (xtask writes

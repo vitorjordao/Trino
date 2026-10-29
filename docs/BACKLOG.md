@@ -179,7 +179,7 @@ shipping a 3D game first**, then by cost:
     dlopen'd udev, so `gamepad` can be on by default.
 12. ~~**Palette draws on the N64 RSP**~~ Done (2026-10-29, GitHub #122, ADR 0018 §9):
     `TrinoCmd_DrawPal` on the colored and textured overlays, the slot in the RSP copy;
-    the `micro-palette` crowd 50.7 → 7.1 ms in ares (see Done below). Left: memoizing
+    the `micro-palette` crowd 51.2 → 7.2 ms in ares (see Done below). Left: memoizing
     palette draws, palettes on the water overlay.
 13. **Hardware deploys, first run on real devices** (S). `run n64 --device sc64|everdrive`
     and `run 3ds --device network` (`docs/HARDWARE.md`) are tested with stub loaders
@@ -305,9 +305,9 @@ shipping a 3D game first**, then by cost:
 
 | Item | Evidence |
 |---|---|
-| The color slot in the RSP copy (normal row's fourth half, `slot * 8`); `TrinoCmd_DrawPal` on `rsp_trino_color`/`rsp_trino_tex` (a 40-byte table after the draw's words, `vmudl` + rounding); white and water overlays byte-identical | ROM oracles (white, warm + glow, textured: color 1/255), CPU-vs-RSP pixel checks (static, rigid, textured) that also prove the RSP took the draw; N64 goldens unchanged |
+| The color slot in the RSP copy (normal row's fourth half, `slot * 8`); `TrinoCmd_DrawPal` on `rsp_trino_color`/`rsp_trino_tex` (a 40-byte table after the draw's words, `vmudl` + rounding); white and water overlays byte-identical | ROM oracles (white, warm + glow, flat, textured: color 1/255), CPU-vs-RSP pixel checks (static, flat, rigid, textured) that also prove the RSP took the draw, on both N64 tiers; N64 goldens unchanged |
 | `rsp_check` / `rsp_rigid_draws` accept palettes (water keeps `RspReject::Palette`); `render3d::rsp_palette`; never memoized | `color_slots::palette_draws_take_the_rsp_and_stay_out_of_the_memo`, `render3d::tests::rigid_meshes_go_to_the_rsp_a_part_per_joint` |
-| `micro-palette` (16 recolored figures, CPU vs RSP in the same ROM; `xtask` checks both passes' work) | frame 50.71 → **7.05 ms**, T&L 28.36 → 1.64 ms (8 paddings); castle64 within its spread, `showcase-river` +0.5 ms of CPU layout (RSP drain unchanged) |
+| `micro-palette` (16 recolored figures, CPU vs RSP in the same ROM; `xtask` checks both passes' work) | frame 51.19 → **7.18 ms**, T&L 27.20 → 1.45 ms (8 paddings); castle64 and `showcase-river` within their spread (`showcase-river` 26.02 → 25.34) |
 | #107: the WebGL2 self-test's "Target crashed" was Chromium's shared memory in a nearly full tmpfs `/tmp` (Playwright's `--disable-dev-shm-usage`); every harness now gets `TMPDIR=target/web-tmp` (`web::harness_command`) | reproduced at 78 % full (int3 in the `Compositor` thread), passes at 65 % and with `/dev/shm` filled instead; passes at 78 % with the fix; `web::tests::the_harness_keeps_the_browsers_temp_files_in_the_build_tree` |
 
 ## Done — robustness: fuzzing every parser, save slots and recovery, sanitizers in CI (2026-10-26, branch `feat/68-robustness`, GitHub #68, ADR 0037)

@@ -269,11 +269,16 @@ of a game's characters, kits per team.
   `rsp::palette_entry`. `trino_rsp_draw_palette` sends it (three arguments: the o32/o64
   `*_body` seam of ADR 0002). Static, flat, rigid-part and textured draws all take it.
   Palette draws stay out of the memo (`MemoKey` has no room for four colors).
-- **Gates in the ROM** (`apps/n64/src/n64/micro.rs`): the oracle under the white light,
-  the warm light with a glow, and on a slotted copy of the textured card (color 1/255
-  each); CPU-vs-RSP pixel checks of a slotted grid, its rigid twin and the card
-  (identical, 0.12/255 for the card), each also failing if the draw stayed on the CPU;
-  `micro-palette`, whose work `xtask` checks on both passes.
+- **Gates in the ROM** (`apps/n64/src/n64/micro.rs`, `palette_checks`): the oracle under
+  the white light, under the warm light with a glow, on a flat copy and on a slotted
+  copy of the textured card (color 1/255 each); CPU-vs-RSP pixel checks of a slotted
+  grid, its flat and rigid twins and the card (0.00–0.25/255 mean), each also failing if
+  the draw stayed on the CPU; `micro-palette`, whose work `xtask` checks on both passes.
+  They run last, with their five meshes registered after the other scenes grew the
+  batch buffers and unregistered after: registered at boot, the meshes took the base
+  N64's 79 KB batch block; right before the scenes, they split the free block so the
+  water step's 43 KB didn't fit (`top=` 81 → 38 KB). Now `top=` is the same before and
+  after them, and CI's base-tier boot passes.
 
 ### Measurements (ares, mean (min–max) over the 8 paddings)
 
@@ -282,27 +287,27 @@ white light. The CPU and RSP passes run in the same ROM.
 
 | `micro-palette` | CPU T&L | RSP |
 |---|---|---|
-| frame | 50.71 (47.48–55.68) ms | **7.05 (6.86–7.25) ms** |
-| `tnl` stage (the draws' CPU) | 28.36 ms | **1.64 ms** (~100 µs per draw, no memo) |
+| frame | 51.19 (46.91–58.79) ms | **7.18 (6.92–7.38) ms** |
+| `tnl` stage (the draws' CPU) | 27.20 ms | **1.45 ms** (~90 µs per draw, no memo) |
 | triangles on the CPU | 800 | 0 (16 commands, 800 RSP triangles) |
 
 | Scene | `main` | this change |
 |---|---|---|
-| hub | 13.16 (12.41–13.85) | 12.87 (12.70–13.04) |
-| green-hills | 7.81 | 7.78 |
-| lava-land | 8.43 | 8.35 |
-| sky-tower | 7.63 | 7.50 |
-| throne | 18.98 (18.07–19.62) | 18.79 (18.15–19.11) |
+| hub | 13.16 (12.41–13.85) | 12.68 (11.96–13.10) |
+| green-hills | 7.81 | 7.63 |
+| lava-land | 8.43 | 8.21 |
+| sky-tower | 7.63 | 7.44 |
+| throne | 18.98 (18.07–19.62) | 18.94 (18.47–19.38) |
 | micro-river | 1.86 | 1.84 |
-| showcase-river | 26.02 (25.59–26.29) | 26.54 (26.02–27.25) |
+| showcase-river | 26.02 (25.59–26.29) | 25.34 (24.81–26.22) |
 
 - castle64 draws no palette and its white-light commands go through the byte-identical
   white overlay. The hub golden is unchanged.
 - `showcase-river` takes the colored and textured overlays, so it runs the new branch.
-  It moved +0.5 ms, but its RSP drain at the frame's end did not move (0.56 vs 0.57 ms),
-  and neither did its T&L stage (12.29 vs 12.22). The difference is in the CPU time
-  outside the timed stages (`game` +0.47, `begin` −0.8). The hub's `game` moved −0.42 ms
-  with no change to its code. A first build paid a wasted delay-slot `lhu` per pair, and
-  removing it changed nothing (26.51 vs 26.54). Code layout, then, inside the 33.3 ms gate.
-- Open: palette draws aren't memoized (each pays ~100 µs of CPU setup), a palette under
+  An earlier build of this change measured it at 26.54 (26.02–27.25). Its RSP drain and
+  T&L stage didn't move then either: the difference sat in the CPU time outside the timed
+  stages. The final build moved only self-test code (`micro.rs`) and measures 25.34.
+  So the earlier +0.5 ms was code layout. Neither did removing an RSP instruction per
+  vertex pair from the colored loop move it (26.51 vs 26.54).
+- Open: palette draws aren't memoized (each pays ~90 µs of CPU setup), a palette under
   a white light switches to the colored overlay, and water keeps palettes on the CPU.

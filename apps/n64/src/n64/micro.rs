@@ -46,11 +46,16 @@ const RIGID: ModelId = ModelId::from_path("micro/rigid");
 /// [`GRID`] with color slots (`SLOT`, GitHub #122): slot
 /// `(x / 4 + y / 4) % 5`, so every slot 0..=4 shows in bands.
 const GRID_SLOTS: ModelId = ModelId::from_path("micro/grid_slots");
+/// [`BUMPY`] with slots `(x + y) % 5`: a recolored flat draw (its flat
+/// copy carries each face vertex's slot).
+const BUMPY_SLOTS: ModelId = ModelId::from_path("micro/bumpy_slots");
 /// [`RIGID`] with the same slots: a recolored rigid draw, a part per joint.
 const RIGID_SLOTS: ModelId = ModelId::from_path("micro/rigid_slots");
 /// castle64's textured self-test card with slots: the textured overlay's
 /// palette command.
 const CARD_SLOTS: ModelId = ModelId::from_path("micro/card_slots");
+/// castle64's self-test card (a 2×2 texel-quadrant texture).
+const CARD: ModelId = ModelId::from_path("models/selftest_card");
 /// One figure of the `micro-palette` crowd: 6×6 vertices, 50 triangles,
 /// slots `(x + y) % 5` (several per face).
 const FIGURE: ModelId = ModelId::from_path("micro/figure");
@@ -138,7 +143,14 @@ const CHECK_PALETTE: trino_core::Palette = [
 /// The camera looks down +Z from the origin, so view space = world space
 /// and a front face (CCW on screen) goes "up, then right" from its first
 /// vertex.
-fn register_meshes(r: &mut N64Renderer) -> bool {
+///
+/// With `palette`, the slotted meshes of the palette checks and of
+/// `micro-palette` (GitHub #122) instead, castle64's card among them:
+/// [`run`] registers those after the batch reserve and forgets them after
+/// its scenes ([`forget_palette_meshes`]), so the base N64's heap holds
+/// them only while they are used (they took the block the reserve needs
+/// when registered at boot).
+fn register_meshes(r: &mut N64Renderer, palette: bool) -> bool {
     let tri = tmdl(
         &[
             Vec3::new(0.0, 0.0, 0.0),
@@ -190,6 +202,7 @@ fn register_meshes(r: &mut N64Renderer) -> bool {
             ));
         }
     }
+    let bumpy_slots: Vec<u8> = (0..n * n).map(|i| ((i % n + i / n) % 5) as u8).collect();
     let mut bidx = Vec::new();
     for y in 0..n - 1 {
         for x in 0..n - 1 {
@@ -225,18 +238,43 @@ fn register_meshes(r: &mut N64Renderer) -> bool {
             fidx.extend_from_slice(&[i, i + w, i + 1, i + 1, i + w, i + w + 1]);
         }
     }
-    let figure = with_slots(tmdl(&fpos, &fidx, Vec3::ZERO, fhalf * 1.5), &fslots);
+    if palette {
+        let figure = with_slots(tmdl(&fpos, &fidx, Vec3::ZERO, fhalf * 1.5), &fslots);
+        // castle64's textured card, its vertices in slots 0..=4 in turn.
+        let card = r.mesh_blob(CARD).map(|b| {
+            let n = trino_core::render3d::Mesh::from_tmdl(&b).map_or(0, |m| m.vertex_count);
+            let slots: Vec<u8> = (0..n).map(|i| (i % 5) as u8).collect();
+            with_slots(b, &slots)
+        });
+        return r.register_mesh(
+            GRID_SLOTS.0,
+            with_slots(tmdl(&pos, &idx, Vec3::ZERO, r_grid), &grid_slots),
+        ) && r.register_mesh(
+            BUMPY_SLOTS.0,
+            with_slots(tmdl(&bumpy, &bidx, Vec3::ZERO, r_grid), &bumpy_slots),
+        ) && r.register_mesh(RIGID_SLOTS.0, rigid_grid(&pos, n_grid_half(), r_grid, true))
+            && r.register_mesh(FIGURE.0, figure)
+            && card.is_some_and(|b| r.register_mesh(CARD_SLOTS.0, b));
+    }
     r.register_mesh(TRI.0, tri)
         && r.register_mesh(GRID.0, tmdl(&pos, &idx, Vec3::ZERO, r_grid))
         && r.register_mesh(GRID2.0, tmdl(&pos, &idx2, Vec3::ZERO, r_grid))
         && r.register_mesh(BUMPY.0, tmdl(&bumpy, &bidx, Vec3::ZERO, r_grid))
         && r.register_mesh(RIGID.0, rigid_grid(&pos, n_grid_half(), r_grid, false))
-        && r.register_mesh(
-            GRID_SLOTS.0,
-            with_slots(tmdl(&pos, &idx, Vec3::ZERO, r_grid), &grid_slots),
-        )
-        && r.register_mesh(RIGID_SLOTS.0, rigid_grid(&pos, n_grid_half(), r_grid, true))
-        && r.register_mesh(FIGURE.0, figure)
+}
+
+/// Give back what `register_meshes(r, true)` took: the meshes and their RSP
+/// and flat copies. The renderer frees a copy four frames after its last
+/// possible use (its grave): a few empty frames hand the blocks back before
+/// the next step allocates (the base N64's water step needs 43 KB).
+fn forget_palette_meshes(r: &mut N64Renderer) {
+    for m in [GRID_SLOTS, BUMPY_SLOTS, RIGID_SLOTS, FIGURE, CARD_SLOTS] {
+        r.unregister_mesh(m.0);
+    }
+    for _ in 0..6 {
+        r.begin_frame(Color::BLACK);
+        r.end_frame();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -258,7 +296,6 @@ const SCENES: &[(&str, Set)] = &[
     ("micro-unlit", Set::Grid(GRID, Shading::Unlit)),
     ("micro-flat", Set::Grid(GRID, Shading::Flat)),
     ("micro-tris", Set::Grid(GRID2, Shading::Gouraud)),
-    ("micro-palette", Set::Crowd),
 ];
 
 /// Position of small draw `k` (8×8 block at z = 6, or behind the camera).
@@ -328,7 +365,7 @@ fn render(r: &mut N64Renderer, set: Set) {
 /// base N64's 4 MB (GitHub #110, #66). [`run`] keeps what this made.
 #[inline(never)]
 pub fn prewarm(r: &mut N64Renderer) -> bool {
-    if !register_meshes(r) {
+    if !register_meshes(r, false) {
         return false;
     }
     let rsp = r.rsp();
@@ -347,10 +384,17 @@ pub fn run(r: &mut N64Renderer, frames: u32, prewarmed: bool) {
             "TRINO_TEST_FAIL:rsp: the overlay's test triangle did not render ({c:?})\n"
         )),
     }
-    if !prewarmed && !register_meshes(r) {
+    if !prewarmed && !register_meshes(r, false) {
         runtime::log("TRINO_PERF_MICRO: mesh blobs rejected\n");
         return;
     }
+    let heap = |when: &str| {
+        let (used, total) = runtime::heap();
+        runtime::log(&alloc::format!(
+            "TRINO_HEAP:{used}/{total} top={} {when} the palette meshes\n",
+            runtime::heap_top_free()
+        ));
+    };
     rsp_checks(r);
     water_checks(r);
     // Same ROM, both paths: the RSP numbers are free of code-layout noise.
@@ -360,6 +404,23 @@ pub fn run(r: &mut N64Renderer, frames: u32, prewarmed: bool) {
             measure(r, name, suffix, set, frames);
         }
     }
+    // Palettes last (GitHub #122): their meshes are registered once the
+    // scenes above have grown the batch buffers to their size, and
+    // forgotten after, so the base N64's free block is whole again for the
+    // water step (registered first, they split it: 81 → 38 KB).
+    heap("before");
+    match register_meshes(r, true) {
+        true => {
+            palette_checks(r);
+            for (suffix, rsp) in [("", false), ("-rsp", true)] {
+                r.set_rsp(rsp);
+                measure(r, "micro-palette", suffix, Set::Crowd, frames);
+            }
+        }
+        false => runtime::log("TRINO_TEST_FAIL:rsp palette: the slotted meshes were rejected\n"),
+    }
+    forget_palette_meshes(r);
+    heap("after forgetting");
     r.set_rsp(true);
 }
 
@@ -474,53 +535,18 @@ fn rsp_checks(r: &mut N64Renderer) {
     let faces = r.rsp_oracle(BUMPY, &squash, &flat);
     // Textured: the self-test card (castle64's asset, a 2x2 texel-quadrant
     // texture) facing the camera.
-    let card = ModelId::from_path("models/selftest_card");
+    let card = CARD;
     let unlit = ModelParams {
         shading: Shading::Unlit,
         ..ModelParams::DEFAULT
     };
     let textured = r.rsp_oracle(card, &grid, &unlit);
-    // Palettes (GitHub #122): the colored overlay's palette command under
-    // the white light and under the warm one with a glow, and the textured
-    // overlay's on a slotted copy of the card.
-    let recolor = ModelParams {
-        palette: Some(CHECK_PALETTE),
-        ..ModelParams::DEFAULT
-    };
-    let palette = r.rsp_oracle(GRID_SLOTS, &grid, &recolor);
-    r.set_light(&WARM);
-    let warm_palette = r.rsp_oracle(
-        GRID_SLOTS,
-        &grid,
-        &ModelParams {
-            palette: Some(CHECK_PALETTE),
-            ..GLOW
-        },
-    );
-    setup(r);
-    let card_slots = r.mesh_blob(card).map(|b| {
-        let n = trino_core::render3d::Mesh::from_tmdl(&b).map_or(0, |m| m.vertex_count);
-        let slots: Vec<u8> = (0..n).map(|i| (i % 5) as u8).collect();
-        with_slots(b, &slots)
-    });
-    let card_ok = card_slots.is_some_and(|b| r.register_mesh(CARD_SLOTS.0, b));
-    let unlit_recolor = ModelParams {
-        palette: Some(CHECK_PALETTE),
-        ..unlit
-    };
-    let textured_palette = match card_ok {
-        true => r.rsp_oracle(CARD_SLOTS, &grid, &unlit_recolor),
-        false => Err("no slotted card".into()),
-    };
     for (what, res) in [
         ("colored emissive", colored),
         ("double-sided back", flipped),
         ("fog", fogged),
         ("flat squashed", faces),
         ("textured", textured),
-        ("palette", palette),
-        ("palette warm", warm_palette),
-        ("palette textured", textured_palette),
     ] {
         match res {
             Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
@@ -568,21 +594,69 @@ fn rsp_checks(r: &mut N64Renderer) {
         r.draw_model_matrix(RIGID, &grid, Material::VertexLit, &ModelParams::DEFAULT);
         r.end_frame();
     });
-    // The palette draws, each also proven to have taken the RSP (a draw
-    // left on the CPU would pass the pixel check trivially).
-    let recolored: [(&str, ModelId, ModelParams); 3] = [
-        ("palette", GRID_SLOTS, recolor),
-        ("palette rigid", RIGID_SLOTS, recolor),
-        ("palette textured", CARD_SLOTS, unlit_recolor),
-    ];
-    for (what, model, params) in recolored {
-        if model == CARD_SLOTS && !card_ok {
-            continue;
+    setup(r);
+}
+
+/// The palette command against the CPU path (GitHub #122): oracles under the
+/// white light, the warm light with a glow, a flat copy and the textured
+/// overlay, then the same draws' pixels, each also proven to have taken
+/// the RSP (a draw left on the CPU would pass the pixel check trivially).
+/// Run last, with the meshes of `register_meshes(r, true)`.
+fn palette_checks(r: &mut N64Renderer) {
+    setup(r);
+    let grid = translation(Vec3::new(0.0, 0.0, 4.0));
+    let (squash, flat) = squashed();
+    let unlit = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    let recolor = ModelParams {
+        palette: Some(CHECK_PALETTE),
+        ..ModelParams::DEFAULT
+    };
+    let palette = r.rsp_oracle(GRID_SLOTS, &grid, &recolor);
+    let flat_recolor = ModelParams {
+        palette: Some(CHECK_PALETTE),
+        ..flat
+    };
+    let flat_palette = r.rsp_oracle(BUMPY_SLOTS, &squash, &flat_recolor);
+    r.set_light(&WARM);
+    let warm_palette = r.rsp_oracle(
+        GRID_SLOTS,
+        &grid,
+        &ModelParams {
+            palette: Some(CHECK_PALETTE),
+            ..GLOW
+        },
+    );
+    setup(r);
+    let unlit_recolor = ModelParams {
+        palette: Some(CHECK_PALETTE),
+        ..unlit
+    };
+    let textured_palette = r.rsp_oracle(CARD_SLOTS, &grid, &unlit_recolor);
+    for (what, res) in [
+        ("palette", palette),
+        ("palette warm", warm_palette),
+        ("palette flat", flat_palette),
+        ("palette textured", textured_palette),
+    ] {
+        match res {
+            Ok(m) => runtime::log(&alloc::format!("TRINO_RSP:oracle {what}: {m}\n")),
+            Err(m) => runtime::log(&alloc::format!("TRINO_TEST_FAIL:rsp oracle {what}: {m}\n")),
         }
+    }
+    let recolored: [(&str, ModelId, &Mat34, ModelParams); 4] = [
+        ("palette", GRID_SLOTS, &grid, recolor),
+        ("palette flat", BUMPY_SLOTS, &squash, flat_recolor),
+        ("palette rigid", RIGID_SLOTS, &grid, recolor),
+        ("palette textured", CARD_SLOTS, &grid, unlit_recolor),
+    ];
+    for (what, model, at, params) in recolored {
         let draw = |r: &mut N64Renderer| {
             r.begin_frame(Color::BLACK);
             setup(r);
-            r.draw_model_matrix(model, &grid, Material::VertexLit, &params);
+            r.draw_model_matrix(model, at, Material::VertexLit, &params);
             r.end_frame();
         };
         pixel_check(r, what, &draw);

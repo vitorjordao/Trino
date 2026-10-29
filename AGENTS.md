@@ -1521,7 +1521,7 @@ cargo test --workspace
 - **A palette draw takes the N64's colored overlay** (GitHub #122, ADR 0018 §9), even
   under a white light: interleaved with white-light draws it costs an overlay switch
   each way (rspq reloads the code), so draw a recolored crowd together. It is never
-  memoized (`MemoKey` has no room for a palette): ~0.1 ms of CPU per draw, measured by
+  memoized (`MemoKey` has no room for a palette): ~90 µs of CPU per draw, measured by
   `micro-palette`. Water keeps palettes on the CPU (`RspReject::Palette`: no IMEM left).
 - **Captions on the 3DS touch screen switch screens:** `CaptionPlace::SecondScreen` calls
   `on_screen(Bottom)`, so draw captions after everything else on the top screen.
@@ -2035,6 +2035,13 @@ cargo test --workspace
   - The editor measures memory plans on a worker keyed on the manifest's text and the
     bake generation (`groups::Groups::plans`); a UI test waits on `measured()` after the
     Memory tab drew once.
+- **On the N64, `FrameStats::tris` leaves out RSP triangles** (the 3DS and PC count their
+  hardware paths; GitHub #129). A self-test that proves "something was drawn" sums
+  `tris + tnl.rsp_tris`; a CPU-vs-RSP pixel check also asserts `tnl.rsp_draws > 0`, or a
+  draw that fell back to the CPU passes it trivially.
+- **Self-test meshes on the base N64 split its last free block** unless registered after
+  the batch buffers grew and unregistered with a few frames to spare (`build-n64` ›
+  heap levers, #122).
 - **Playwright's Chromium keeps its shared memory in `TMPDIR`** (`--disable-dev-shm-usage`):
   with a tmpfs `/tmp` under ~2 GB free, the WebGL2 self-test's tab crashed at `asset
   groups` ("Target crashed", GitHub #107). Launch harness scripts through

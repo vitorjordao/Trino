@@ -1120,7 +1120,7 @@ impl N64Renderer {
 
     /// Forget a mesh and its RSP copies (flat, rigid, water), freed a few
     /// frames on like [`N64Renderer::unregister`]'s sprites.
-    pub(crate) fn unregister_mesh(&mut self, id: u32) -> bool {
+    pub fn unregister_mesh(&mut self, id: u32) -> bool {
         let Some(_) = self.meshes.remove(&id) else {
             return false;
         };

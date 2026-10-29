@@ -1,0 +1,803 @@
+OpenGL Version: 4.5 (Core Profile) Mesa 25.2.8-0ubuntu0.24.04.4, GLSL: 4.50
+OpenGL: Failed to load librashader: shaders will be disabled
+Loaded testrom_emu_after
+Vulkan Enabled: using paraLLEl-RDP
+**** Starting test: test_exception
+**** Starting test: test_exception_syscall
+**** Starting test: test_constructors
+**** Starting test: test_ticks
+SKIP
+**** Starting test: test_timer_ticks
+ASSERTION FAILED (test_timer.c:257):
+t0 < t1 && t1 < t2 && t2 < t3 && t3 < t4 && t4 < t5 && (t5-t0)<explen && cbcalled == use_timer
+invalid timer_ticks 0:[start=ffffff9f,irq=1,tt1=1:43/1]
+3feffffffdb < 3feffffffe9 < 3ff00000009 < 3ff00000009 < 3ff00000009 < 3ff00000409
+
+**** Starting test: test_timer_oneshot
+**** Starting test: test_timer_slow_callback
+VI WARNING: __vblank_interrupt outside of vblank period: 226
+**** Starting test: test_timer_continuous
+**** Starting test: test_timer_continuous_short
+**** Starting test: test_timer_mixed
+**** Starting test: test_timer_context
+**** Starting test: test_timer_disabled_start
+**** Starting test: test_timer_disabled_restart
+**** Starting test: test_irq_reentrancy
+**** Starting test: test_sys_hwmemset
+SKIP
+**** Starting test: test_sys_hwmemset_uncached
+SKIP
+**** Starting test: test_scratch_basics
+**** Starting test: test_scratch_calloc
+**** Starting test: test_scratch_stats_and_peak
+**** Starting test: test_scratch_collapse_ordering
+**** Starting test: test_scratch_realloc
+**** Starting test: test_scratch_exhaustion_recovery
+**** Starting test: test_kernel_basic
+**** Starting test: test_kernel_mutex_1
+**** Starting test: test_kernel_priority
+**** Starting test: test_kernel_sleep
+**** Starting test: test_kernel_libc1
+**** Starting test: test_kernel_libc2
+**** Starting test: test_kernel_thread_local
+**** Starting test: test_dfs_read
+**** Starting test: test_dfs_rom_addr
+**** Starting test: test_dfs_rom_size
+**** Starting test: test_dfs_ioctl
+**** Starting test: test_dfs_directory
+**** Starting test: test_eeprom_read_bytes
+**** Starting test: test_eeprom_write_bytes
+**** Starting test: test_eepromfs
+**** Starting test: test_cache_invalidate
+VI WARNING: __vblank_interrupt outside of vblank period: 376
+**** Starting test: test_debug_sdfs
+SKIP
+**** Starting test: test_dma_read_misalign
+**** Starting test: test_cop1_denormalized_float
+**** Starting test: test_backtrace_analyze
+**** Starting test: test_backtrace_basic
+**** Starting test: test_backtrace_fp
+**** Starting test: test_backtrace_exception
+**** Starting test: test_backtrace_exception_leaf
+**** Starting test: test_backtrace_exception_fp
+**** Starting test: test_backtrace_invalidptr
+**** Starting test: test_rspq_cmd_single
+**** Starting test: test_rspq_cmd_multiple
+**** Starting test: test_rspq_cmd_rapid
+**** Starting test: test_rspq_wrap
+**** Starting test: test_rspq_buffer_handoff_atomic
+**** Starting test: test_rspq_high_load
+**** Starting test: test_rspq_load_overlay
+**** Starting test: test_rspq_switch_overlay
+**** Starting test: test_rspq_multiple_flush
+**** Starting test: test_rspq_wait
+**** Starting test: test_rspq_rapid_sync
+**** Starting test: test_rspq_flush
+SKIP
+**** Starting test: test_rspq_rapid_flush
+SKIP
+**** Starting test: test_rspq_block
+**** Starting test: test_rspq_block_begin_reuse
+**** Starting test: test_rspq_wait_sync_in_block
+**** Starting test: test_rspq_highpri_basic
+**** Starting test: test_rspq_highpri_multiple
+**** Starting test: test_rspq_highpri_overlay
+**** Starting test: test_rspq_big_command
+**** Starting test: test_rspq_rdp_dynamic
+**** Starting test: test_rspq_rdp_dynamic_switch
+**** Starting test: test_rspq_deferred_call
+**** Starting test: test_rspq_queue_basic
+**** Starting test: test_rspq_queue_clear
+**** Starting test: test_rspq_queue_growth
+**** Starting test: test_rspq_queue_order
+**** Starting test: test_rspq_queue_block_nesting
+**** Starting test: test_rdpq_rspqwait
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+[WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 5543.846 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 7994.682 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 417645.686 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, bc22f0ed7e70237e): thread 0 - 16232.019 us (mode: sync, success: yes).
+**** Starting test: test_rdpq_clear
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+[WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 15726.661 us (mode: sync, success: yes).
+**** Starting test: test_rdpq_dynamic
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_passthrough_big
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_block
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_block_begin_reuse
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_block_coalescing
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_block_contiguous
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_block_dynamic
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_block_nested
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_change_other_modes
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_fixup_setfillcolor
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_fixup_setscissor
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_fixup_texturerect
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+[WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 9362.838 us (mode: sync, success: yes).
+**** Starting test: test_rdpq_fixup_fillrect
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_lookup_address
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_lookup_address_offset
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+[0xa01b2ee0] ff101c0f041b2c08    SET_COLOR_IMAGE  dram=001b2c08 w=16 h=8 rgba16
+[RDPQ_VALIDATION] ERROR: color image must be aligned to 64 bytes
+[0xa01a2b30] ff101c0f041b2c08    SET_COLOR_IMAGE  dram=001b2c08 w=16 h=8 rgba16
+[RDPQ_VALIDATION] ERROR: color image must be aligned to 64 bytes
+**** Starting test: test_rdpq_syncfull_cb
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_syncfull_resume
+**** Starting test: test_rdpq_autosync
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_automode
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_blender
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_blender_memory
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_fog
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mode_antialias
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mode_alphacompare
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mode_zmode
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mode_freeze
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mode_freeze_stack
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mipmap
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mipmap_interpolate
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_autotmem
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_autotmem_reuse
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_texrect_passthrough
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_triangle_block_order
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_triangle
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_triangle_w1
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_metrics_empty
+SKIP
+**** Starting test: test_rdpq_text_metrics_simple_ascii
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_newline_only
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_escape_dollar_font
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_escape_caret_style
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_escape_literal_dollar_caret
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_indent_first_line
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_char_basic
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_word_basic
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_word_long_token
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_none_truncate
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_ellipses
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_char_spacing
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_line_spacing
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_tab_default_32
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_tab_custom_stops
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_max_chars_stop_at_space
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_nbytes_wrap_word_plaintext
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_nbytes_wrap_word_with_escapes
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_nbytes_wrap_char_with_escapes
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_nbytes_ellipsis
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_nbytes_wrap_word_consumes_newline
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_nbytes_wrap_word_consecutive_escapes
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_max_chars_clamp_end
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_max_chars_with_word_wrap
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_typewriter
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_ellipses_narrow_width
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_wrap_word_short_then_long_token
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_height_truncates_vertical
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_valign_center_height
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_align_center_width
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_align_right_width
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_utf8_multibyte_in_range
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_utf8_invalid_sequence
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_preserve_overlap_order
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_disable_aa_fix_flag
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_builder_api_matches_build
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_kerning_var_font
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_register_get_unregister
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_printf_small_buf
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_text_printf_large_buf
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_attach_clear
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_attach_stack
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_upload
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_upload_multi
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_can_upload
+**** Starting test: test_rdpq_tex_blit_normal
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+VI WARNING: __vblank_interrupt outside of vblank period: 14
+VI WARNING: __vblank_interrupt outside of vblank period: 12
+**** Starting test: test_rdpq_tex_blit_filtering
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_multi_i4
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_upload_tlut
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_upload_tlut_alignments
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_tex_4bpp_odd
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_sprite_upload
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_sprite_lod
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mat_basic
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mat_empty
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mat_blender
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_rdpq_mat_ext
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_mpeg1_idct
+**** Starting test: test_mpeg1_block_decode
+**** Starting test: test_mpeg1_block_dequant
+**** Starting test: test_mpeg1_block_predict
+**** Starting test: test_gl_clear
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_gl_draw_arrays
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_gl_draw_elements
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_gl_texture_completeness
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_gl_list
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_gl_cull
+
+**************************************************
+RDPQ debug engine started (slowdowns are expected)
+**************************************************
+
+**** Starting test: test_dl_syms
+Could not find module symbol file dl_test_syms.dso.sym.
+Will not get symbolic backtraces through this module.
+**** Starting test: test_dladdr
+Could not find module symbol file dl_test_syms.dso.sym.
+Will not get symbolic backtraces through this module.
+**** Starting test: test_dl_relocs
+**** Starting test: test_dl_imports
+Could not find module symbol file dl_test_syms.dso.sym.
+Will not get symbolic backtraces through this module.
+Could not find module symbol file dl_test_imports.dso.sym.
+Will not get symbolic backtraces through this module.
+Could not find module symbol file dl_test_syms.dso.sym.
+Will not get symbolic backtraces through this module.
+Could not find module symbol file dl_test_imports.dso.sym.
+Will not get symbolic backtraces through this module.
+**** Starting test: test_dlsym_rtld_default
+Could not find module symbol file dl_test_syms.dso.sym.
+Will not get symbolic backtraces through this module.
+Could not find module symbol file dl_test_imports.dso.sym.
+Will not get symbolic backtraces through this module.
+**** Starting test: test_dlclose
+Could not find module symbol file dl_test_syms.dso.sym.
+Will not get symbolic backtraces through this module.
+Could not find module symbol file dl_test_imports.dso.sym.
+Will not get symbolic backtraces through this module.
+shared object not open
+**** Starting test: test_dl_ctors
+**** Starting test: test_mat4_mul_two_identities
+**** Starting test: test_mat4_mul_scale_translation
+**** Starting test: test_mat3_mul_two_identities
+**** Starting test: test_mat3_mul_scale_translation
+**** Starting test: test_quat_from_euler_zero_identity
+**** Starting test: test_quat_slerp_same_quaternion
+**** Starting test: test_quat_slerp_near_identical_is_finite
+**** Starting test: test_fm_truncf
+**** Starting test: test_fm_ceilf
+**** Starting test: test_fm_floorf
+**** Starting test: test_fm_roundf
+**** Starting test: test_fm_fmodf
+**** Starting test: test_fm_wrapf
+**** Starting test: test_fm_sinf
+**** Starting test: test_fm_cosf
+**** Starting test: test_fm_sincosf
+**** Starting test: test_fm_atan2f
+**** Starting test: test_fm_expf
+**** Starting test: test_fm_lerp_angle
+**** Starting test: test_fm_wrap_angle
+**** Starting test: test_mg_draw_triangle_list
+**** Starting test: test_mg_draw_triangle_list_full_cache
+**** Starting test: test_mg_draw_triangle_strip
+**** Starting test: test_mg_draw_triangle_strip_full_cache
+**** Starting test: test_mg_draw_triangle_fan
+**** Starting test: test_mg_draw_triangle_fan_full_cache
+**** Starting test: test_mg_draw_indexed_one_tri
+**** Starting test: test_mg_draw_indexed_two_tris
+**** Starting test: test_mg_draw_indexed_full_cache
+**** Starting test: test_mg_draw_indexed_full_one_extra
+**** Starting test: test_mg_draw_indexed_fragmented_batch
+**** Starting test: test_mg_draw_indexed_frag_backwards
+**** Starting test: test_mg_draw_indexed_holes
+**** Starting test: test_mg_draw_indexed_out_of_order
+**** Starting test: test_mg_draw_indexed_coalescing
+**** Starting test: test_mg_draw_indexed_strip
+**** Starting test: test_mg_draw_indexed_strip_full
+**** Starting test: test_mg_draw_indexed_fan
+**** Starting test: test_mg_draw_indexed_fan_full
+**** Starting test: test_mg_draw_indexed_restart_strip
+**** Starting test: test_mg_draw_indexed_restart_fan
+
+Testsuite finished in 00:11
+Passed: 221 out of 222 (7 skipped)

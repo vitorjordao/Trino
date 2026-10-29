@@ -1,0 +1,16 @@
+format    size     texels / room   tools   strict
+CI4       72x40      1600 / 2048   fits    draws
+CI4       64x64      2048 / 2048   fits    draws
+CI4       64x65      2080 / 2048   over    panics
+CI4       17x9        144 / 2048   fits    draws
+CI8       32x64      2048 / 2048   fits    draws
+CI8       48x48      2304 / 2048   over    panics
+I4        64x64      2048 / 4096   fits    draws
+I4        64x128     4096 / 4096   fits    draws
+I4        128x65     4160 / 4096   over    panics
+I8        64x64      4096 / 4096   fits    draws
+I8        64x65      4160 / 4096   over    panics
+I8        3x7          56 / 4096   fits    draws
+RGBA5551  32x64      4096 / 4096   fits    draws
+RGBA5551  48x48      4608 / 4096   over    panics
+RGBA5551  1x256      2048 / 4096   fits    draws

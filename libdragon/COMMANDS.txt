@@ -1,0 +1,16 @@
+Base: origin/preview 39d0d6096130836a65710da6730290701d060272
+Fix:  branch eeprom-write-bytes-rmw, commit cbc766a48
+
+Toolchain: local image trino-n64 (mips64-elf-gcc 16.2.0), N64_INST copied out
+to a writable dir (dk.sh). Emulator: ares v148 headless (trino-ares image, ares.sh).
+
+Before (tests added, eeprom.c unpatched):
+  dk.sh 'make -j4 install && make -C tests -j4 N64_ROM_SAVETYPE=eeprom4k testrom_emu.z64'
+  ares.sh testrom_emu_before.z64 280 before.log
+  -> test_eeprom_write_bytes FAILS at write_bytes(136, 3); Passed: 220 out of 222
+
+After (fix applied):
+  same commands -> Passed: 221 out of 222 (eeprom4k and eeprom16k)
+
+The remaining failure, test_timer_ticks (test_timer.c:257), is identical in the
+before and after runs and unrelated to EEPROM (timer timing under ares).

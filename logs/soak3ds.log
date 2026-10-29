@@ -1,0 +1,83 @@
+[3ds] baking assets...
+Used lz11 for compression
+Used lzss for compression
+Used lz11 for compression
+Used huff for compression
+Used lz11 for compression
+Used huff for compression
+Used lz11 for compression
+Used huff for compression
+Used lzss for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lzss for compression
+Used rle for compression
+Used lz11 for compression
+Used lz11 for compression
+Used rle for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used huff for compression
+Used huff for compression
+Used none for compression
+Used lzss for compression
+Used huff for compression
+Used huff for compression
+Used lzss for compression
+Used none for compression
+Used lzss for compression
+Used lzss for compression
+Used none for compression
+Used lz11 for compression
+Used huff for compression
+Used huff for compression
+Used lz11 for compression
+[3ds] group boot: 160 entries, 248 KB raw, 112 KB stored (lz4)
+[3ds] group replay: 1 entries, 15 KB raw, 14 KB stored (lz4)
+[3ds] group selftest_level: 3 entries, 2 KB raw, 1 KB stored (lz4)
+[3ds] group selftest_level2: 3 entries, 4 KB raw, 4 KB stored (lz4)
+[3ds] group strider: 1 entries, 17 KB raw, 5 KB stored (lz4)
+[3ds] textures: 71840 B of linear memory (211968 B as RGBA8): A8 x8, ETC1 x13, ETC1A4 x2, L8 x2, LA8 x1, RGB565 x2, RGBA4 x3, RGBA5551 x4, RGBA8 x2
+[3ds] audio: 13 sounds (3 streamed), 232010 B in RomFS (775718 B as PCM16), 117198 B resident in linear memory
+[3ds] building Rust (nightly, build-std)...
+   Compiling trino-platform-3ds v0.2.0-dev.1 (~/Documents/projects/Trino-wt/robust121/crates/platform-3ds)
+warning: dropping unsupported crate type `dylib` for target `armv6k-nintendo-3ds`
+
+   Compiling castle64 v0.2.0-dev.1 (~/Documents/projects/Trino-wt/robust121/examples/castle64)
+warning: `showcase` (lib) generated 1 warning
+warning: `castle64` (lib) generated 1 warning (1 duplicate)
+   Compiling trino-app-3ds v0.2.0-dev.1 (~/Documents/projects/Trino-wt/robust121/apps/3ds)
+warning: unused import: `Input`
+  --> apps/3ds/src/main.rs:28:36
+   |
+28 |     use trino_core::{Button, Game, Input, InputState, Vec2};
+   |                                    ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `trino-app-3ds` (bin "trino-3ds") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 8.44s
+[3ds] packing .3dsx...
+[3ds] app: ~/Documents/projects/Trino-wt/robust121/target/3ds/trino.3dsx
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 1: fresh folder, read None (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 2: last finished 8 -> read 9 (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 3: last finished 34 -> read 34 (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 4: last finished 38 -> read 38 (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 5: last finished 59 -> read 59 (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 6: last finished 97 -> read 97 (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 7: last finished 114 -> read 114 (ok)
+QPixmap::scaled: Pixmap is a null pixmap
+[soak] cycle 8: last finished 148 -> read 148 (ok)
+[soak] after the last cut: last finished 161 -> read 161 (ok) (~/.local/share/azahar-emu/sdmc/3ds/trino/castle64-soak)
+[soak] 8 cuts in Azahar, every boot read the last finished save or a later one

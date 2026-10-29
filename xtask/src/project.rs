@@ -139,6 +139,12 @@ pub struct Project {
     /// `false` puts a `no_speedup` file in the RomFS; `--speedup on|off`
     /// overrides it for one command.
     pub n3ds_speedup: bool,
+    /// `[3ds] save_name` (default `[project] name`; the engine's castle64:
+    /// `castle64`): the SD folder `sdmc:/3ds/trino/<save_name>/` holding the
+    /// game's save (GitHub #119), staged as the RomFS's `save_name` file.
+    /// Self-test builds append `-selftest`. Lowercase letters, digits, `-`,
+    /// `_` and `.`, at most 32 characters.
+    pub n3ds_save_name: String,
     /// `--trace` (issue #62): console builds compile the engine's zones in
     /// (`trino-core/trace`) and the test runs collect them; a separate build
     /// from the gated one, whose perf numbers are reported, never gated.
@@ -384,6 +390,8 @@ struct N3dsSection {
     #[serde(default = "default_speedup")]
     speedup: bool,
     #[serde(default)]
+    save_name: Option<String>,
+    #[serde(default)]
     product_code: Option<String>,
     #[serde(default)]
     unique_id: Option<String>,
@@ -395,6 +403,46 @@ struct N3dsSection {
 
 fn default_speedup() -> bool {
     true
+}
+
+/// The default 3DS save folder of a project called `name`: lowercase, with
+/// `_` for anything FAT or `savedir` would not keep (as the PC's save name
+/// is the project's name in the templates).
+fn save_name_of(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '-' | '_' | '.') => c,
+            _ => '_',
+        })
+        .take(32)
+        .collect();
+    if s.is_empty() || s.chars().all(|c| c == '.') {
+        "game".into()
+    } else {
+        s
+    }
+}
+
+/// A 3DS save folder name (`[3ds] save_name`, GitHub #119): what the SD
+/// card's FAT takes on every console and what `trino_platform_3ds::savedir`
+/// keeps as is.
+fn check_save_name(name: &str) -> Result<String, String> {
+    let ok = !name.is_empty()
+        && name.len() <= 32
+        && !name.chars().all(|c| c == '.')
+        && name
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-' | '_' | '.'));
+    if ok {
+        Ok(name.to_string())
+    } else {
+        Err(format!(
+            "[3ds] save_name `{name}`: the 3DS save folder takes lowercase letters, \
+             digits, `-`, `_` and `.` (1 to 32); set [3ds] save_name to one \
+             (it defaults to [project] name)"
+        ))
+    }
 }
 
 /// `[web]`: every field optional.
@@ -498,6 +546,7 @@ impl Project {
             n3ds_bin: "trino-3ds".into(),
             n3ds_icon: None,
             n3ds_speedup: true,
+            n3ds_save_name: "castle64".into(),
             trace: false,
             web_package: "trino-app-web".into(),
             web_canvas_id: DEFAULT_CANVAS_ID.into(),
@@ -594,11 +643,16 @@ impl Project {
             bin: String::new(),
             icon: None,
             speedup: true,
+            save_name: None,
             product_code: None,
             unique_id: None,
             banner: None,
             banner_audio: None,
         });
+        let n3ds_save_name = match n3ds.save_name.as_deref() {
+            Some(name) => check_save_name(name)?,
+            None => save_name_of(&f.project.name),
+        };
         let web = f.web.unwrap_or_default();
         let web_package = web
             .package
@@ -699,6 +753,7 @@ impl Project {
             n3ds_package: n3ds.package,
             n3ds_bin: n3ds.bin,
             n3ds_speedup: n3ds.speedup,
+            n3ds_save_name,
             trace: false,
             web_package,
             web_canvas_id,
@@ -939,6 +994,23 @@ watch = ["game"]
         let p = Project::parse(&off, "/g".into(), "/e".into()).unwrap();
         assert!(!p.n3ds_speedup);
         assert!(Project::engine().n3ds_speedup);
+    }
+
+    /// GitHub #119: each game's 3DS save folder is named after it, as its
+    /// PC and Web saves are.
+    #[test]
+    fn the_3ds_save_folder_is_the_projects_own() {
+        let p = Project::parse(SAMPLE, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.n3ds_save_name, p.name);
+        assert_eq!(Project::engine().n3ds_save_name, "castle64");
+        let named = SAMPLE.replace("[3ds]\n", "[3ds]\nsave_name = \"my-save\"\n");
+        let p = Project::parse(&named, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(p.n3ds_save_name, "my-save");
+        let bad = SAMPLE.replace("[3ds]\n", "[3ds]\nsave_name = \"My Save\"\n");
+        let e = Project::parse(&bad, "/g".into(), "/e".into()).unwrap_err();
+        assert!(e.contains("save_name"), "{e}");
+        // A project name FAT wouldn't keep gets a folder that it does.
+        assert_eq!(save_name_of("My Game!"), "my_game_");
     }
 
     #[test]

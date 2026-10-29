@@ -1209,49 +1209,76 @@ void trino_water_draw(void* mesh, const float* u, void* sheet, uint32_t flags)
 }
 
 // ---------------------------------------------------------------------------
-// Save data: one file on the SD card, replaced atomically (write a temp
-// file, then rename). Framing/checksums live on the Rust side.
+// Save data: each game's A/B slot files in its own folder on the SD card,
+// `sdmc:/3ds/trino/<name>/save.{a,b}` (GitHub #119), each replaced
+// atomically (write a temp file, then rename). The folder comes from Rust
+// (`trino_save_init`, `crate::savedir`); framing, checksums and the
+// migration from the folder every game shared before #119 live there too.
 
-#define TRINO_SAVE_DIR "sdmc:/3ds/trino"
-// Slot 2: the single save file from before the A/B slots (issue #68),
-// read only when neither slot is intact.
-static const char* const TRINO_SAVE_PATHS[3] = {
-    TRINO_SAVE_DIR "/save.a", TRINO_SAVE_DIR "/save.b", TRINO_SAVE_DIR "/save.bin"};
-static const char* const TRINO_SAVE_TMPS[3] = {
-    TRINO_SAVE_DIR "/save.a.tmp", TRINO_SAVE_DIR "/save.b.tmp", TRINO_SAVE_DIR "/save.tmp"};
+#define TRINO_SAVE_ROOT "sdmc:/3ds/trino"
+static char s_save_dir[96] = TRINO_SAVE_ROOT "/game";
+
+// The game's folder, set once at boot (a NUL-terminated path under
+// TRINO_SAVE_ROOT; longer ones are refused and the default stays).
+void trino_save_init(const char* dir)
+{
+    if (dir && strlen(dir) < sizeof(s_save_dir)) strcpy(s_save_dir, dir);
+}
+
+// The file of `slot` (and its temp file): 0/1 the game's own save.a/save.b;
+// 2 the shared save.bin from before the A/B slots (issue #68); 3/4 the
+// shared save.a/save.b every game used before #119. Returns 0 on a bad slot.
+static int trino_save_path(uint32_t slot, int tmp, char* out, size_t cap)
+{
+    static const char* const names[5] = {"save.a", "save.b", "save.bin", "save.a", "save.b"};
+    static const char* const tmps[5] = {"save.a.tmp", "save.b.tmp", "save.tmp", "save.a.tmp",
+                                        "save.b.tmp"};
+    if (slot > 4) return 0;
+    const char* dir = slot < 2 ? s_save_dir : TRINO_SAVE_ROOT;
+    int n = snprintf(out, cap, "%s/%s", dir, tmp ? tmps[slot] : names[slot]);
+    return n > 0 && (size_t)n < cap;
+}
 
 // Returns the slot file's size (0 = none, -1 = error), copying up to `cap`
-// bytes into `dest`. A missing file falls back to its temp file (a crash
-// between the flushed write and the rename).
+// bytes into `dest` (`cap` 0 only asks whether it exists). A missing file
+// falls back to its temp file (a crash between the flushed write and the
+// rename).
 int32_t trino_save_load(uint32_t slot, uint8_t* dest, uint32_t cap)
 {
-    if (slot > 2) return -1;
-    FILE* f = fopen(TRINO_SAVE_PATHS[slot], "rb");
-    if (!f) f = fopen(TRINO_SAVE_TMPS[slot], "rb");
+    char path[128], tmp[128];
+    if (!trino_save_path(slot, 0, path, sizeof(path)) ||
+        !trino_save_path(slot, 1, tmp, sizeof(tmp)))
+        return -1;
+    FILE* f = fopen(path, "rb");
+    if (!f) f = fopen(tmp, "rb");
     if (!f) return 0;
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
     size_t want = (size_t)size < cap ? (size_t)size : cap;
-    size_t got = fread(dest, 1, want, f);
+    size_t got = want ? fread(dest, 1, want, f) : 0;
     fclose(f);
     if (size < 0 || got != want) return -1;
     return (int32_t)size;
 }
 
-// Replace slot `slot` (0 or 1): a temp file, then the rename. Returns 0 on
-// success, -1 on error.
+// Replace the game's own slot `slot` (0 or 1; the shared files are never
+// written): a temp file, then the rename. Returns 0 on success, -1 on error.
 int32_t trino_save_store(uint32_t slot, const uint8_t* src, uint32_t len)
 {
-    if (slot > 1) return -1;
+    char path[128], tmp[128];
+    if (slot > 1 || !trino_save_path(slot, 0, path, sizeof(path)) ||
+        !trino_save_path(slot, 1, tmp, sizeof(tmp)))
+        return -1;
     mkdir("sdmc:/3ds", 0777);
-    mkdir(TRINO_SAVE_DIR, 0777);
-    FILE* f = fopen(TRINO_SAVE_TMPS[slot], "wb");
+    mkdir(TRINO_SAVE_ROOT, 0777);
+    mkdir(s_save_dir, 0777);
+    FILE* f = fopen(tmp, "wb");
     if (!f) return -1;
     size_t put = fwrite(src, 1, len, f);
     if (fclose(f) != 0 || put != len) return -1;
-    remove(TRINO_SAVE_PATHS[slot]);
-    return rename(TRINO_SAVE_TMPS[slot], TRINO_SAVE_PATHS[slot]) == 0 ? 0 : -1;
+    remove(path);
+    return rename(tmp, path) == 0 ? 0 : -1;
 }
 
 // Wait two vblanks for the last presented frame's display transfer to land,

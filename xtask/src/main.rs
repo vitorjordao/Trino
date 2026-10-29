@@ -24,6 +24,7 @@ mod impostor;
 mod model;
 mod n3ds;
 mod n3ds_cia;
+mod n3ds_saves;
 mod n64;
 mod net;
 mod package;

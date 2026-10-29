@@ -328,6 +328,21 @@ mod n3ds {
         platform: &mut N3dsPlatform,
     ) {
         const DT: f32 = 1.0 / 60.0;
+        // The game's own SD save folder (GitHub #119), before any step saves:
+        // `cargo xtask test 3ds` seeded the folder every game shared before
+        // it, and the first read must migrate that save (`seed=1`).
+        runtime::log("TRINO_STEP:save folder\n");
+        {
+            let mut buf = [0u8; 64];
+            let n = trino_core::Platform::save_read(platform, &mut buf).map_or(0, |n| n.min(64));
+            let status = trino_core::Platform::save_status(platform);
+            runtime::log(&format!(
+                "TRINO_STEP:save folder dir={} status={} len={n} seed={}\n",
+                platform.save_dir(),
+                status.label(),
+                (&buf[..n] == b"trino-119-legacy-seed") as u8
+            ));
+        }
         // 0) Engine services through the portable traits (text, blobs, save).
         if let Err(e) = castle64::selftest::engine_checks(renderer, platform) {
             runtime::log(&format!("TRINO_TEST_FAIL:engine: {e}\n"));

@@ -708,6 +708,6 @@ fn read_bytes(romfs_path: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn read_text(romfs_path: &str) -> Option<String> {
+pub(crate) fn read_text(romfs_path: &str) -> Option<String> {
     String::from_utf8(read_bytes(romfs_path)?).ok()
 }

@@ -1,0 +1,30 @@
+[ares] TRINO_HW n64 ram=8M tier=expanded
+[ares] TRINO_MEM: ram=8388608 heap_total=6426576 before_assets=869296 boot_assets=473800
+[ares] TRINO_STEP:asset groups ok load_frames=2 level_bytes=2407 heap_baseline=1738288 heap_drift=1536 cycles=333 soak_frames=1000
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=32348 draw_us=12758
+[ares] TRINO_HEAP:1989600/6426576 top=4294704 batch=8192 rsp=372640/372640 arena=65536/65536 arena_free=0 before the micro scenes
+[ares] TRINO_HEAP:batch=102592 trims=2 after the micro scenes
+[ares] TRINO_HEAP:2107416/6426576 peak=2107416 top=4215496 rsp=382520/382520 arena=65536/65536 after the bot and the perf scenes
+[ares] TRINO_HEAP:top=4215496 rsp=382520 arena=65536/65536 arena_free=0 before the anim steps
+[ares] TRINO_STEP:anim steps heap before=2107416 loaded=2137272 after=2107416
+[ares] TRINO_HEAP:top=4215496 rsp=382520 arena=65536/65536 arena_free=0 after the anim steps
+[ares] TRINO_TEST_PASS
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/shadows_far.png matches
+[ares] TRINO_HW n64 ram=4M tier=base
+[ares] TRINO_MEM: ram=4194304 heap_total=2232272 before_assets=791472 boot_assets=470072
+[ares] TRINO_STEP:asset groups ok load_frames=2 level_bytes=2407 heap_baseline=1658784 heap_drift=1528 cycles=333 soak_frames=1000
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=31739 draw_us=12578
+[ares] TRINO_HEAP:1910080/2232272 top=182032 batch=8192 rsp=371816/371816 arena=65536/65536 arena_free=0 before the micro scenes
+[ares] TRINO_HEAP:batch=102592 trims=2 after the micro scenes
+[ares] TRINO_HEAP:2027896/2232272 peak=2027896 top=102824 rsp=381696/381696 arena=65536/65536 after the bot and the perf scenes
+[ares] TRINO_HEAP:top=102824 rsp=381696 arena=65536/65536 arena_free=0 before the anim steps
+[ares] TRINO_STEP:anim steps heap before=2027896 loaded=2057744 after=2027896
+[ares] TRINO_HEAP:top=102824 rsp=381696 arena=65536/65536 arena_free=0 after the anim steps
+[ares] TRINO_TEST_PASS
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/fix3/tests/golden/n64/shadows_far.png matches

@@ -1,0 +1,6 @@
+after2 particle_effects_preview_caps_and_files: pass=10 fail=0
+after2 toasts_float_over_the_layout_audit: pass=10 fail=0
+after particle_effects_preview_caps_and_files: pass=0 fail=10
+after editor_layout_is_clean_at_minimum_and_default_sizes: pass=10 fail=0
+before particle_effects_preview_caps_and_files: pass=9 fail=1
+before editor_layout_is_clean_at_minimum_and_default_sizes: pass=8 fail=2

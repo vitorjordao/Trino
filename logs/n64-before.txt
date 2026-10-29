@@ -1,0 +1,24 @@
+[ares] TRINO_HW n64 ram=8M tier=expanded
+[ares] TRINO_MEM: ram=8388608 heap_total=6437264 before_assets=803752 boot_assets=544664
+[ares] TRINO_STEP:asset groups ok load_frames=2 level_bytes=2407 heap_baseline=1743576 heap_drift=1512 cycles=333 soak_frames=1000
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=26764 draw_us=34685
+[ares] TRINO_HEAP:1994792/6437264 top=4306128 before the micro scenes
+[ares] TRINO_HEAP:2112608/6437264 peak=2112608 top=4226920 after the bot and the perf scenes
+[ares] TRINO_STEP:anim steps heap before=2112608 loaded=2142416 after=2112608
+[ares] TRINO_TEST_PASS
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/shadows_far.png matches
+[ares] TRINO_HW n64 ram=4M tier=base
+[ares] TRINO_MEM: ram=4194304 heap_total=2242960 before_assets=725928 boot_assets=540928
+[ares] TRINO_STEP:asset groups ok load_frames=1 level_bytes=2415 heap_baseline=1664056 heap_drift=2920 cycles=499 soak_frames=1000
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=28922 draw_us=32841
+[ares] TRINO_HEAP:1915256/2242960 top=191296 before the micro scenes
+[ares] TRINO_HEAP:2033072/2242960 peak=2033072 top=112088 after the bot and the perf scenes
+[ares] TRINO_STEP:anim steps heap before=2033072 loaded=2062880 after=2033072
+[ares] TRINO_TEST_PASS
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/base3/tests/golden/n64/shadows_far.png matches

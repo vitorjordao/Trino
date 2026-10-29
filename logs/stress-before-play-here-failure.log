@@ -1,0 +1,84 @@
+
+running 1 test
+test ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes ... FAILED
+
+failures:
+
+---- ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes stdout ----
+trino-assets: rebake failed:
+asset bake failed with 1 error(s):
+  - `sprites/selftest_photo_etc1`: 3ds ETC1 keeps 28.8 dB < min_psnr 40 (opaque color) — use `auto` (picks RGB565, 40.5 dB), a format that passes (RGB565, RGBA8), or lower `min_psnr`
+
+trino-assets: rebake failed:
+asset bake failed with 1 error(s):
+  - `sprites/selftest_photo_etc1`: 3ds ETC1 keeps 28.8 dB < min_psnr 40 (opaque color) — use `auto` (picks RGB565, 40.5 dB), a format that passes (RGB565, RGBA8), or lower `min_psnr`
+
+Button `File` [[72.5 4.0] - [98.9 28.0]]
+Button `Edit` [[106.9 4.0] - [134.9 28.0]]
+Button `Arrange` [[142.9 4.0] - [198.3 28.0]]
+Button `Create` [[206.3 4.0] - [252.8 28.0]]
+Button `View` [[260.8 4.0] - [296.1 28.0]]
+Button `Help` [[304.1 4.0] - [337.5 28.0]]
+Button `  Stop` [[10.0 36.0] - [94.0 64.0]]
+Button `` [[184.1 38.0] - [215.1 62.0]]
+Button `` [[219.1 38.0] - [250.1 62.0]]
+Button `` [[254.1 38.0] - [285.1 62.0]]
+Button `` [[167.0 111.5] - [201.0 138.5]]
+Button `ground` [[12.0 152.0] - [201.0 176.0]]
+Button `tile-0-0-4` [[12.0 182.0] - [201.0 206.0]]
+Button `tile-4-0-2` [[12.0 212.0] - [201.0 236.0]]
+Button `tile-6-0-2` [[12.0 242.0] - [201.0 266.0]]
+Button `tile-8-0-2` [[12.0 272.0] - [201.0 296.0]]
+Button `tile-10-0-2` [[12.0 302.0] - [201.0 326.0]]
+Button `tile-12-0-2` [[12.0 332.0] - [201.0 356.0]]
+Button `tile-14-0-2` [[12.0 362.0] - [201.0 386.0]]
+Button `tile-16-0-4` [[12.0 392.0] - [201.0 416.0]]
+Button `tile-4-2-2` [[12.0 422.0] - [201.0 446.0]]
+Button `tile-6-2-2` [[12.0 452.0] - [201.0 476.0]]
+Button `tile-8-2-2` [[12.0 482.0] - [201.0 506.0]]
+Button `tile-10-2-1` [[12.0 512.0] - [201.0 536.0]]
+Button `tile-11-2-1` [[12.0 542.0] - [201.0 566.0]]
+Button `` [[736.7 110.0] - [767.7 134.0]]
+Button `game.sav` [[680.0 219.0] - [741.5 243.0]]
+Button `N64` [[242.5 130.0] - [288.8 154.0]]
+Button `3DS` [[290.8 130.0] - [336.5 154.0]]
+Button `PC` [[338.5 130.0] - [377.0 156.0]]
+Button `Web` [[379.0 131.0] - [427.0 155.0]]
+ComboBox `Game view quality` [[429.0 131.0] - [501.0 155.0]]
+CheckBox `Dynamic resolution` [[503.0 131.0] - [534.0 155.0]]
+Button `` [[544.0 130.0] - [577.0 156.0]]
+Button `` [[579.0 130.0] - [612.0 156.0]]
+Button `  Replay` [[227.0 341.0] - [309.0 365.0]]
+Button `` [[227.0 371.0] - [258.0 395.0]]
+Button `` [[262.0 371.0] - [293.0 395.0]]
+Button `` [[297.0 371.0] - [328.0 395.0]]
+Slider `` [[332.0 371.0] - [452.0 395.0]]
+Button ` Models 111` [[212.0 464.0] - [312.4 490.0]]
+Button ` Prefabs 2` [[314.4 464.0] - [408.8 490.0]]
+Button ` Materials 9` [[410.8 464.0] - [514.7 490.0]]
+Button ` Sprites 37` [[516.7 464.0] - [616.4 490.0]]
+Button ` Particles 2` [[212.0 496.0] - [312.5 522.0]]
+Button ` Audio 13` [[314.5 496.0] - [402.3 522.0]]
+Label `` [[359.0 171.0] - [375.0 190.0]]
+Label `` [[383.0 171.0] - [700.6 187.0]]
+Label `` [[359.0 122.0] - [375.0 141.0]]
+Label `` [[383.0 122.0] - [709.9 138.0]]
+Label `` [[359.0 73.0] - [375.0 92.0]]
+Label `` [[383.0 73.0] - [700.6 89.0]]
+
+thread 'ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes' (187804) panicked at crates/editor/src/layout_audit.rs:146:5:
+Play here replay at 960x600: layout problems:
+Button `PC` [[338.5 130.0] - [377.0 156.0]] overlaps Label `` [[359.0 122.0] - [375.0 141.0]]
+Button `Web` [[379.0 131.0] - [427.0 155.0]] overlaps Label `` [[383.0 122.0] - [709.9 138.0]]
+ComboBox `Game view quality` [[429.0 131.0] - [501.0 155.0]] overlaps Label `` [[383.0 122.0] - [709.9 138.0]]
+CheckBox `Dynamic resolution` [[503.0 131.0] - [534.0 155.0]] overlaps Label `` [[383.0 122.0] - [709.9 138.0]]
+Button `` [[544.0 130.0] - [577.0 156.0]] overlaps Label `` [[383.0 122.0] - [709.9 138.0]]
+Button `` [[579.0 130.0] - [612.0 156.0]] overlaps Label `` [[383.0 122.0] - [709.9 138.0]]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui_tests::editor_layout_is_clean_at_minimum_and_default_sizes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 143 filtered out; finished in 15.38s
+

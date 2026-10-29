@@ -1,0 +1,20 @@
+
+running 1 test
+test ui_tests::particle_effects_preview_caps_and_files ... FAILED
+
+failures:
+
+---- ui_tests::particle_effects_preview_caps_and_files stdout ----
+
+thread 'ui_tests::particle_effects_preview_caps_and_files' (181810) panicked at crates/editor/src/ui_tests.rs:2013:9:
+assertion `left == right` failed: PC preview
+  left: 23
+ right: 24
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ui_tests::particle_effects_preview_caps_and_files
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 143 filtered out; finished in 8.84s
+

@@ -1,0 +1,7 @@
+[ares] TRINO_HW n64 ram=4M tier=base
+[ares] TRINO_MEM: ram=4194304 heap_total=2232272 before_assets=1151920 boot_assets=339640
+[ares] TRINO_STEP:asset groups ok load_frames=1 level_bytes=1375 heap_baseline=1787216 heap_drift=856 cycles=334 soak_frames=1000
+[ares] TRINO_UI_COST: nodes=126 draws=230 layout_us=32812 draw_us=12480
+[ares] TRINO_HEAP:1962912/2232272 top=128992 batch=8192 rsp=371816/371816 arena=372480/425984 arena_free=53504 before the micro scenes
+[ares] TRINO_PANIC: panicked at /home/v/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:699:9:
+[ares] memory allocation of 79200 bytes failed

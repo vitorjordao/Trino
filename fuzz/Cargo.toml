@@ -301,3 +301,10 @@ path = "fuzz_targets/pc_renderer.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "ron_scene"
+path = "fuzz_targets/ron_scene.rs"
+test = false
+doc = false
+bench = false

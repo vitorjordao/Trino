@@ -160,6 +160,8 @@ struct VorbisDecode {
 
 impl VorbisDecode {
     fn open(bytes: Arc<[u8]>, frames: usize) -> Result<Self, String> {
+        // lewton reserves what a codebook's header says first (#121).
+        trino_core::vorbis::check(&bytes).map_err(|e| format!("Vorbis stream: {e:?}"))?;
         let reader = OggStreamReader::new(Cursor::new(bytes.clone()))
             .map_err(|e| format!("Vorbis stream: {e}"))?;
         Ok(VorbisDecode {

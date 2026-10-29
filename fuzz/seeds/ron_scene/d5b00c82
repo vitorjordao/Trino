@@ -1,0 +1,20 @@
+// Hardware-tier probe for the console self-tests (castle64::selftest::
+// hw_tier, issue #54): one card, drawn with `models/selftest_tier_card` on
+// the expanded tiers (the N64 with the Expansion Pak, the New 3DS) and
+// with `models/selftest_card` everywhere else. Baked as
+// `[scenes.selftest-tier]`: the consoles carry both copies and load their
+// hardware's.
+(
+    version: 5,
+    name: "selftest-tier",
+    entities: [
+        (
+            name: "probe",
+            model: Some((path: "models/selftest_card")),
+            platforms: (
+                n64_expanded: Some((model: Some("models/selftest_tier_card"))),
+                n3ds_new: Some((model: Some("models/selftest_tier_card"))),
+            ),
+        ),
+    ],
+)

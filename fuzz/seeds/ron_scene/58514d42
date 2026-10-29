@@ -1,0 +1,20 @@
+(
+    version: 3,
+    name: "main",
+    entities: [
+        (
+            name: "player",
+            transform: (
+                pos: (144.0, 104.0, 0.0),
+                rot: (0.0, 0.0, 0.0),
+                scale: (1.0, 1.0, 1.0),
+            ),
+            sprite: Some((
+                path: "sprites/player",
+                flip_x: false,
+                flip_y: false,
+                tint: (255, 255, 255, 255),
+            )),
+        ),
+    ],
+)

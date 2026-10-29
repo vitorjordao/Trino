@@ -109,11 +109,22 @@ pub fn tsn2_decode(data: &[u8]) {
     if blob.frames as usize > crate::core_targets::MAX_DECODE {
         return;
     }
+    // A prefix of the audio (issue #121): the setup header and the first
+    // packets are where a bad file goes wrong; minutes of valid audio
+    // only cost the fuzzer time.
     keep(
-        trino_platform_pc::audio::decode_blob(blob.codec, blob.sample_rate, blob.payload)
-            .map(|(r, s)| (r, s.len())),
+        trino_platform_pc::audio::decode_blob_limit(
+            blob.codec,
+            blob.sample_rate,
+            blob.payload,
+            TSN2_DECODE_SAMPLES,
+        )
+        .map(|(r, s)| (r, s.len())),
     );
 }
+
+/// The samples `tsn2_decode` decodes of a payload at most.
+pub const TSN2_DECODE_SAMPLES: usize = 1 << 14;
 
 /// The 3DS's `T3AU` sound container (`asset-pipeline`, read back by
 /// `audio inspect` and the editor).
@@ -126,10 +137,11 @@ pub fn t3au(data: &[u8]) {
     }
 }
 
-/// Every RON format an agent or the editor writes: scenes, prefabs,
-/// materials, UI screens, string tables, achievements and its lock,
-/// palettes, physics layers, animation graphs.
-pub fn ron(data: &[u8]) {
+/// Scenes and prefabs, the editor's biggest RON files (split out of `ron`
+/// in issue #121: each full-document parse of a 20 KB scene costs ~1 ms,
+/// and `ron` paid six of them per input). A scene the editor writes back
+/// parses to the same scene.
+pub fn ron_scene(data: &[u8]) {
     use trino_scene as s;
     let Some(t) = text(data) else { return };
     if let Ok(scene) = s::Scene::from_ron(t) {
@@ -139,6 +151,14 @@ pub fn ron(data: &[u8]) {
         assert_eq!(back.to_ron(), out, "scene RON round trip");
     }
     keep(s::prefab::Prefab::from_ron(t).is_ok());
+}
+
+/// Every other RON format an agent or the editor writes: materials, UI
+/// screens, string tables, achievements and its lock, palettes, physics
+/// layers, animation graphs (scenes and prefabs: [`ron_scene`]).
+pub fn ron(data: &[u8]) {
+    use trino_scene as s;
+    let Some(t) = text(data) else { return };
     keep(s::material::MaterialDef::from_ron(t).is_ok());
     if let Ok(screen) = s::ui::ScreenDef::from_ron(t) {
         keep(s::ui::validate(&screen).len());

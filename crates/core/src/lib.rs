@@ -66,6 +66,7 @@ pub mod trace;
 pub mod ui;
 pub mod version;
 pub mod vis;
+pub mod vorbis;
 pub mod water;
 
 pub use access::{

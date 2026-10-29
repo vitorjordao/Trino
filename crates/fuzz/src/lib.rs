@@ -94,7 +94,7 @@ pub const TARGETS: &[Target] = &[
     },
     Target {
         name: "tsn2",
-        formats: &["TSN2"],
+        formats: &["TSN2", "Vorbis setup header"],
         run: c::tsn2,
         max_len: 1 << 16,
         seeds: Seeds::Magic(&[b"TSN2"]),
@@ -313,14 +313,7 @@ pub const TARGETS: &[Target] = &[
     #[cfg(feature = "host")]
     Target {
         name: "ron",
-        formats: &[
-            "scene RON",
-            "prefab RON",
-            "material RON",
-            "ui RON",
-            "i18n RON",
-            "achievements RON",
-        ],
+        formats: &["material RON", "ui RON", "i18n RON", "achievements RON"],
         run: host_targets::ron,
         max_len: 1 << 15,
         seeds: Seeds::Files(&[
@@ -331,6 +324,14 @@ pub const TARGETS: &[Target] = &[
             "ron",
             "lock",
         ]),
+    },
+    #[cfg(feature = "host")]
+    Target {
+        name: "ron_scene",
+        formats: &["scene RON", "prefab RON"],
+        run: host_targets::ron_scene,
+        max_len: 1 << 15,
+        seeds: Seeds::Files(&["scene.ron", "prefab.ron"]),
     },
     #[cfg(feature = "host")]
     Target {

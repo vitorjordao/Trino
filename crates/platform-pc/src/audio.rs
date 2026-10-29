@@ -493,18 +493,38 @@ pub fn decode_blob(
     rate: u32,
     payload: &[u8],
 ) -> Result<(u32, Vec<f32>), String> {
+    decode_blob_limit(codec, rate, payload, usize::MAX)
+}
+
+/// [`decode_blob`] that stops once `limit` samples are out (the last
+/// packet's may pass it): the `tsn2_decode` fuzz target decodes a bounded
+/// prefix of every payload (issue #121), so its time goes to the parsers,
+/// not to minutes of valid audio.
+pub fn decode_blob_limit(
+    codec: SoundCodec,
+    rate: u32,
+    payload: &[u8],
+    limit: usize,
+) -> Result<(u32, Vec<f32>), String> {
     match codec {
-        SoundCodec::Pcm16 => Ok((rate, pcm16(payload))),
+        SoundCodec::Pcm16 => {
+            let n = payload.len().min(limit.saturating_mul(2));
+            Ok((rate, pcm16(&payload[..n])))
+        }
         SoundCodec::Vorbis => {
             use lewton::inside_ogg::OggStreamReader;
             use lewton::samples::InterleavedSamples;
+            // lewton reserves what a codebook's header says before reading
+            // it: a damaged file asked for 40 GB (`tsn2_decode`, #121).
+            trino_core::vorbis::check(payload).map_err(|e| format!("Vorbis: {e:?}"))?;
             let mut r = OggStreamReader::new(std::io::Cursor::new(payload))
                 .map_err(|e| format!("Vorbis: {e}"))?;
             let rate = r.ident_hdr.audio_sample_rate;
             let mut out = Vec::new();
-            while let Some(p) = r
-                .read_dec_packet_generic::<InterleavedSamples<f32>>()
-                .map_err(|e| format!("Vorbis: {e}"))?
+            while out.len() < limit
+                && let Some(p) = r
+                    .read_dec_packet_generic::<InterleavedSamples<f32>>()
+                    .map_err(|e| format!("Vorbis: {e}"))?
             {
                 let c = p.channel_count.max(1);
                 out.extend(

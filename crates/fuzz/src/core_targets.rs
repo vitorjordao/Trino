@@ -272,7 +272,10 @@ pub fn tsn2(data: &[u8]) {
         let h = blob.header();
         keep(h);
         keep(blob);
+        // The bound check the PC and the Web run before lewton (#121).
+        keep(trino_core::vorbis::check(blob.payload));
     }
+    keep(trino_core::vorbis::check(data));
 }
 
 /// TMIX: the project mix, applied to a bus mixer.

@@ -477,6 +477,10 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     if test_mode {
         std::fs::write(romfs.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // `cargo xtask save soak` (issue #121): the app only saves a counter.
+    if std::env::var_os("TRINO_SAVE_SOAK").is_some() {
+        std::fs::write(romfs.join("save_soak"), "1").map_err(|e| e.to_string())?;
+    }
     // The game's own SD save folder (GitHub #119); a self-test build gets
     // its own, so a test run never touches the player's save.
     std::fs::write(romfs.join("save_name"), save_name(p, test_mode)).map_err(|e| e.to_string())?;
@@ -491,9 +495,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
 }
 
 /// The RomFS's `save_name`: the project's `[3ds] save_name`, `-selftest`
-/// appended for a self-test build (`trino_platform_3ds::savedir`).
+/// appended for a self-test build and `-soak` for `save soak`'s
+/// (`trino_platform_3ds::savedir`): neither touches the player's save.
 pub fn save_name(p: &Project, test_mode: bool) -> String {
-    if test_mode {
+    if std::env::var_os("TRINO_SAVE_SOAK").is_some() {
+        format!("{}-soak", p.n3ds_save_name)
+    } else if test_mode {
         format!("{}-selftest", p.n3ds_save_name)
     } else {
         p.n3ds_save_name.clone()
@@ -746,6 +753,11 @@ log_filter\\default=false
 confirmClose=false
 confirmClose\\default=false
 ";
+
+/// Azahar's log file (`save soak` finds the SD card beside it).
+pub(crate) fn azahar_log_path() -> Option<PathBuf> {
+    azahar_log()
+}
 
 fn azahar_log() -> Option<PathBuf> {
     azahar_paths().map(|(log, _)| log)

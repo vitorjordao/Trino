@@ -496,6 +496,10 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     if test_mode {
         std::fs::write(fsdir.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // `cargo xtask save soak` (issue #121): the app only saves a counter.
+    if std::env::var_os("TRINO_SAVE_SOAK").is_some() {
+        std::fs::write(fsdir.join("save_soak"), "1").map_err(|e| e.to_string())?;
+    }
     // `[n64] rsp_arena_kb` (GitHub #110): read by `N64Host::boot`.
     let arena = fsdir.join("rsp_arena");
     match p.n64_rsp_arena_kb {

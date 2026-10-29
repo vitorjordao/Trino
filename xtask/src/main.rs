@@ -38,6 +38,7 @@ mod quality;
 mod replay;
 mod river_assets;
 mod save_cmd;
+mod save_soak;
 mod scene;
 mod services;
 mod showcase_assets;
@@ -695,6 +696,10 @@ fn main() -> ExitCode {
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             fuzz::run(&repo_root(), &rest)
+        }
+        (Some("save"), Some("soak")) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            save_soak::run(&project, &rest, device.as_ref())
         }
         (Some("save"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

@@ -33,6 +33,7 @@ mod levels;
 pub mod perf;
 pub mod progress;
 pub mod selftest;
+pub mod soak;
 
 use core::fmt::Write as _;
 use levels::{BlockKind, DoorColor, LEVELS, Level, TOTAL_STARS};

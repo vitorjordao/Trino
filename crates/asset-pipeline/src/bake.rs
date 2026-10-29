@@ -178,8 +178,12 @@ pub fn bake_all_with(
                 platform,
                 crate::texture::Source::Sprite,
                 &|p| decl.settings(p),
-                (w, h, &rgba),
-                n64.as_ref().map(|(w, h, px)| (*w, *h, &px[..])),
+                (
+                    w,
+                    h,
+                    &rgba,
+                    n64.as_ref().map(|(w, h, px)| (*w, *h, &px[..])),
+                ),
             )?;
             Ok(BakedEntry {
                 logical: logical.clone(),
@@ -531,8 +535,7 @@ pub fn bake_all_with(
                 platform,
                 crate::texture::Source::FontAtlas,
                 &|p| decl.settings(p),
-                (font.width, font.height, &font.rgba),
-                None,
+                (font.width, font.height, &font.rgba, None),
             )?;
             Ok(vec![
                 BakedEntry {
@@ -851,6 +854,9 @@ struct BakedTexture {
     changed: bool,
 }
 
+/// A master's width, height and RGBA8 pixels.
+type Pixels<'a> = (u32, u32, &'a [u8]);
+
 fn bake_texture(
     out_dir: &Path,
     id: u32,
@@ -858,8 +864,8 @@ fn bake_texture(
     platform: Platform,
     source: crate::texture::Source,
     settings: &dyn Fn(Platform) -> crate::texture::TextureSettings,
-    (w, h, rgba): (u32, u32, &[u8]),
-    n64: Option<(u32, u32, &[u8])>,
+    // The master, and the N64's own master when it overrides it.
+    (w, h, rgba, n64): (u32, u32, &[u8], Option<Pixels<'_>>),
 ) -> Result<BakedTexture, String> {
     let choose = |p: Platform| crate::texture::choose(p, logical, source, &settings(p), w, h, rgba);
     let choice = choose(platform)?;

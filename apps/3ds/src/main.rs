@@ -44,6 +44,17 @@ mod n3ds {
         // Top screen: 400x240.
         let mut game = castle64::Castle64Game::new(Vec2::new(400.0, 240.0));
 
+        // `cargo xtask save soak 3ds` (issue #121): save a counter every
+        // frame until the power (or the emulator) goes.
+        if N3dsAssets::exists("/save_soak") {
+            let mut soak = castle64::soak::SaveSoak::boot(&mut platform);
+            while runtime::running() {
+                soak.step(&mut platform);
+                trino_core::Renderer::begin_frame(&mut renderer, trino_core::Color::rgb(60, 0, 0));
+                trino_core::Renderer::end_frame(&mut renderer);
+            }
+            return;
+        }
         if N3dsAssets::exists("/test_mode") {
             run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
             return;

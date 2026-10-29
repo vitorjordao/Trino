@@ -47,6 +47,16 @@ mod n64 {
 
         let mut game = castle64::Castle64Game::new(Vec2::new(320.0, 240.0));
 
+        // `cargo xtask save soak n64` (issue #121): save a counter, an
+        // EEPROM block a frame, until the power goes.
+        if N64Assets::exists("/save_soak") {
+            let mut soak = castle64::soak::SaveSoak::boot(&mut platform);
+            loop {
+                soak.step(&mut platform);
+                trino_core::Renderer::begin_frame(&mut renderer, trino_core::Color::rgb(60, 0, 0));
+                trino_core::Renderer::end_frame(&mut renderer);
+            }
+        }
         if N64Assets::exists("/test_mode") {
             run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
         } else {

@@ -95,10 +95,22 @@ test runs in the dev profile, which keeps overflow checks on.
 
 - **Layouts.** N64: the EEPROM's A/B slots (`save::plan_write`, a block a step). PC:
   `<save>.a` / `<save>.b` (`trino_platform_pc::system::SaveFiles`). Web: `<key>.a` /
-  `<key>.b` (`trino_platform_web::saves`). 3DS: `sdmc:/3ds/trino/save.a` / `save.b`
-  (the shim's slot argument). All files use `save::SlotStore` + `read_slot_files` /
-  `write_slot_files`; the save from before slots (PC raw, Web bare key, 3DS `save.bin`)
-  is read only when no slot is intact.
+  `<key>.b` (`trino_platform_web::saves`). 3DS: `sdmc:/3ds/trino/<save_name>/save.a` /
+  `save.b` (GitHub #119, `trino_platform_3ds::savedir`; the shim opens files 0–4: own
+  A/B, then the shared folder's `save.bin`, `save.a`, `save.b`). All files use
+  `save::SlotStore` + `read_slot_files` / `write_slot_files`; the save from before slots
+  (PC raw, Web bare key) is read only when no slot is intact.
+- **3DS save folders (#119).** `trino.toml` `[3ds] save_name` (default `[project] name`
+  made FAT-safe; the engine: `castle64`, like its PC and Web saves) is staged as the
+  RomFS file `save_name`; self-test builds use `<name>-selftest`, `save soak` builds
+  `<name>-soak`. A game's folder with **no slot file at all** reads the shared
+  `sdmc:/3ds/trino/save.{a,b}` (then `save.bin`) once, as an intact save (status `Ok`:
+  a move, not damage), and never writes it. A folder with a damaged slot does not
+  migrate: `read_slot_files` calls `read_legacy` whenever no slot is *intact*, so gate a
+  migration on the files being absent, or one game's damaged save loads another's. Boot
+  logs `TRINO_SAVE_PATH <dir> own=0|1`; `test 3ds` seeds the shared folder, empties the
+  self-test's, checks the `save folder` step read the seed (`seed=1`) and that the shared
+  files are byte-identical after the run, then restores them (`xtask/src/n3ds_saves.rs`).
 - **The checksum covers the header** (flag 4): a flipped sequence number can't reorder
   saves. Old EEPROM saves without the flag still read.
 - **`Platform::save_status()`** after a read: `Empty`, `Ok`, `RecoveredFromBackup`,
@@ -107,6 +119,22 @@ test runs in the dev profile, which keeps overflow checks on.
 - **Versions:** write `save::write_versioned(V, data, out)`; read with
   `save::load_game(self, platform, buf, V)` and implement `Game::migrate_save(from,
   data, len)`. A newer version loads nothing (`from > V`): don't overwrite it silently.
+  The adopters (#121): castle64 (`progress.rs`, version 1: stars, coins per level,
+  stomps, the achievements' pack), Solid Eleven (`SAVE_FORMAT` 1; version 0 is the
+  `SE11` v1–v3 career image, which `Career::load` reads and `migrate_save` rewrites) and
+  the starter (version 0 is its bare achievements pack, kept as is). Each keeps a
+  `blocked` flag on `from > V` and never saves after it.
+- **Saves off in tests.** castle64's save is off unless the host asks
+  (`with_saves` / `set_saves`): the PC outside smoke, bot, replay and recording runs, the
+  N64 and 3DS outside the self-test, the Web outside `?frames`, `?replay`, `?record`.
+  `reset()` (a replay's start) turns it off. A game that loads a save at boot would
+  change goldens, the bot run, the perf scenes and replays. A console host flips it in
+  place (`set_saves`): `game = game.with_saves()` moves the struct on the N64's stack.
+- **Tell the player.** After `load_game`: `RecoveredFromBackup` → "restored from its
+  backup", `Corrupted` → "lost, starting over", `from > V` → "a newer version's save,
+  not saving". Solid Eleven: an amber `warn` line in `ui/toast.ui.ron` (re-export with
+  `ui export`, strings in both tables, `i18n export --rust`). The starter:
+  `ui/save_notice.ui.ron` once at start, before the crash question when both wait.
 - **Fault injection:** `platform.save_fault(SaveFault::{FlipNewest, TearNewest,
   FlipAll})` (tests only); `cargo xtask save corrupt <file> --mode flip|truncate
   [--slot newest|a|b|all] [--at N]` by hand; `cargo xtask save inspect <file> --json`
@@ -120,6 +148,16 @@ test runs in the dev profile, which keeps overflow checks on.
   whole blocks from a block's start is a read-modify-write in Rust.
 - The `save recovery` step logs `TRINO_STEP:save recovery k/7` per stage: a hang names
   its stage.
+- **Power cuts on a real medium:** `cargo xtask save soak 3ds` (Azahar killed with
+  SIGKILL after 3–40 saves, `--cycles` times; each boot must read the last finished save
+  or a later one, never `corrupted`/`empty`), `--device sc64|everdrive|network` for a
+  human to cut the power (`docs/HARDWARE.md` › Save power cuts). ares can't stand in for
+  the N64: it writes `<rom>.eeprom` only when it exits. The log lags the writes by a
+  poll, so the check is "≥ the last `wrote` seen", not "==".
+- **Tools for console saves:** `save inspect <dir>` reads a 3DS SD folder (`saves::
+  SdFolder`, the same migration rule as `savedir`), an ares `.eeprom` is a medium
+  image (2 KB for 16 Kbit; decoded as written, no byte swap). The editor's Saves tab has
+  PC / N64 (ares) / 3DS (Azahar) sources (`TRINO_EDITOR_SAVES`, `TRINO_AZAHAR_SDMC`).
 
 ## Miri and AddressSanitizer
 

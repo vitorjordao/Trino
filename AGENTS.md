@@ -1486,6 +1486,17 @@ cargo test --workspace
   (`package 3ds --cia --selftest` once built a non-test CIA).
 - **`--json` output must be JSON only:** route child processes' stdout to stderr
   (`mksquashfs`'s progress bar broke `package pc --json`).
+- **A game that loads its save at boot changes every test that plays it.** castle64's
+  save is off unless a playing host turns it on (`with_saves`/`set_saves`), and
+  `reset()` turns it off; never enable a save in smoke, bot, replay, recording, perf or
+  self-test runs (goldens and replays would read the player's progress).
+- **A 3DS save migration must check that the game's files are absent, not damaged.**
+  `read_slot_files` calls `read_legacy` whenever no slot is intact; migrating then would
+  load another game's shared save over this game's damaged one (`savedir::GameSlots`).
+- **Strict mode's N64 TMEM check needs the bake's formats** (`n64_format` in the PC
+  index → `PcRenderer::set_texture_format`, GitHub #125). A host that uploads sprites by
+  itself and skips `texture_formats()` falls back to 16-bit texels: CI atlases fail and
+  CI over 2 KB pass. Any new TMEM count goes through `Caps::texture_texels`.
 - **Consoles keep achievements in the game's save, not an engine region:** reserving
   EEPROM would move the two-slot layout and shrink every game's capacity. Store
   `AchievementState::pack_for` and call `restore_achievements` after loading.

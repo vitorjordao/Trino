@@ -152,3 +152,30 @@ Each input is in `fuzz/regressions/<target>/` and replays in `cargo test`.
   tests cut writes at every byte (`save_slots.rs`, `save_recovery.rs`).
 - **The C side of the 3DS T3AU loader** is checked by hand against `T3au::parse`, not
   fuzzed (it is C).
+
+## Addendum (2026-10-29): saves per game, versioned games, power cuts (GitHub #119, #121)
+
+- **3DS saves per game (#119).** `sdmc:/3ds/trino/<save_name>/save.{a,b}`, the name from
+  `trino.toml` `[3ds] save_name` (default `[project] name`; the engine's castle64 is
+  `castle64`, its PC and Web name), staged in the RomFS; self-test builds use
+  `<name>-selftest`. The decisions are plain Rust over a `Files` trait
+  (`trino_platform_3ds::savedir`, tested on the host); the shim only opens files 0–4
+  (own A/B, shared `save.bin`/A/B) and writes only the own two. A folder with no slot
+  file at all migrates the shared save once (read, never written); one with a damaged
+  slot does not, so a damaged save of one game never loads another's. The shared folder
+  stays as it was: an older build of any game still reads it. A `.cia` could use the
+  title's own save archive (`ARCHIVE_SAVEDATA`) instead: a separate item.
+- **Versioned games (#121).** castle64 (new: its progress and achievements, version 1),
+  Solid Eleven (version 0 = its `SE11` career image, migrated by `Career::load`) and the
+  starter (version 0 = its bare achievements pack) save through `write_versioned` and
+  `load_game`, never overwrite a newer version's save, and say what the read found
+  (Solid Eleven's amber/red toast, the starter's `save_notice` screen). castle64's save
+  is opt-in per host so no test reads the player's progress.
+- **Power cuts.** `cargo xtask save soak` runs a build that only saves a counter
+  (`castle64::soak`); in Azahar the harness kills the emulator (SIGKILL) mid-run and
+  checks every boot read the last finished save or a later one. On hardware the same
+  build runs through `--device`; a person cuts the power (`docs/HARDWARE.md`). Not yet
+  done on a real SC64 or 3DS. ares can't stand in for the N64 (it writes the EEPROM file
+  at exit only).
+- **Tools.** `save inspect` reads a 3DS SD folder (the same migration rule), and the
+  editor's Saves tab has the PC, ares's `.eeprom` and Azahar's SD folders.

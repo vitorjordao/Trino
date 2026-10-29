@@ -190,7 +190,8 @@ so. Measured choices:
 - **Packer** (`font::pack_shelves`): the width, 16 to 256 in 16-texel steps (whole TMEM
   lines in I4), with the fewest texels; widest glyphs first into the first shelf with
   room; the height in 4-texel steps instead of a power of two (the N64 clamps text
-  rectangles and `tex3ds` pads the 3DS copy). `fonts/i18n` en-US 256×16 → 64×44
+  rectangles and `tex3ds` pads the 3DS copy), and no side past 256 (the N64's
+  `max_texture_dim`: a 16×332 atlas drew its lower glyphs wrong there). `fonts/i18n` en-US 256×16 → 64×44
   (2 048 → 1 408 B, 34 %), es-ES 256×32 → 16×188 (4 096 → 1 504 B, 37 %), pt-BR
   256×32 → 32×100 (4 096 → 1 600 B, 39 %); the 3DS copies pad to 4 096 texels each
   (8 192 before for es-ES and pt-BR). Glyph pixels are unchanged, only where they sit.

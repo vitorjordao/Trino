@@ -98,7 +98,7 @@ pub struct BakedFont {
     pub glyphs: Vec<Glyph>,
 }
 
-/// Atlas rows wrap at this width (N64 `max_texture_dim` is 256).
+/// Atlas sides stay within this (N64 `max_texture_dim` is 256).
 const ATLAS_WIDTH: u32 = 256;
 
 impl FontDecl {
@@ -366,7 +366,7 @@ const WIDTH_STEP: u32 = 16;
 
 /// Pack glyph cells `line_height` tall and `widths` wide into shelves:
 /// the atlas width (a multiple of [`WIDTH_STEP`] up to [`ATLAS_WIDTH`])
-/// with the fewest texels, the widest cells first into the first shelf
+/// with the fewest texels and a height within [`ATLAS_WIDTH`] too, the widest cells first into the first shelf
 /// with room. The height is the shelves', rounded up to 4 texels (BCn and
 /// KTX2 blocks), not to a power of two: the N64 clamps text rectangles and
 /// the 3DS's `tex3ds` pads the texture itself. Returns the width, the
@@ -400,12 +400,18 @@ pub fn pack_shelves(widths: &[u32], line_height: u32) -> (u32, u32, Vec<(u32, u3
         (width, height, placed)
     };
     let first = widest.next_multiple_of(WIDTH_STEP).max(WIDTH_STEP);
-    (first..=ATLAS_WIDTH.max(first))
+    let last = ATLAS_WIDTH.max(first);
+    (first..=last)
         .step_by(WIDTH_STEP as usize)
         .map(pack)
+        // No taller than the N64's largest texture side either: a 16×332
+        // atlas drew the glyphs below row 256 wrong there (the football
+        // template's clock colon). A font too big for 256×256 keeps the
+        // widest atlas, as before.
+        .filter(|(w, h, _)| *h <= ATLAS_WIDTH || *w == last)
         // Fewest texels; on a tie the wider atlas (fewer shelves).
         .min_by_key(|(w, h, _)| (w * h, core::cmp::Reverse(*w)))
-        .expect("at least one width")
+        .expect("the widest atlas is always a candidate")
 }
 
 /// Make every pixel white, keeping alpha (tint colors text at draw time).
@@ -667,6 +673,12 @@ mod tests {
         assert!(w >= 48);
         // Nothing to pack: one empty shelf.
         assert_eq!(pack_shelves(&[], 10).1, 12);
+        // Never taller than the N64's 256-texel side when a wider atlas
+        // fits: 120 narrow glyphs on 26 px lines would be 16 wide and
+        // ~1 500 tall by area alone.
+        let narrow = vec![5u32; 120];
+        let (w, h, _) = pack_shelves(&narrow, 26);
+        assert!(h <= 256, "{w}x{h}");
     }
 
     #[test]

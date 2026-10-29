@@ -82,6 +82,9 @@ per_language = true               # fonts/ui (default) + fonts/ui@pt-BR ...
   the 3DS copy itself). The old 256-wide rows rounded to a power of two put castle64's
   pt-BR and es-ES atlases at 256×32, 100 % of TMEM. Glyph cells are still a full line
   tall (TFNT has no y offset); that is the next lever if an atlas nears 75 % again.
+  Both sides stay ≤ 256 (the N64's `max_texture_dim`): by area alone the football
+  template's `se_ui` packed 16×332, and the N64 drew its glyphs below row 256 wrong
+  (the clock's colon; caught by the template's N64 golden in CI, not by the engine's).
 - `auto` always bakes ` ` and `?` (the runtime draws `?` for a missing character).
 - A font for one language only (CJK on PC/Web): `[i18n.overrides.ja-JP] "fonts/ui" =
   { pc = "fonts/ui-ja", web = "fonts/ui-ja" }`.

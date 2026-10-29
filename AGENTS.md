@@ -1684,7 +1684,10 @@ cargo test --workspace
   `dest` and then loops over the EEPROM (the `save recovery` step hung in ares on
   `read(21, 1)`), and the write would rewrite the whole EEPROM from memory past `src`.
   The N64's `Eeprom` medium sends only whole blocks from a block's start and does the
-  read-modify-write itself; keep every EEPROM access going through it.
+  read-modify-write itself; keep every EEPROM access going through it. `preview` fixed
+  the underflow but loses the rest of a block on a short write from its start
+  (n64brew/libdragon#8), so the rule holds after a pin move too. libdragon's issues and
+  PRs go to `n64brew/libdragon`; `DragonMinded/libdragon` is archived.
 - **An explicit DFS stack bounds the pending work, not the depth.** The T&L's depth
   bisection ran forever on a vertex at ~1e15 (`(a + b) / 2 == a`: the left child is its
   parent). Bound such loops by a count (`SPLIT_BUDGET` compares the existing

@@ -226,7 +226,11 @@ own target or bound it. Under ASan + `-a` expect ~10x the native time.
   libdragon's `eeprom_read_bytes`/`eeprom_write_bytes` (pinned 2c3d5db) underflow
   `bytes_left` on a span that starts and ends inside one block — `read(21, 1)` hung in
   ares, a write would rewrite the EEPROM from memory past `src`. Anything that isn't
-  whole blocks from a block's start is a read-modify-write in Rust.
+  whole blocks from a block's start is a read-modify-write in Rust. Keep it after a
+  pin move to `preview` too: there `eeprom_write_bytes(src, 136, 3)` (a block's start,
+  ending inside it) flushes the block's never-fetched bytes (n64brew/libdragon#8, fix
+  n64brew/libdragon#9). libdragon lives at `n64brew/libdragon` since `DragonMinded/
+  libdragon` was archived (2026-10-01; its README doesn't say so): report there.
 - The `save recovery` step logs `TRINO_STEP:save recovery k/7` per stage: a hang names
   its stage.
 - **Power cuts on a real medium:** `cargo xtask save soak 3ds` (Azahar killed with

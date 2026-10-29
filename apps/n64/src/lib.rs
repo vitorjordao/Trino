@@ -24,17 +24,20 @@ mod n64 {
     use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
 
     /// See `trino_rust_main`.
-    const RSP_ARENA_BYTES: u32 = 376 * 1024;
+    const RSP_ARENA_BYTES: u32 = 64 * 1024;
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trino_rust_main() {
         runtime::init();
         runtime::log("TRINO_BOOT\n");
 
-        // The RSP mesh copies' own region (GitHub #110), before anything
-        // else takes the heap: castle64, the showcase and the self-test's
-        // copies peak at ~373 KB alive (`TRINO_HEAP … rsp=`), the anim
-        // steps' group past it takes the heap.
+        // A small region of its own for the RSP mesh copies (GitHub #110),
+        // before anything else takes the heap: the boot copies fill it and
+        // the rest share the heap, so every run exercises the arena's
+        // alloc, spill and free. Measured on the base tier: a region with
+        // room to spare costs the heap its big blocks (416 KB: a 79 KB
+        // batch no longer fit), and without one the strider group's load
+        // and unload leave `top=` intact.
         N64Renderer::reserve_rsp_arena(RSP_ARENA_BYTES);
         let mut renderer = N64Renderer::new();
         let mut audio = N64Audio::new();
@@ -150,6 +153,28 @@ mod n64 {
     /// The animation steps with the strider's group (issue #65).
     #[inline(never)]
     fn anim_steps(renderer: &mut N64Renderer, audio: &mut N64Audio, platform: &mut N64Platform) {
+        // The heap's top block and the copies' largest free block around
+        // the strider group's load and unload (#110: what a later big
+        // copy can still get).
+        let holes = |when: &str| {
+            let [live, _, arena, used, largest] = N64Renderer::rsp_copy_stats();
+            runtime::log(&format!(
+                "TRINO_HEAP:top={} rsp={live} arena={used}/{arena} arena_free={largest} {when} \
+                 the anim steps\n",
+                runtime::heap_top_free()
+            ));
+        };
+        holes("before");
+        anim_steps_run(renderer, audio, platform);
+        holes("after");
+    }
+
+    #[inline(never)]
+    fn anim_steps_run(
+        renderer: &mut N64Renderer,
+        audio: &mut N64Audio,
+        platform: &mut N64Platform,
+    ) {
         let mut host = GroupHost {
             renderer,
             audio,
@@ -896,6 +921,13 @@ mod n64 {
                     // later held 45 + 90 KB at once (#110, #67).
                     renderer.reserve_batch(micro::BATCH_TRIS);
                     micro::run(renderer, castle64::perf::MEASURE_FRAMES, micro_ready);
+                    // The automatic trim (#110) must not have undone the
+                    // reserved batch: `trims=` counts every shrink so far.
+                    runtime::log(&format!(
+                        "TRINO_HEAP:batch={} trims={} after the micro scenes\n",
+                        renderer.batch_bytes(),
+                        renderer.trims()
+                    ));
                     // 7) Water (ADR 0015): the showcase's river under its
                     // scene camera, the hero wading in (gated like the
                     // castle64 scenes; the river's own line is `models/river`).

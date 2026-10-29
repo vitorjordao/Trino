@@ -2053,9 +2053,10 @@ cargo test --workspace
   nightly and its own paths: Solid Eleven's frame measured 33.9 ms there against
   30.3 ms locally on the same commit (iteration 2 went the other way, -0.4 ms). Keep
   about 3 ms of local headroom under a gate, and read the CI log's `TRINO_FRAME`.
-- **RSP mesh copies come from their own region on the N64** (`rsp::reserve_arena`, GitHub
-  #110): reserve it before any mesh registers, and stage a copy one segment at a time,
-  never a whole-copy `Vec` (that asked the heap for a second block as big as the copy).
+- **An N64 RSP copy region (`N64Renderer::reserve_rsp_arena`, `[n64] rsp_arena_kb`) costs
+  heap** (GitHub #110): reserve it before any mesh registers and size it from a base-tier
+  self-test, never "with room to spare" (416 KB made a 79 KB batch fail). Stage a copy
+  one segment at a time, never a whole-copy `Vec` (a second block as big as the copy).
   The batch buffers give memory back after a 120-frame window that used under half
   (`N64Renderer::trim`); don't hold a reference to one across frames.
 - **An N64 RSP draw that misses the memo costs ~110 µs of CPU before its T&L stage**

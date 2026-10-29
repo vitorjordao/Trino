@@ -173,6 +173,12 @@ pub struct N64Renderer {
     /// at its end, the ones holding far more than that give it back
     /// (GitHub #110; `trim_to`).
     trim: TrimWindow<TRIM_BUFS>,
+    /// The CPU batch's size [`N64Renderer::reserve_batch`] asked for: the
+    /// trim never goes below it (a shrink there would bring back the
+    /// doubling `reserve_batch` avoids).
+    batch_floor: u32,
+    /// Buffers the trim shrank since boot (the self-test logs it).
+    trims: u32,
 }
 
 /// Batch buffer groups [`N64Renderer::trim`] follows: the CPU triangles
@@ -283,6 +289,7 @@ impl N64Renderer {
                 *v = Vec::with_capacity(n);
             }
         }
+        self.batch_floor = tris.min(u32::MAX as usize) as u32;
         exact(&mut self.pending_tris, tris);
         exact(&mut self.order, tris);
         if self.pending_tex.capacity() > 0 {
@@ -298,24 +305,34 @@ impl N64Renderer {
     #[cold]
     #[inline(never)]
     fn trim_to(&mut self, peaks: [u32; TRIM_BUFS]) {
-        fn trim<T>(v: &mut Vec<T>, peak: u32) {
+        fn trim<T>(v: &mut Vec<T>, peak: u32, n: &mut u32) {
             if !v.is_empty() {
                 return;
             }
-            if let Some(n) = shrink_to(v.capacity(), peak, core::mem::size_of::<T>(), TRIM_FLOOR) {
-                v.shrink_to(n);
+            if let Some(to) = shrink_to(v.capacity(), peak, core::mem::size_of::<T>(), TRIM_FLOOR) {
+                v.shrink_to(to);
+                *n += 1;
             }
         }
-        trim(&mut self.pending_tris, peaks[0]);
-        trim(&mut self.pending_tex, peaks[0]);
-        trim(&mut self.order, peaks[0].max(peaks[4]));
-        trim(&mut self.pending_rsp, peaks[1]);
-        trim(&mut self.pending_blobs, peaks[2]);
-        trim(&mut self.pending_shadow, peaks[3]);
-        trim(&mut self.pending_water, peaks[4]);
-        trim(&mut self.pending_water_tex, peaks[4]);
-        trim(&mut self.pending_water_rsp, peaks[5]);
-        trim(&mut self.pending_ring_rsp, peaks[6]);
+        // Commands are copied into rspq's buffer at submit, so nothing
+        // queued points into these buffers.
+        let tris = peaks[0].max(self.batch_floor);
+        let n = &mut self.trims;
+        trim(&mut self.pending_tris, tris, n);
+        trim(&mut self.pending_tex, tris, n);
+        trim(&mut self.order, tris.max(peaks[4]), n);
+        trim(&mut self.pending_rsp, peaks[1], n);
+        trim(&mut self.pending_blobs, peaks[2], n);
+        trim(&mut self.pending_shadow, peaks[3], n);
+        trim(&mut self.pending_water, peaks[4], n);
+        trim(&mut self.pending_water_tex, peaks[4], n);
+        trim(&mut self.pending_water_rsp, peaks[5], n);
+        trim(&mut self.pending_ring_rsp, peaks[6], n);
+    }
+
+    /// Buffers the automatic trim shrank since boot.
+    pub fn trims(&self) -> u32 {
+        self.trims
     }
 
     /// Give the RSP mesh copies `bytes` of uncached RDRAM of their own
@@ -437,6 +454,8 @@ impl N64Renderer {
             pending_shadow: Vec::new(),
             blob_tex: Vec::new(),
             trim: TrimWindow::new(TRIM_FRAMES),
+            batch_floor: 0,
+            trims: 0,
         }
     }
 

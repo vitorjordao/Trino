@@ -1981,46 +1981,50 @@ fn animation_clip_events_and_root_motion_write_the_manifest() {
 #[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
 fn toasts_float_over_the_layout_audit() {
     use crate::log::Level;
-    let size = egui::vec2(960.0, 600.0);
-    let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
-        return;
-    };
-    h.state_mut()
-        .cmds
-        .push(crate::app::Cmd::FocusTab(crate::app::Tab::Game));
-    h.run_steps(3);
-    for i in 0..3 {
-        h.state_mut().log.toast(
-            Level::Error,
-            format!("rebake failed ({i}): the bake's error, in a toast"),
+    // The layout audit's two sizes; 1600x1000 is the particle inspector's
+    // (where CI first saw it).
+    for size in [egui::vec2(960.0, 600.0), egui::vec2(1600.0, 1000.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        h.state_mut()
+            .cmds
+            .push(crate::app::Cmd::FocusTab(crate::app::Tab::Game));
+        h.run_steps(3);
+        for i in 0..3 {
+            h.state_mut().log.toast(
+                Level::Error,
+                format!("rebake failed ({i}): the bake's error, in a toast"),
+            );
+        }
+        // The toasts' first frame: what the flaky audits saw.
+        h.step();
+        let w = crate::layout_audit::widgets(&h, Some(&h.ctx));
+        let toasts: Vec<_> = w.iter().filter(|w| w.floating).collect();
+        assert!(
+            toasts.iter().any(|t| t.label.contains("rebake failed")),
+            "the toasts' labels are floating: {toasts:?}"
         );
+        for t in &toasts {
+            eprintln!("toast widget {:?} `{}` {:?}", t.role, t.label, t.rect);
+        }
+        // They cover panel widgets: the overlap check used to fail here.
+        let solid: Vec<_> = w.iter().filter(|w| !w.floating).collect();
+        let covered = toasts.iter().any(|t| {
+            solid.iter().any(|s| {
+                let o = s.visible.intersect(t.visible);
+                o.width() > 2.0 && o.height() > 2.0
+            })
+        });
+        assert!(covered, "the toasts cover no widget: move them in the test");
+        let p = crate::layout_audit::problems(&w, size, true);
+        assert!(p.is_empty(), "{p:?}");
+        let shot = |what: &str| format!("toasts-{what}-{}x{}.png", size.x, size.y);
+        evidence(&mut h, &shot("first-frame"));
+        crate::layout_audit::assert_clean(&mut h, size, true, "toasts over the Game view");
+        evidence(&mut h, &shot("settled"));
+        leave_temp_project(&repo);
     }
-    // The toasts' first frame: what the flaky audits saw.
-    h.step();
-    let w = crate::layout_audit::widgets(&h, Some(&h.ctx));
-    let toasts: Vec<_> = w.iter().filter(|w| w.floating).collect();
-    assert!(
-        toasts.iter().any(|t| t.label.contains("rebake failed")),
-        "the toasts' labels are floating: {toasts:?}"
-    );
-    for t in &toasts {
-        eprintln!("toast widget {:?} `{}` {:?}", t.role, t.label, t.rect);
-    }
-    // They cover panel widgets: the overlap check used to fail here.
-    let solid: Vec<_> = w.iter().filter(|w| !w.floating).collect();
-    let covered = toasts.iter().any(|t| {
-        solid.iter().any(|s| {
-            let o = s.visible.intersect(t.visible);
-            o.width() > 2.0 && o.height() > 2.0
-        })
-    });
-    assert!(covered, "the toasts cover no widget: move them in the test");
-    let p = crate::layout_audit::problems(&w, size, true);
-    assert!(p.is_empty(), "{p:?}");
-    evidence(&mut h, "toasts-first-frame.png");
-    crate::layout_audit::assert_clean(&mut h, size, true, "toasts over the Game view");
-    evidence(&mut h, "toasts-settled.png");
-    leave_temp_project(&repo);
 }
 
 /// Particle effects in the editor, both ways: "+" writes the same file and

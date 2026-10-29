@@ -90,15 +90,21 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
     `rom:/rsp_arena`, `N64Host::boot` reserves it and logs `TRINO_RSP_ARENA:`). A
     `trino_core::mem::Blocks` free list (best fit, neighbors merge) carves it; copies
     past it take the heap. Their holes stay theirs, so a group's load and unload no
-    longer leave free bytes and no 45 KB block (GitHub #110). Size it from the
-    self-test's `TRINO_HEAP … rsp=live/peak` (castle64 + showcase + self-test: ~373 KB,
-    the engine ROM reserves 376 KB); `arena=used/size` shows the fill. Unused arena is
-    heap nobody else gets: don't oversize it on the base tier;
+    longer leave free bytes and no 45 KB block (GitHub #110). **It is opt-in and costs
+    heap**: measured on the base tier, 416 KB (room for every copy) made a 79 KB batch
+    fail mid-run, 376 KB (the resident peak) passed with `top=` 11 KB lower than no
+    arena, and with no arena the strider group's load and unload left `top=` intact
+    (the segment staging and the trim below did that). The engine ROM reserves 64 KB, so
+    every run exercises it. Reserve one for a game that loads and unloads groups of
+    models many times, sized from `TRINO_HEAP … rsp=live/peak` and checked with a
+    base-tier self-test; `arena=used/size` shows the fill;
   - a copy is staged one segment at a time: the old whole-copy staging `Vec` asked the
     heap for a second block as big as the copy;
   - the batch buffers shrink by themselves: `N64Renderer::trim` keeps each buffer's
     peak over 120 frames and `trim_to` gives back what holds more than twice that and
     16 KB beyond (`mem::TrimWindow`, `shrink_to`; newlib's realloc shrinks in place).
+    The trim never goes below what `reserve_batch` asked for (a shrink there would bring
+    back the doubling it avoids); `TRINO_HEAP:batch= trims=` after the micro scenes.
     `trim_buffers` (empty them now) and `reserve_batch` (size once, exactly) stay for the
     self-test's scene changes;
   A malloc/free bisection to find the "largest block" changes the arena it measures

@@ -9,6 +9,7 @@ use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use trino_core::math3d::to_i32;
+use trino_core::mem::{TrimWindow, shrink_to};
 use trino_core::memo::{self, MemoKey, MemoSlot, words_eq};
 use trino_core::perf::RenderProfile;
 use trino_core::render3d::{
@@ -168,7 +169,23 @@ pub struct N64Renderer {
     pending_blobs: Vec<PendingBlob>,
     pending_shadow: Vec<ScreenTri>,
     blob_tex: Vec<(u8, *mut u8)>,
+    /// The batch buffers' peaks over a window of frames ([`TRIM_FRAMES`]):
+    /// at its end, the ones holding far more than that give it back
+    /// (GitHub #110; `trim_to`).
+    trim: TrimWindow<TRIM_BUFS>,
 }
+
+/// Batch buffer groups [`N64Renderer::trim`] follows: the CPU triangles
+/// (`pending_tris`, `pending_tex`, `order`), the RSP commands, the blob
+/// casters, the planar shadow triangles, the water triangles (and
+/// `order` again), the water's and the rings' RSP commands.
+const TRIM_BUFS: usize = 7;
+/// Frames in a trim window (2 s at 60 fps): a buffer shrinks to what the
+/// last window used at most once a window, and only when it holds more
+/// than twice that and [`TRIM_FLOOR`] beyond it.
+const TRIM_FRAMES: u16 = 120;
+/// Spare bytes a batch buffer may keep for good.
+const TRIM_FLOOR: usize = 16 * 1024;
 
 /// A blob caster of the batch: its bounding sphere (world) and the blob's
 /// radius ([`ShadowFrame::blob`]).
@@ -273,6 +290,70 @@ impl N64Renderer {
         }
     }
 
+    /// Shrink the batch buffers that held far more than the last trim
+    /// window used (`peaks`, [`TrimWindow`]): a big frame no longer keeps
+    /// its memory for good (GitHub #110: 16 rigid models in one frame left
+    /// ~24 KB behind). `Vec::shrink_to` reallocs in place on newlib (the
+    /// block's tail goes back to the heap), so it needs no second block.
+    #[cold]
+    #[inline(never)]
+    fn trim_to(&mut self, peaks: [u32; TRIM_BUFS]) {
+        fn trim<T>(v: &mut Vec<T>, peak: u32) {
+            if !v.is_empty() {
+                return;
+            }
+            if let Some(n) = shrink_to(v.capacity(), peak, core::mem::size_of::<T>(), TRIM_FLOOR) {
+                v.shrink_to(n);
+            }
+        }
+        trim(&mut self.pending_tris, peaks[0]);
+        trim(&mut self.pending_tex, peaks[0]);
+        trim(&mut self.order, peaks[0].max(peaks[4]));
+        trim(&mut self.pending_rsp, peaks[1]);
+        trim(&mut self.pending_blobs, peaks[2]);
+        trim(&mut self.pending_shadow, peaks[3]);
+        trim(&mut self.pending_water, peaks[4]);
+        trim(&mut self.pending_water_tex, peaks[4]);
+        trim(&mut self.pending_water_rsp, peaks[5]);
+        trim(&mut self.pending_ring_rsp, peaks[6]);
+    }
+
+    /// Give the RSP mesh copies `bytes` of uncached RDRAM of their own
+    /// (GitHub #110): call it at boot, before the first [`N64Renderer::new`]
+    /// and any mesh, while the heap is still one block. Copies are carved
+    /// from it by a free list, so their holes stay theirs; one that doesn't
+    /// fit takes the heap as without an arena. Size it from the self-test's
+    /// peak of live copies (`TRINO_HEAP … rsp=live/peak`); `trino.toml`'s
+    /// `[n64] rsp_arena_kb` makes [`crate::N64Host::boot`] call it. `false`
+    /// when the heap has no such block or an arena exists already.
+    pub fn reserve_rsp_arena(bytes: u32) -> bool {
+        crate::rsp::reserve_arena(bytes)
+    }
+
+    /// The RSP copies' memory: bytes alive, the most alive since boot,
+    /// the arena's size, its bytes in use and its largest free block.
+    pub fn rsp_copy_stats() -> [u32; 5] {
+        crate::rsp::copy_stats()
+    }
+
+    /// Bytes the batch buffers hold now (their capacity), for the
+    /// self-test's `TRINO_HEAP` lines.
+    pub fn batch_bytes(&self) -> usize {
+        fn b<T>(v: &Vec<T>) -> usize {
+            v.capacity() * core::mem::size_of::<T>()
+        }
+        b(&self.pending_tris)
+            + b(&self.pending_tex)
+            + b(&self.order)
+            + b(&self.pending_rsp)
+            + b(&self.pending_blobs)
+            + b(&self.pending_shadow)
+            + b(&self.pending_water)
+            + b(&self.pending_water_tex)
+            + b(&self.pending_water_rsp)
+            + b(&self.pending_ring_rsp)
+    }
+
     pub fn start_profile(&mut self) {
         self.profile = Some(RenderProfile::default());
     }
@@ -355,6 +436,7 @@ impl N64Renderer {
             pending_blobs: Vec::new(),
             pending_shadow: Vec::new(),
             blob_tex: Vec::new(),
+            trim: TrimWindow::new(TRIM_FRAMES),
         }
     }
 
@@ -382,6 +464,7 @@ impl N64Renderer {
     /// the same in any order, and never write z.
     fn flush_shadows(&mut self) {
         if !self.pending_blobs.is_empty() {
+            self.trim.note(2, self.pending_blobs.len());
             let softness = self.shadows.settings().map_or(0, |s| s.softness);
             let texels = self.blob_texture(softness);
             let mut bound = false;
@@ -415,6 +498,7 @@ impl N64Renderer {
             self.pending_blobs.clear();
         }
         if !self.pending_shadow.is_empty() {
+            self.trim.note(3, self.pending_shadow.len());
             let t0 = self.tick();
             unsafe { ffi::trino_3d_shadow(core::ptr::null(), 0) };
             for tri in &self.pending_shadow {
@@ -497,6 +581,8 @@ impl N64Renderer {
     /// bound once (`trino_3d_water`: blended, z-tested, not written).
     fn flush_water(&mut self) {
         if !self.pending_water_rsp.is_empty() || !self.pending_ring_rsp.is_empty() {
+            self.trim.note(5, self.pending_water_rsp.len());
+            self.trim.note(6, self.pending_ring_rsp.len());
             let t0 = self.tick();
             for [w, e] in self.pending_water_rsp.iter().chain(&self.pending_ring_rsp) {
                 submit_water(&self.sprites, w, e, &mut self.water_bound);
@@ -508,6 +594,7 @@ impl N64Renderer {
         if self.pending_water.is_empty() {
             return;
         }
+        self.trim.note(4, self.pending_water.len());
         self.frame_stats.tris += self.pending_water.len() as u32;
         let t0 = self.tick();
         self.order.clear();
@@ -610,6 +697,7 @@ impl N64Renderer {
 
     /// Hand every pending RSP command to the overlay, in order.
     fn submit_rsp(&mut self) {
+        self.trim.note(1, self.pending_rsp.len());
         let mut i = 0;
         while i < self.pending_rsp.len() {
             let w = &self.pending_rsp[i];
@@ -632,6 +720,7 @@ impl N64Renderer {
         if self.pending_tris.is_empty() {
             return;
         }
+        self.trim.note(0, self.pending_tris.len());
         self.frame_stats.tris += self.pending_tris.len() as u32;
         let textured = self.pending_tex.iter().any(Option::is_some);
         let t0 = self.tick();
@@ -1632,6 +1721,9 @@ impl Renderer for N64Renderer {
 
     fn end_frame(&mut self) {
         self.flush_model_batch();
+        if let Some(peaks) = self.trim.end_frame() {
+            self.trim_to(peaks);
+        }
         self.frame_stats.shadows = self.shadows.stats;
         self.last_stats = self.frame_stats;
         trace_counters(&self.frame_stats);

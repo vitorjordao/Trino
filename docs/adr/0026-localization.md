@@ -180,3 +180,26 @@ report see concrete fonts:
   (`a_languages_atlas_loads_and_unloads_with_its_group`). The consoles load them through
   #56's generic loader, which its `asset groups` step covers; the engine's own
   `fonts/i18n` stays in boot, so the console self-test switches languages without a load.
+
+## Addendum (2026-10-29, GitHub #99): atlases packed tight, a warning from 75 % of TMEM
+
+castle64's achievement strings (#61) pushed the pt-BR and es-ES atlases from 256×16 to
+256×32: 4 KB of I4, the N64's whole TMEM, one glyph from not fitting, and nothing said
+so. Measured choices:
+
+- **Packer** (`font::pack_shelves`): the width, 16 to 256 in 16-texel steps (whole TMEM
+  lines in I4), with the fewest texels; widest glyphs first into the first shelf with
+  room; the height in 4-texel steps instead of a power of two (the N64 clamps text
+  rectangles and `tex3ds` pads the 3DS copy). `fonts/i18n` en-US 256×16 → 64×44
+  (2 048 → 1 408 B, 34 %), es-ES 256×32 → 16×188 (4 096 → 1 504 B, 37 %), pt-BR
+  256×32 → 32×100 (4 096 → 1 600 B, 39 %); the 3DS copies pad to 4 096 texels each
+  (8 192 before for es-ES and pt-BR). Glyph pixels are unchanged, only where they sit.
+- **Splitting the font** (the self-test's strings apart from the game's) was not needed
+  once the packer brought every atlas under 40 %.
+- **`i18n check`** warns from 75 % of the atlas's room (`TMEM_WARN_PERCENT`) and past
+  it, both warnings: past TMEM the atlas still draws, a glyph at a time, which big
+  display fonts accept (Solid Eleven's 22 and 44 px). The room is the texels' (4 KB, or
+  2 KB beside a CI palette: `N64Format::tmem_texels`), as the shim's `trino_text_begin`
+  decides; the reports compared CI texels with 4 KB before.
+- Next lever if an atlas nears 75 % again: per-glyph vertical crop (a y offset in TFNT,
+  a format bump); cells are still a full line tall.

@@ -451,9 +451,13 @@ file = "models/showcase/bridge.glb"
 # ---- fonts (bitmap text: atlas sprite + glyph table under one handle) ----
 
 # trino5x7: the engine's default pixel font (xtask gen-assets draws it).
+# I4 on the N64: its 2 880 bytes of texels fit TMEM whole, so text stays
+# resident (one upload a string); as CI4 the palette left them 2 KB and every
+# glyph re-uploaded (GitHub #99).
 [fonts.trino5x7]
 file = "fonts/trino5x7.png"
 cell = [6, 10]
+formats = { n64 = "I4" }
 
 # Localized text (castle64::selftest::i18n, issue #59): Roboto Condensed
 # (Apache-2.0, fonts/LICENSE-Roboto.txt) baked with exactly the glyphs

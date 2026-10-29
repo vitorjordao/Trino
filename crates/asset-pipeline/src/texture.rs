@@ -799,8 +799,13 @@ pub fn report(platform: crate::Platform, choice: Choice, width: u32, height: u32
             Some(trino_core::Caps::N3DS.texture_memory_bytes as u64),
         ),
         crate::Platform::N64 => {
+            // The texels against their room: a CI format's palette takes
+            // TMEM's upper half, so its texels have 2 KB, not 4 (GitHub
+            // #99: a 2880-byte CI4 font read as 71 % of TMEM, and it never
+            // stays resident).
             let f = N64Format::parse(&choice.format).expect("an N64 format");
-            ("TMEM", f.tmem(width, height).0, Some(4096))
+            let (texels, room) = f.tmem_texels(width, height);
+            ("TMEM", texels, Some(room))
         }
         // `bytes` is the download; the VRAM is what the transcode makes.
         crate::Platform::Web => (

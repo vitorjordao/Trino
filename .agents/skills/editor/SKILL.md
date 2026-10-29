@@ -189,7 +189,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `panels/lod.rs` | Inspector › Model › LOD: the chain (mesh / impostor / cull), per-platform starts, cost per level, the preview slider |
 | `panels/impostor.rs` | Model asset › Impostor: settings, Bake (the same `impostor::bake` as the CLI), atlas preview, fresh/stale badge |
 | `panels/platforms.rs` | Inspector › Platforms: per-platform variants (grid of PC/N64/3DS columns, stacked when narrow) |
-| `layout_audit.rs` | test helper: no widget off the window, none overlapping (accesskit rects) |
+| `layout_audit.rs` | test helper: no widget off the window, none overlapping (accesskit rects); `assert_clean` first `settle`s (frames until two in a row lay out the same, ≤ 20) and leaves floating layers (toasts, tooltips: `Order::Tooltip` and up) out of the overlap check (GitHub #72) |
 | `ui_tests.rs` | headless UI flows with egui_kittest (real `App` + wgpu): drive panels by accessibility label |
 | `widget_tests.rs` | widget tests with egui_kittest and no renderer (no GPU, not ignored): inspector editors, Console |
 | `audio.rs` | audio measuring on a worker (`audio::encode`, like the bake), per-platform totals for the budgets, the preview player (an offline-capable `PcAudio`), the Mixer's `MixState` |
@@ -565,6 +565,20 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   platformer level into a temp dir and runs the `App` there
   (`commands_edit_save_and_export_in_a_temp_project`); push `Cmd`s into
   `h.state_mut().cmds` and step two frames.
+- **A layout audit judges a settled frame** (GitHub #72). Background work (a rebake, a
+  file reload, a worker's measurement) lands in whatever frame it finishes in, and
+  egui sizes some layouts from the frame before, so that one frame can mix two layouts;
+  and a new toast's first frame (egui's sizing pass for a new area) puts its labels in
+  the accessibility tree at a provisional place mid-window. Under load that was 3
+  failed runs in 20. `layout_audit::assert_clean` takes `&mut Harness` and `settle`s;
+  don't audit a `Harness` you just stepped some other way, and keep overlays on a
+  floating layer (`Order::Tooltip`). The `click` helper's `Widget`s need
+  `floating: false`.
+- **Animate by egui's frame time, never `Instant::elapsed`.** The particle preview aged
+  bursts by wall time, so a slow (loaded) frame killed particles between two test
+  frames; `ui.input(|i| i.stable_dt).min(0.1)` is real time for a user and a fixed
+  0.1 s per kittest step (default `step_dt` 0.25). A test counting live particles
+  gives them a long `life`.
 - **Never assert on `log.last()` after a command.** The watchers (asset rebakes, text
   files) log on their own schedule, and on CI's slower lavapipe runner a late
   "reloaded …" landed after `NewScene("Bad Name")`'s error, failing the flow on main

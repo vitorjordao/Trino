@@ -496,7 +496,6 @@ pub fn measure_fonts(root: &Path, langs: &Langs) -> Result<Vec<FontRow>, String>
     let m = pipeline::Manifest::load(&assets.join("manifest.toml"))?;
     let fonts = pipeline::i18n::checked_fonts(&m, root);
     let costs = pipeline::i18n::font_costs(&assets, &m, &[Platform::N64]).unwrap_or_default();
-    let tmem = trino_core::Caps::N64.texture_memory_bytes as u64;
     let mut baked: BTreeMap<String, Option<BTreeSet<char>>> = BTreeMap::new();
     let mut have = |logical: &str| -> Option<BTreeSet<char>> {
         baked
@@ -527,10 +526,15 @@ pub fn measure_fonts(root: &Path, langs: &Langs) -> Result<Vec<FontRow>, String>
                 .iter()
                 .filter(|c| **c != ' ' && !set.contains(c))
                 .collect();
-            let n64_bytes = costs
+            // The atlas's texels in TMEM against their room (2 KB beside a
+            // CI palette), as `i18n check` and `i18n fonts` count them.
+            let cost = costs
                 .iter()
-                .find(|c| c.font == draws_with && c.platform == "n64")
-                .map(|c| c.bytes);
+                .find(|c| c.font == draws_with && c.platform == "n64");
+            let n64_bytes = cost.map(|c| c.memory_bytes);
+            let tmem = cost
+                .and_then(|c| c.budget)
+                .unwrap_or(trino_core::Caps::N64.texture_memory_bytes as u64);
             out.push(FontRow {
                 font: font.clone(),
                 lang: t.lang.clone(),

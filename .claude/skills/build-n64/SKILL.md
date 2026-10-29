@@ -84,6 +84,23 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
     the table fails the N64 bake (the editor's texture test caught a gray card);
   - out-of-line helpers for code called per field or per player (`StateHasher`, the
     TREC per-player codecs): ~5 KB.
+  - the RSP mesh copies can have their own region of uncached RDRAM, reserved before
+    any mesh registers: `N64Renderer::reserve_rsp_arena(bytes)` before
+    `N64Renderer::new`, or `trino.toml` `[n64] rsp_arena_kb = N` (xtask writes
+    `rom:/rsp_arena`, `N64Host::boot` reserves it and logs `TRINO_RSP_ARENA:`). A
+    `trino_core::mem::Blocks` free list (best fit, neighbors merge) carves it; copies
+    past it take the heap. Their holes stay theirs, so a group's load and unload no
+    longer leave free bytes and no 45 KB block (GitHub #110). Size it from the
+    self-test's `TRINO_HEAP … rsp=live/peak` (castle64 + showcase + self-test: ~373 KB,
+    the engine ROM reserves 376 KB); `arena=used/size` shows the fill. Unused arena is
+    heap nobody else gets: don't oversize it on the base tier;
+  - a copy is staged one segment at a time: the old whole-copy staging `Vec` asked the
+    heap for a second block as big as the copy;
+  - the batch buffers shrink by themselves: `N64Renderer::trim` keeps each buffer's
+    peak over 120 frames and `trim_to` gives back what holds more than twice that and
+    16 KB beyond (`mem::TrimWindow`, `shrink_to`; newlib's realloc shrinks in place).
+    `trim_buffers` (empty them now) and `reserve_batch` (size once, exactly) stay for the
+    self-test's scene changes;
   A malloc/free bisection to find the "largest block" changes the arena it measures
   (newlib trims and re-extends the top): use `top=`.
 - Sizes: `cargo xtask build n64` prints each group's entries, raw and stored KB; `cargo

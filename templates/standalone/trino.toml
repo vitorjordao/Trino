@@ -54,6 +54,10 @@ platforms = ["pc", "n64", "3ds", "web"]
 [n64]
 package = "{{name}}-n64"
 save = "eeprom16k"
+# RDRAM of their own for the RSP mesh copies, reserved at boot, so loading and
+# unloading asset groups can't fragment the heap under them (sized from the
+# self-test's `TRINO_HEAP … rsp=live/peak`; unset = they share the heap):
+# rsp_arena_kb = 256
 
 [3ds]
 package = "{{name}}-3ds"

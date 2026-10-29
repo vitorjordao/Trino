@@ -25,7 +25,11 @@ Format and design: ADR 0026, `docs/ASSETS.md` › Localization. The runtime is
    - `missing_glyph`: per target, through the font that language draws with — make the
      font `chars = "auto"` or add the characters;
    - `overflow`: a UI box too small in that language on that target (same layout as `ui
-     check`); `font_budget`: an atlas past the N64's 4 KB TMEM;
+     check`); `font_budget`: a warning from 75 % of the N64's TMEM
+     for the atlas's texels (`TMEM_WARN_PERCENT`: a few glyphs from not fitting) and past
+     it (it no longer stays resident: every glyph re-uploads, ~50 µs). TMEM is 4 KB for
+     I4/I8, **2 KB beside a palette** for CI4/CI8 (the shim's `trino_text_begin` limit;
+     before GitHub #99 the report compared CI texels with 4 KB);
    - `extra_key` (warning) and `unused_key` (info: no screen key, no string literal in the
      project's `.rs` files names it).
    `--strict` fails on warnings too.
@@ -71,7 +75,13 @@ per_language = true               # fonts/ui (default) + fonts/ui@pt-BR ...
 
 - `cargo xtask i18n fonts --platform n64` lists each atlas, its glyphs, bytes and TMEM
   share. Per-language atlases keep each language small (the engine's `fonts/i18n`: three
-  2 KB I4 atlases, half of TMEM each).
+  I4 atlases of 1.4–1.6 KB, 34–39 % of TMEM).
+- TTF atlases are shelf-packed tight (`font::pack_shelves`, GitHub #99): the width (16 to
+  256 in 16-texel steps) with the fewest texels, widest glyphs first, the height in
+  4-texel steps (not a power of two: the N64 clamps text rectangles and `tex3ds` pads
+  the 3DS copy itself). The old 256-wide rows rounded to a power of two put castle64's
+  pt-BR and es-ES atlases at 256×32, 100 % of TMEM. Glyph cells are still a full line
+  tall (TFNT has no y offset); that is the next lever if an atlas nears 75 % again.
 - `auto` always bakes ` ` and `?` (the runtime draws `?` for a missing character).
 - A font for one language only (CJK on PC/Web): `[i18n.overrides.ja-JP] "fonts/ui" =
   { pc = "fonts/ui-ja", web = "fonts/ui-ja" }`.

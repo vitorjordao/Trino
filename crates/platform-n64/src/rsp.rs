@@ -7,6 +7,9 @@
 
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use trino_core::mem::Blocks;
 
 use trino_core::math3d::to_i32;
 use trino_core::render3d::{
@@ -33,9 +36,104 @@ pub const COLOR_WORDS: usize = 13;
 /// [`color_words`] in the next queue entry. The shim drops it.
 pub const COLORED: u32 = 0x100;
 
+/// The RSP copies' own region of uncached RDRAM (GitHub #110): one block
+/// taken at boot ([`reserve_arena`]), handed out by a free list, so the
+/// copies' holes are kept for each other instead of fragmenting the heap
+/// between short-lived buffers. A copy that doesn't fit takes the heap
+/// (`malloc_uncached`), as every copy did before.
+struct Arena {
+    /// KSEG1 address of the region.
+    base: usize,
+    blocks: Blocks<ARENA_RANGES>,
+}
+
+/// Free ranges the arena tracks (a free that needs more gives its block up:
+/// `Blocks::lost`).
+const ARENA_RANGES: usize = 96;
+
+// The N64 runs one thread: the arena is only touched from the renderer's
+// register/free paths (never from an interrupt).
+static mut ARENA: Option<Arena> = None;
+
+/// Bytes of RSP copies alive now and at most since boot (arena and heap),
+/// for the `TRINO_HEAP` lines.
+static LIVE: AtomicU32 = AtomicU32::new(0);
+static PEAK: AtomicU32 = AtomicU32::new(0);
+
+fn arena() -> &'static mut Option<Arena> {
+    // SAFETY: one thread, no reentrancy (see `ARENA`); every borrow ends
+    // before the next call.
+    unsafe { &mut *core::ptr::addr_of_mut!(ARENA) }
+}
+
+/// Take `bytes` of uncached RDRAM for the RSP copies, before any mesh is
+/// registered (later copies keep the heap). `false` when the heap has no
+/// such block or an arena exists already.
+pub fn reserve_arena(bytes: u32) -> bool {
+    let slot = arena();
+    if slot.is_some() || bytes == 0 {
+        return false;
+    }
+    let p = unsafe { ffi::trino_alloc_uncached(bytes) };
+    if p.is_null() {
+        return false;
+    }
+    *slot = Some(Arena {
+        base: p as usize,
+        blocks: Blocks::new(bytes),
+    });
+    true
+}
+
+/// What the RSP copies hold: (bytes alive, the most alive since boot, the
+/// arena's size, its bytes in use, its largest free block).
+pub fn copy_stats() -> [u32; 5] {
+    let (size, used, largest) = arena().as_ref().map_or((0, 0, 0), |a| {
+        (a.blocks.size(), a.blocks.used(), a.blocks.largest_free())
+    });
+    [
+        LIVE.load(Ordering::Relaxed),
+        PEAK.load(Ordering::Relaxed),
+        size,
+        used,
+        largest,
+    ]
+}
+
+/// `bytes` of uncached RDRAM for a copy: the arena's, else the heap's.
+fn alloc_copy(bytes: u32) -> *mut u8 {
+    let from_arena = arena().as_mut().and_then(|a| {
+        a.blocks
+            .alloc(bytes)
+            .map(|off| (a.base + off as usize) as *mut u8)
+    });
+    let p = from_arena.unwrap_or_else(|| unsafe { ffi::trino_alloc_uncached(bytes) } as *mut u8);
+    if !p.is_null() {
+        let live = LIVE.load(Ordering::Relaxed) + bytes;
+        LIVE.store(live, Ordering::Relaxed);
+        PEAK.store(PEAK.load(Ordering::Relaxed).max(live), Ordering::Relaxed);
+    }
+    p
+}
+
+/// Give a copy's block back where it came from.
+fn free_copy(p: *mut u8, bytes: u32) {
+    LIVE.store(LIVE.load(Ordering::Relaxed) - bytes, Ordering::Relaxed);
+    if let Some(a) = arena().as_mut() {
+        let off = (p as usize).wrapping_sub(a.base);
+        if (p as usize) >= a.base && a.blocks.holds(off as u32, bytes) {
+            a.blocks.free(off as u32, bytes);
+            return;
+        }
+    }
+    unsafe { ffi::trino_free_uncached(p as *mut c_void) }
+}
+
 /// A mesh's RSP copy: its segment table in uncached RDRAM.
 pub struct RspMesh {
     table: u32,
+    /// Bytes of its block (to give it back to the arena).
+    bytes: u32,
     segs: u16,
     /// Triangles in all segments.
     tris: u32,
@@ -56,7 +154,7 @@ impl RspMesh {
     /// address: KSEG1 (`| 0xA000_0000`) is the pointer `malloc_uncached`
     /// returned.
     pub fn free(self) {
-        unsafe { ffi::trino_free_uncached((self.table | 0xA000_0000) as *mut c_void) }
+        free_copy((self.table | 0xA000_0000) as *mut u8, self.bytes)
     }
 }
 
@@ -171,19 +269,36 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
     let seg_bytes = |s: &Segment| (s.verts.len() * stride + s.tris.len() * 3).div_ceil(8) * 8;
     let table_bytes = segs.len() * 16;
     let total = table_bytes + segs.iter().map(seg_bytes).sum::<usize>();
-    let base = unsafe { ffi::trino_alloc_uncached(total as u32) } as *mut u8;
+    let base = alloc_copy(total as u32);
     if base.is_null() {
         return None;
     }
     let phys = unsafe { ffi::trino_phys_addr(base as *const c_void) };
-    let mut blob: Vec<u8> = alloc::vec![0u8; total];
-    let mut at = table_bytes;
+    // Uncached memory: word writes, no cache writeback needed.
+    let put = |at: usize, bytes: &[u8]| {
+        for (k, w) in bytes.as_chunks::<4>().0.iter().enumerate() {
+            unsafe {
+                (base.add(at) as *mut u32)
+                    .add(k)
+                    .write_volatile(u32::from_be_bytes(*w))
+            };
+        }
+    };
+    // Staged one segment at a time (a few KB): a whole-copy staging `Vec`
+    // asked the heap for a second block as big as the copy (45 KB for the
+    // micro scenes' flat copy) while the copy was held (GitHub #110).
+    let mut table = alloc::vec![0u8; table_bytes];
+    let mut blob: Vec<u8> = Vec::with_capacity(segs.iter().map(seg_bytes).max().unwrap_or(0));
+    let mut seg_at = table_bytes;
     for (n, s) in segs.iter().enumerate() {
         let entry = n * 16;
-        blob[entry..entry + 4].copy_from_slice(&(phys + at as u32).to_be_bytes());
-        blob[entry + 4..entry + 6].copy_from_slice(&(seg_bytes(s) as u16).to_be_bytes());
-        blob[entry + 6..entry + 8].copy_from_slice(&(s.verts.len() as u16).to_be_bytes());
-        blob[entry + 8..entry + 10].copy_from_slice(&(s.tris.len() as u16).to_be_bytes());
+        table[entry..entry + 4].copy_from_slice(&(phys + seg_at as u32).to_be_bytes());
+        table[entry + 4..entry + 6].copy_from_slice(&(seg_bytes(s) as u16).to_be_bytes());
+        table[entry + 6..entry + 8].copy_from_slice(&(s.verts.len() as u16).to_be_bytes());
+        table[entry + 8..entry + 10].copy_from_slice(&(s.tris.len() as u16).to_be_bytes());
+        blob.clear();
+        blob.resize(seg_bytes(s), 0);
+        let mut at = 0;
         for (vi, (&g, &nrm)) in s.verts.iter().zip(&s.normals).enumerate() {
             let g = g as usize;
             let (p, c) = (mesh.position(g), mesh.color(g));
@@ -227,18 +342,13 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
             blob[at..at + 3].copy_from_slice(t);
             at += 3;
         }
-        at = at.div_ceil(8) * 8;
+        put(seg_at, &blob);
+        seg_at += blob.len();
     }
-    // Uncached memory: word writes, no cache writeback needed.
-    for (k, w) in blob.as_chunks::<4>().0.iter().enumerate() {
-        unsafe {
-            (base as *mut u32)
-                .add(k)
-                .write_volatile(u32::from_be_bytes(*w))
-        };
-    }
+    put(0, &table);
     Some(RspMesh {
         table: phys,
+        bytes: total as u32,
         segs: segs.len() as u16,
         tris: segs.iter().map(|s| s.tris.len() as u32).sum(),
         textured,

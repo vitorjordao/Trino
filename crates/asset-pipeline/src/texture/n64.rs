@@ -81,16 +81,25 @@ impl N64Format {
         }
     }
 
-    /// Does the whole texture fit TMEM (what a 3D draw needs; 2D blits
-    /// tile bigger sprites)?
-    pub fn fits_tmem(self, width: u32, height: u32) -> bool {
+    /// TMEM bytes the texels take when loaded whole and the room they
+    /// have: 4 KB, or the lower 2 KB beside a palette — the limit the
+    /// shim's resident text atlas (`trino_text_begin`) and a 3D draw
+    /// hold a texture to.
+    pub fn tmem_texels(self, width: u32, height: u32) -> (u64, u64) {
         let (used, room) = self.tmem(width, height);
         let palette = match self {
             N64Format::Ci4 => 128,
             N64Format::Ci8 => 2048,
             _ => 0,
         };
-        used - palette <= room
+        (used - palette, room)
+    }
+
+    /// Does the whole texture fit TMEM (what a 3D draw needs; 2D blits
+    /// tile bigger sprites)?
+    pub fn fits_tmem(self, width: u32, height: u32) -> bool {
+        let (texels, room) = self.tmem_texels(width, height);
+        texels <= room
     }
 
     /// What the RDP samples from `rgba` (row-major RGBA8), or why it is not

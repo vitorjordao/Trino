@@ -23,11 +23,19 @@ mod n64 {
     use trino_core::{Button, Game, InputState, Vec2};
     use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
 
+    /// See `trino_rust_main`.
+    const RSP_ARENA_BYTES: u32 = 376 * 1024;
+
     #[unsafe(no_mangle)]
     pub extern "C" fn trino_rust_main() {
         runtime::init();
         runtime::log("TRINO_BOOT\n");
 
+        // The RSP mesh copies' own region (GitHub #110), before anything
+        // else takes the heap: castle64, the showcase and the self-test's
+        // copies peak at ~373 KB alive (`TRINO_HEAP … rsp=`), the anim
+        // steps' group past it takes the heap.
+        N64Renderer::reserve_rsp_arena(RSP_ARENA_BYTES);
         let mut renderer = N64Renderer::new();
         let mut audio = N64Audio::new();
         let input = N64Input::new();
@@ -164,8 +172,10 @@ mod n64 {
         const HEAP_MARGIN: u32 = 128 * 1024;
         let mut m = trino_core::Platform::memory(platform);
         m.heap_peak = m.heap_peak.max(sampled);
+        let [live, live_peak, arena, arena_used, _] = N64Renderer::rsp_copy_stats();
         runtime::log(&format!(
-            "TRINO_HEAP:{}/{} peak={} top={} after {after}\n",
+            "TRINO_HEAP:{}/{} peak={} top={} rsp={live}/{live_peak} arena={arena_used}/{arena} \
+             after {after}\n",
             m.heap_used,
             m.heap_total,
             m.heap_peak,
@@ -872,9 +882,14 @@ mod n64 {
                     // block (GitHub #110).
                     renderer.trim_buffers();
                     let (used, total) = runtime::heap();
+                    let [live, live_peak, arena, arena_used, arena_free] =
+                        N64Renderer::rsp_copy_stats();
                     runtime::log(&format!(
-                        "TRINO_HEAP:{used}/{total} top={} before the micro scenes\n",
-                        runtime::heap_top_free()
+                        "TRINO_HEAP:{used}/{total} top={} batch={} rsp={live}/{live_peak} \
+                         arena={arena_used}/{arena} arena_free={arena_free} before the micro \
+                         scenes\n",
+                        runtime::heap_top_free(),
+                        renderer.batch_bytes()
                     ));
                     // The micro scenes' biggest batch, exactly and while
                     // the trim left its block free: a 512 → 1 024 doubling

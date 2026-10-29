@@ -140,6 +140,95 @@ fn inspect_and_corrupt_an_eeprom_image() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Azahar's SD card (issues #119, #121): a game's folder that holds no
+/// slot file reads the shared folder's save (the one-time migration), then
+/// its own; the shared folder reads `save.bin` from before the slots. The
+/// editor's Saves tab lists the same folders (`saves::n3ds_folders`).
+#[test]
+fn inspect_a_3ds_sd_folder_and_its_migration() {
+    let sd = scratch("sd");
+    let shared = sd.join("3ds/trino");
+    let game = shared.join("castle64");
+    std::fs::create_dir_all(&game).unwrap();
+    slot(&shared.join("save.a"), 3, b"shared-save");
+    let mut bin = save::header(b"older").to_vec();
+    bin.extend_from_slice(b"older");
+    std::fs::write(shared.join("save.bin"), &bin).unwrap();
+
+    let r = json(&xtask(&[
+        "save",
+        "inspect",
+        game.to_str().unwrap(),
+        "--json",
+    ]));
+    assert_eq!(r["kind"], "3ds folder");
+    assert_eq!(r["status"], "ok");
+    assert_eq!(r["preview"], "shared-save");
+    assert_eq!(r["newest"], "the shared folder (migrates once)");
+    assert_eq!(r["slots"][2]["state"], "shared");
+
+    // Once the game saved, its own folder wins.
+    slot(&game.join("save.b"), 1, b"own-save");
+    let r = json(&xtask(&[
+        "save",
+        "inspect",
+        game.to_str().unwrap(),
+        "--json",
+    ]));
+    assert_eq!(
+        (r["preview"].as_str(), r["newest"].as_str()),
+        (Some("own-save"), Some("save.b"))
+    );
+    assert_eq!(r["slots"].as_array().unwrap().len(), 2, "no shared lines");
+
+    // A damaged own slot never falls back to the shared save.
+    let mut b = std::fs::read(game.join("save.b")).unwrap();
+    let last = b.len() - 1;
+    b[last] ^= 1;
+    std::fs::write(game.join("save.b"), &b).unwrap();
+    let r = json(&xtask(&[
+        "save",
+        "inspect",
+        game.to_str().unwrap(),
+        "--json",
+    ]));
+    assert_eq!(
+        (r["status"].as_str(), r["len"].as_u64()),
+        (Some("corrupted"), Some(0))
+    );
+
+    // The shared folder: its slot, and save.bin listed as legacy.
+    let r = json(&xtask(&[
+        "save",
+        "inspect",
+        shared.to_str().unwrap(),
+        "--json",
+    ]));
+    assert_eq!(r["kind"], "3ds shared folder");
+    assert_eq!(r["preview"], "shared-save");
+    assert_eq!(r["slots"][2]["name"], "save.bin");
+    std::fs::remove_file(shared.join("save.a")).unwrap();
+    let r = json(&xtask(&[
+        "save",
+        "inspect",
+        shared.to_str().unwrap(),
+        "--json",
+    ]));
+    assert_eq!(
+        (r["preview"].as_str(), r["newest"].as_str()),
+        (Some("older"), Some("save.bin"))
+    );
+
+    let folders = trino_asset_pipeline::saves::n3ds_folders(&sd);
+    assert_eq!(folders, vec![shared.clone(), game.clone()]);
+    std::fs::write(sd.join("x.eeprom"), [0u8; 512]).unwrap();
+    assert_eq!(
+        trino_asset_pipeline::saves::ares_eeproms(&sd),
+        vec![sd.join("x.eeprom")]
+    );
+    let _ = std::fs::remove_dir_all(&sd);
+}
+
 #[test]
 fn bad_save_invocations_fail_with_a_reason() {
     let o = xtask(&["save"]);

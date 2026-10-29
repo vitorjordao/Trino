@@ -7,7 +7,13 @@
 //!   slot files (`trino_core::save::read_slot_files`);
 //! - **one slot file** (`…/x.sav.a`);
 //! - **a raw medium** (an N64 EEPROM image, 512 B or 2 KB, or `medium`):
-//!   the A/B slots at 0 and half the medium.
+//!   the A/B slots at 0 and half the medium — ares keeps the cartridge's
+//!   beside the ROM as `<rom>.eeprom` ([`ares_eeproms`]);
+//! - **a 3DS SD folder** (a directory: `save.a` / `save.b`, issue #121):
+//!   a game's own `sdmc:/3ds/trino/<name>/`, which reads the shared folder
+//!   from before GitHub #119 while it holds no slot file, or that shared
+//!   folder itself (`save.bin`, the `"TS"` frame from before the slots).
+//!   Azahar's SD card is [`azahar_sd`].
 
 use std::path::{Path, PathBuf};
 
@@ -51,6 +57,130 @@ impl SlotStore for FileSlots<'_> {
     fn read_legacy(&mut self, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
         read_into(self.0, buf)
     }
+}
+
+/// A 3DS SD save folder: `save.a` / `save.b` in `dir`. The shared folder
+/// from before #119 (the one holding the games' folders) has `save.bin` as
+/// its legacy save; a game's folder reads the shared folder's save when it
+/// holds no slot file at all, as `trino_platform_3ds::savedir::GameSlots`
+/// does on the console (the same rule, kept in step by the tests of both).
+pub struct SdFolder<'a> {
+    pub dir: &'a Path,
+    /// The shared folder above a game's folder (`None`: `dir` is it).
+    pub shared: Option<&'a Path>,
+}
+
+impl<'a> SdFolder<'a> {
+    /// `dir` as the console reads it: a game's folder when its parent is
+    /// `…/3ds/trino`, else the shared folder.
+    pub fn of(dir: &'a Path) -> SdFolder<'a> {
+        let shared = dir
+            .parent()
+            .filter(|p| p.ends_with("3ds/trino") && !dir.ends_with("3ds/trino"));
+        SdFolder { dir, shared }
+    }
+
+    fn own_files(&self) -> bool {
+        self.dir.join("save.a").exists() || self.dir.join("save.b").exists()
+    }
+}
+
+impl SlotStore for SdFolder<'_> {
+    fn read_slot(&mut self, slot: u8, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+        read_into(
+            &self.dir.join(if slot == 0 { "save.a" } else { "save.b" }),
+            buf,
+        )
+    }
+    fn write_slot(&mut self, slot: u8, bytes: &[u8]) -> Result<(), SaveError> {
+        let p = self.dir.join(if slot == 0 { "save.a" } else { "save.b" });
+        std::fs::write(p, bytes).map_err(|_| SaveError::Io)
+    }
+    fn read_legacy(&mut self, buf: &mut [u8]) -> Result<Option<usize>, SaveError> {
+        match self.shared {
+            // A game's folder: the shared save, while it holds no slot file.
+            Some(shared) if !self.own_files() => {
+                let mut scratch = vec![0u8; MAX];
+                let r = save::read_slot_files(&mut SdFolder::of(shared), buf, &mut scratch)?;
+                Ok((r.len > 0).then_some(r.len))
+            }
+            Some(_) => Ok(None),
+            // The shared folder: save.bin, a `"TS"` frame.
+            None => {
+                let mut file = vec![0u8; MAX];
+                let Some(size) = read_into(&self.dir.join("save.bin"), &mut file)? else {
+                    return Ok(None);
+                };
+                let size = size.min(file.len());
+                if size < save::HEADER {
+                    return Ok(None);
+                }
+                let header: [u8; save::HEADER] = file[..save::HEADER].try_into().unwrap();
+                let data = &file[save::HEADER..size];
+                if !save::verify(&header, data) {
+                    return Ok(None);
+                }
+                let n = data.len().min(buf.len());
+                buf[..n].copy_from_slice(&data[..n]);
+                Ok(Some(data.len()))
+            }
+        }
+    }
+}
+
+/// Azahar's SD card (`sdmc`): `$TRINO_AZAHAR_SDMC`, else beside its log
+/// (`<data>/azahar-emu/sdmc` on Linux, `%APPDATA%/Azahar/sdmc` on
+/// Windows), when it exists.
+pub fn azahar_sd() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("TRINO_AZAHAR_SDMC") {
+        return Some(PathBuf::from(p));
+    }
+    let candidates: Vec<PathBuf> = if cfg!(windows) {
+        vec![PathBuf::from(std::env::var_os("APPDATA")?).join("Azahar/sdmc")]
+    } else {
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"));
+        vec![data.join("azahar-emu/sdmc"), data.join("Azahar/sdmc")]
+    };
+    candidates.into_iter().find(|p| p.is_dir())
+}
+
+/// The Trino save folders on a 3DS SD card: the shared `3ds/trino` (when it
+/// holds a save) and each game's folder in it.
+pub fn n3ds_folders(sd: &Path) -> Vec<PathBuf> {
+    let shared = sd.join("3ds/trino");
+    let mut out: Vec<PathBuf> = std::fs::read_dir(&shared)
+        .map(|r| {
+            r.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    if ["save.a", "save.b", "save.bin"]
+        .iter()
+        .any(|f| shared.join(f).exists())
+    {
+        out.insert(0, shared);
+    }
+    out
+}
+
+/// The EEPROM images ares wrote beside the ROMs in `dir` (`<rom>.eeprom`).
+pub fn ares_eeproms(dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|r| {
+            r.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "eeprom" || x == "eep"))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
 }
 
 /// An EEPROM image in memory.
@@ -213,6 +343,9 @@ fn slot_file_line(name: String, bytes: Option<&[u8]>) -> SlotLine {
 
 pub fn inspect(path: &Path, medium: bool) -> Result<Report, String> {
     let file = path.display().to_string();
+    if path.is_dir() {
+        return inspect_sd_folder(path);
+    }
     if !medium && FileSlots::exists(path) {
         let mut store = FileSlots(path);
         let mut out = vec![0u8; MAX];
@@ -333,6 +466,67 @@ pub fn inspect(path: &Path, medium: bool) -> Result<Report, String> {
         status,
         newest,
         len: n,
+        version,
+        preview,
+        slots,
+    })
+}
+
+/// A 3DS SD folder ([`SdFolder`]): its slots, its legacy file, and the
+/// shared save a game's empty folder would migrate.
+fn inspect_sd_folder(dir: &Path) -> Result<Report, String> {
+    let mut store = SdFolder::of(dir);
+    let mut out = vec![0u8; MAX];
+    let mut scratch = vec![0u8; MAX];
+    let r =
+        save::read_slot_files(&mut store, &mut out, &mut scratch).map_err(|e| format!("{e:?}"))?;
+    let mut slots: Vec<SlotLine> = ["save.a", "save.b"]
+        .iter()
+        .map(|f| slot_file_line(f.to_string(), std::fs::read(dir.join(f)).ok().as_deref()))
+        .collect();
+    let migrating = store.shared.is_some() && !store.own_files() && r.len > 0;
+    match store.shared {
+        None => {
+            if let Ok(b) = std::fs::read(dir.join("save.bin")) {
+                slots.push(SlotLine {
+                    name: "save.bin".into(),
+                    state: "legacy",
+                    bytes: b.len(),
+                    ..SlotLine::default()
+                });
+            }
+        }
+        Some(shared) if !store.own_files() => {
+            for f in ["save.a", "save.b"] {
+                if let Ok(b) = std::fs::read(shared.join(f)) {
+                    let mut l = slot_file_line(format!("../{f}"), Some(&b));
+                    if l.state == "valid" {
+                        l.state = "shared";
+                    }
+                    slots.push(l);
+                }
+            }
+        }
+        Some(_) => {}
+    }
+    let data = &out[..r.len.min(out.len())];
+    let (version, preview) = data_meta(data);
+    let newest = match r.slot {
+        Some(s) => Some(if s == 0 { "save.a" } else { "save.b" }.to_string()),
+        None if migrating => Some("the shared folder (migrates once)".into()),
+        None if r.len > 0 => Some("save.bin".into()),
+        None => None,
+    };
+    Ok(Report {
+        file: dir.display().to_string(),
+        kind: if store.shared.is_some() {
+            "3ds folder"
+        } else {
+            "3ds shared folder"
+        },
+        status: r.status,
+        newest,
+        len: r.len,
         version,
         preview,
         slots,

@@ -1,4 +1,4 @@
-From cbc766a480beb8a0acefe15aaa89f8b0314df9cb Mon Sep 17 00:00:00 2001
+From 96b2fcd6f773e68cc3d5f191dbc452a7d998050f Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Vitor=20Jord=C3=A3o?= <vitorpeviano@gmail.com>
 Date: Thu, 29 Oct 2026 09:04:09 -0300
 Subject: [PATCH] eeprom: read the block before a write that ends inside it

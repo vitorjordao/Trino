@@ -1,6 +1,8 @@
 eeprom: read the block before a write that ends inside it
 
-Fixes #NNN.
+Filed as https://github.com/n64brew/libdragon/pull/9
+
+Fixes #8.
 
 `eeprom_write_bytes` reads a block back before a partial write only when the write starts inside it, or ends inside a *different* last block. A write that starts on a block boundary and ends inside the same block skips the read-back. Example: `eeprom_write_bytes(src, 136, 3)`, i.e. block 17, bytes 0..2. If that block isn't cached yet, bytes 3..7 come from uninitialized cache memory, and the flush writes them to the EEPROM.
 
@@ -29,7 +31,7 @@ They check that only the span changed, including the blocks on either side, and 
 
 ares v148, `testrom_emu.z64`, `N64_ROM_SAVETYPE=eeprom4k`.
 
-Before the fix:
+Before the fix (f26e1c161 with the new tests):
 
 ```
 **** Starting test: test_eeprom_read_bytes

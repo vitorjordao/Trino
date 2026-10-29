@@ -97,17 +97,17 @@ SKIP
 RDPQ debug engine started (slowdowns are expected)
 **************************************************
 
-[WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 5543.846 us (mode: sync, success: yes).
-[WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 7994.682 us (mode: sync, success: yes).
-[WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 417645.686 us (mode: sync, success: yes).
-[WARN]: Stalled compile (compute, bc22f0ed7e70237e): thread 0 - 16232.019 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 5114.521 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 6740.540 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 295843.256 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, bc22f0ed7e70237e): thread 0 - 16192.625 us (mode: sync, success: yes).
 **** Starting test: test_rdpq_clear
 
 **************************************************
 RDPQ debug engine started (slowdowns are expected)
 **************************************************
 
-[WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 15726.661 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 15305.952 us (mode: sync, success: yes).
 **** Starting test: test_rdpq_dynamic
 
 **************************************************
@@ -180,7 +180,7 @@ RDPQ debug engine started (slowdowns are expected)
 RDPQ debug engine started (slowdowns are expected)
 **************************************************
 
-[WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 9362.838 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 9408.022 us (mode: sync, success: yes).
 **** Starting test: test_rdpq_fixup_fillrect
 
 **************************************************

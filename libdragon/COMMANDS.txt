@@ -1,5 +1,7 @@
-Base: origin/preview 39d0d6096130836a65710da6730290701d060272
-Fix:  branch eeprom-write-bytes-rmw, commit cbc766a48
+Base: n64brew/libdragon preview f26e1c16145e4d6ad7e391e1306513d684083c02
+      (first tested on DragonMinded/libdragon preview 39d0d6096; eeprom.c is identical)
+Fix:  vitorjordao/libdragon-n64brew branch eeprom-write-bytes-rmw, commit 96b2fcd6f
+      (issue n64brew/libdragon#8, PR n64brew/libdragon#9)
 
 Toolchain: local image trino-n64 (mips64-elf-gcc 16.2.0), N64_INST copied out
 to a writable dir (dk.sh). Emulator: ares v148 headless (trino-ares image, ares.sh).

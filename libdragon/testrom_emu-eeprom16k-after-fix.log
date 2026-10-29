@@ -49,7 +49,7 @@ SKIP
 **** Starting test: test_eeprom_write_bytes
 **** Starting test: test_eepromfs
 **** Starting test: test_cache_invalidate
-VI WARNING: __vblank_interrupt outside of vblank period: 378
+VI WARNING: __vblank_interrupt outside of vblank period: 376
 **** Starting test: test_debug_sdfs
 SKIP
 **** Starting test: test_dma_read_misalign
@@ -97,17 +97,17 @@ SKIP
 RDPQ debug engine started (slowdowns are expected)
 **************************************************
 
-[WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 8371.118 us (mode: sync, success: yes).
-[WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 7746.096 us (mode: sync, success: yes).
-[WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 255860.309 us (mode: sync, success: yes).
-[WARN]: Stalled compile (compute, bc22f0ed7e70237e): thread 0 - 15129.522 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, a2d3c33efb49ccd2): thread 0 - 5171.468 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, ff6863004fc9ee60): thread 0 - 7341.407 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, d4db6236f1bec5e8): thread 0 - 270881.577 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, bc22f0ed7e70237e): thread 0 - 15342.030 us (mode: sync, success: yes).
 **** Starting test: test_rdpq_clear
 
 **************************************************
 RDPQ debug engine started (slowdowns are expected)
 **************************************************
 
-[WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 14994.288 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, 471d277cbebc0024): thread 0 - 14453.063 us (mode: sync, success: yes).
 **** Starting test: test_rdpq_dynamic
 
 **************************************************
@@ -180,7 +180,7 @@ RDPQ debug engine started (slowdowns are expected)
 RDPQ debug engine started (slowdowns are expected)
 **************************************************
 
-[WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 10294.204 us (mode: sync, success: yes).
+[WARN]: Stalled compile (compute, 5e969bd158b09fb3): thread 0 - 9852.045 us (mode: sync, success: yes).
 **** Starting test: test_rdpq_fixup_fillrect
 
 **************************************************

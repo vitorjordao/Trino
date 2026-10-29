@@ -1410,6 +1410,9 @@ cargo test --workspace
 
 ## Pitfalls
 
+- **A ggrs batch's last advance is not always a new frame.** A rollback can re-simulate
+  up to the current frame and add none; `trino_net::run_requests` decides by ggrs's
+  frame numbers (`FrameClock`). Effects keyed on "the newest advance" doubled a sound.
 - **A trace log line can start with `[`** (`[ares] TRINO_TRACE:...`): never tell a log
   from JSON by its first character. `trino_trace::chrome::parse` tries JSON first.
 - **Zones in a hot-reloaded game dylib go nowhere.** The dylib links its own `trino-core`,

@@ -7,8 +7,8 @@
 //! as the checksum the peers compare), load an older one (a rollback), and
 //! advance with every player's input — published as the platform's
 //! [`PlayersInput`] before each update, with a fixed `dt`. Simulated-again
-//! frames play no sound: only the newest frame of a batch hears the
-//! game's audio.
+//! frames play no sound: only a frame past the newest one already played
+//! hears the game's audio (a batch may re-simulate without a new frame).
 
 use core::net::SocketAddr;
 use std::time::Duration;
@@ -64,7 +64,7 @@ pub enum NetState {
 /// What a session did so far.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct NetStats {
-    /// Frames the game advanced (newest frames, not re-simulations).
+    /// Frames the game advanced (new frames, not re-simulations).
     pub frames: u64,
     /// Rollbacks (state loads) and the frames simulated again after them.
     pub rollbacks: u64,
@@ -103,6 +103,15 @@ pub struct NetSession {
     /// The newest frame's players (what the game saw last).
     last: PlayersInput,
     remote: Option<PeerAddr>,
+    clock: FrameClock,
+}
+
+/// Where the game is in ggrs's frame numbers, and the newest frame it
+/// played with sound.
+#[derive(Clone, Copy, Default)]
+pub struct FrameClock {
+    at: i32,
+    newest: i32,
 }
 
 impl NetSession {
@@ -149,6 +158,7 @@ impl NetSession {
             skip: 0,
             last: PlayersInput::NONE,
             remote: peers.first().map(|p| p.1),
+            clock: FrameClock::default(),
         })
     }
 
@@ -283,7 +293,7 @@ impl NetSession {
             audio,
             self.players,
             self.dt,
-            &mut self.stats,
+            (&mut self.stats, &mut self.clock),
         ) {
             self.last = p;
         }
@@ -303,8 +313,11 @@ impl NetSession {
 
 /// Carry out a batch of ggrs requests on `game`: snapshots with the state
 /// hash as checksum, rollbacks, and advances with every player's input
-/// published to `platform` — the newest frame with `audio`, re-simulated
-/// ones silent. Returns the newest frame's players.
+/// published to `platform` — a new frame with `audio`, re-simulated ones
+/// silent. A frame is new when it is past `clock`'s newest: ggrs sends
+/// rollbacks that re-simulate up to the current frame without a new one
+/// (`Load 1498, Advance, Save 1499, Advance`), so the last advance of a
+/// batch is not always new. Returns the newest new frame's players.
 pub fn run_requests(
     requests: Vec<GgrsRequest<TrinoGgrs>>,
     game: &mut dyn Game,
@@ -312,14 +325,9 @@ pub fn run_requests(
     audio: &mut dyn Audio,
     players: usize,
     dt: f32,
-    stats: &mut NetStats,
+    // What the session counts, and where it is in ggrs's frames.
+    (stats, clock): (&mut NetStats, &mut FrameClock),
 ) -> Option<PlayersInput> {
-    let advances = requests
-        .iter()
-        .filter(|r| matches!(r, GgrsRequest::AdvanceFrame { .. }))
-        .count();
-    let mut seen = 0;
-    let mut rolled_back = false;
     let mut newest = None;
     for r in requests {
         match r {
@@ -329,16 +337,17 @@ pub fn run_requests(
                 buf.truncate(n);
                 let hash = game.state_hash().map(|h| h as u128);
                 cell.save(frame, Some(buf), hash);
+                clock.at = frame;
             }
-            GgrsRequest::LoadGameState { cell, .. } => {
+            GgrsRequest::LoadGameState { cell, frame } => {
                 if let Some(bytes) = cell.load() {
                     game.load_state(&bytes);
                 }
                 stats.rollbacks += 1;
-                rolled_back = true;
+                clock.at = frame;
             }
             GgrsRequest::AdvanceFrame { inputs } => {
-                seen += 1;
+                clock.at += 1;
                 let mut p = PlayersInput::NONE;
                 for (i, (w, status)) in inputs.iter().enumerate().take(players) {
                     if *status != InputStatus::Disconnected {
@@ -349,15 +358,14 @@ pub fn run_requests(
                 if let Some(h) = platform.hosted_players_mut() {
                     h.publish_players(&p);
                 }
-                if seen == advances {
+                if clock.at > clock.newest {
+                    clock.newest = clock.at;
                     game.update_with(platform, &p.players[0], audio, dt);
                     stats.frames += 1;
                     newest = Some(p);
                 } else {
                     game.update_with(platform, &p.players[0], &mut Mute, dt);
-                    if rolled_back {
-                        stats.resimulated += 1;
-                    }
+                    stats.resimulated += 1;
                 }
             }
         }
@@ -374,6 +382,7 @@ pub struct SyncTest {
     players: usize,
     dt: f32,
     pub stats: NetStats,
+    clock: FrameClock,
 }
 
 impl SyncTest {
@@ -391,6 +400,7 @@ impl SyncTest {
             players,
             dt: 1.0 / fps.max(1) as f32,
             stats: NetStats::default(),
+            clock: FrameClock::default(),
         })
     }
 
@@ -415,8 +425,132 @@ impl SyncTest {
             audio,
             self.players,
             self.dt,
-            &mut self.stats,
+            (&mut self.stats, &mut self.clock),
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ggrs::GameStateCell;
+    use trino_core::{InputState, MusicId, Renderer, SoundId};
+
+    use super::*;
+
+    /// A game that plays a sound every 30th frame.
+    struct Ticks(u32);
+
+    impl Game for Ticks {
+        fn update(&mut self, _: &InputState, audio: &mut dyn Audio, _: f32) {
+            self.0 += 1;
+            if self.0.is_multiple_of(30) {
+                audio.play_sound(SoundId(1));
+            }
+        }
+        fn render(&mut self, _: &mut dyn Renderer) {}
+        fn state_size(&self) -> usize {
+            4
+        }
+        fn save_state(&self, out: &mut [u8]) -> Option<usize> {
+            out.get_mut(..4)?.copy_from_slice(&self.0.to_le_bytes());
+            Some(4)
+        }
+        fn load_state(&mut self, bytes: &[u8]) -> bool {
+            self.0 = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+            true
+        }
+    }
+
+    struct Host;
+
+    impl Platform for Host {
+        fn now_micros(&self) -> u64 {
+            0
+        }
+        fn log(&self, _: &str) {}
+    }
+
+    struct Speaker(Vec<u32>);
+
+    impl Audio for Speaker {
+        fn play_sound(&mut self, _: SoundId) {
+            self.0.push(0);
+        }
+        fn play_music(&mut self, _: MusicId, _: bool) {}
+        fn stop_music(&mut self) {}
+        fn set_master_volume(&mut self, _: f32) {}
+    }
+
+    /// `"S5 A L3"`: save frame 5, advance, load frame 3 (cells per frame).
+    fn batch(script: &str, cells: &mut Vec<GameStateCell<Vec<u8>>>) -> Vec<GgrsRequest<TrinoGgrs>> {
+        script
+            .split_whitespace()
+            .map(|t| {
+                let frame = t[1..].parse::<i32>().unwrap_or(0);
+                let mut cell = || {
+                    if cells.len() <= frame as usize {
+                        cells.resize_with(frame as usize + 1, GameStateCell::default);
+                    }
+                    cells[frame as usize].clone()
+                };
+                match &t[..1] {
+                    "S" => GgrsRequest::SaveGameState {
+                        cell: cell(),
+                        frame,
+                    },
+                    "L" => GgrsRequest::LoadGameState {
+                        cell: cell(),
+                        frame,
+                    },
+                    _ => GgrsRequest::AdvanceFrame {
+                        inputs: vec![(Wire([0; NET_PAD_LEN]), InputStatus::Confirmed); 2],
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Every new frame is heard once and a re-simulation never, whatever
+    /// the batch looks like. CI caught the old rule (the last advance of a
+    /// batch hears the audio) playing frame 1500's sound twice on a batch
+    /// `L1498 A S1499 A S1500`, a rollback with no new frame.
+    #[test]
+    fn a_frame_is_heard_once_however_ggrs_batches_it() {
+        let (mut game, mut speaker, mut stats) =
+            (Ticks(0), Speaker(Vec::new()), NetStats::default());
+        let mut clock = FrameClock::default();
+        let mut cells = Vec::new();
+        let mut run = |script: &str, game: &mut Ticks, speaker: &mut Speaker| {
+            let r = batch(script, &mut cells);
+            run_requests(
+                r,
+                game,
+                &mut Host,
+                speaker,
+                2,
+                1.0 / 60.0,
+                (&mut stats, &mut clock),
+            )
+        };
+        for f in 0..30 {
+            run(&format!("S{f} A"), &mut game, &mut speaker);
+        }
+        assert_eq!((game.0, speaker.0.len()), (30, 1));
+        // A rollback that re-simulates up to frame 30 and adds nothing.
+        assert!(run("L28 A S29 A S30", &mut game, &mut speaker).is_none());
+        assert_eq!((game.0, speaker.0.len()), (30, 1));
+        // A rollback with new frames: 30 again, then 31 and 32.
+        assert!(run("L29 A S30 A S31 A", &mut game, &mut speaker).is_some());
+        assert_eq!(game.0, 32);
+        // Two new frames in one batch: frame 60 is heard, though not last.
+        for f in 32..58 {
+            run(&format!("S{f} A"), &mut game, &mut speaker);
+        }
+        run("S58 A S59 A S60 A", &mut game, &mut speaker);
+        assert_eq!((game.0, speaker.0.len()), (61, 2));
+        assert_eq!(stats.frames, 61);
+        assert_eq!(stats.resimulated, 3);
+        assert_eq!(stats.rollbacks, 2);
     }
 }

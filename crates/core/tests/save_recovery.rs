@@ -57,6 +57,11 @@ impl SlotStore for Files {
 
 const CAP: usize = 256;
 
+/// Every byte and every bit natively; under Miri (the nightly job, issue
+/// #121) a stride through the same loops, which keeps their logic and every
+/// slot layout but not the hours an exhaustive run would take there.
+const STRIDE: usize = if cfg!(miri) { 7 } else { 1 };
+
 fn read(f: &mut Files) -> (Vec<u8>, SaveStatus) {
     let mut out = [0u8; CAP];
     let mut scratch = [0u8; CAP + SLOT_HEADER];
@@ -125,7 +130,7 @@ fn a_power_cut_at_every_byte_of_a_slot_write_keeps_a_whole_save() {
             write(&mut base, if k + 1 == prior { &old } else { b"stars=11" });
         }
         let total = slot_file_len(new.len());
-        for cut in 0..=total {
+        for cut in (0..=total).filter(|c| c.is_multiple_of(STRIDE) || *c == total) {
             let mut f = base.clone();
             f.cut = Some(cut);
             write(&mut f, &new);
@@ -155,7 +160,7 @@ fn a_bit_flip_anywhere_reads_the_newest_the_previous_or_nothing() {
     write(&mut base, b"newest save");
     for slot in 0..2 {
         let len = base.slots[slot].as_ref().unwrap().len();
-        for bit in 0..len * 8 {
+        for bit in (0..len * 8).step_by(STRIDE) {
             let mut f = base.clone();
             f.slots[slot].as_mut().unwrap()[bit / 8] ^= 1 << (bit % 8);
             let (data, status) = read(&mut f);

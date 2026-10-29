@@ -53,6 +53,11 @@ jobs:
         env:
           # Tests leak 'static blobs on purpose (BakedScene borrows 'static).
           MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-ignore-leaks
+      # The save slots end to end through the public API (issue #121): the
+      # power-cut and bit-flip loops stride under `cfg(miri)` (~3 min).
+      - run: cargo +nightly miri test -p trino-core --test save_recovery --test save_slots
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-ignore-leaks
 
   asan:
     name: AddressSanitizer (core + asset pipeline)

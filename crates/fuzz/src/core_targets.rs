@@ -272,7 +272,10 @@ pub fn tsn2(data: &[u8]) {
         let h = blob.header();
         keep(h);
         keep(blob);
+        // The bound check the PC and the Web run before lewton (#121).
+        keep(trino_core::vorbis::check(blob.payload));
     }
+    keep(trino_core::vorbis::check(data));
 }
 
 /// TMIX: the project mix, applied to a bus mixer.
@@ -807,6 +810,45 @@ pub fn access_pack(data: &[u8]) {
             trino_core::AccessSettings::unpack(s.pack()),
             Some(s),
             "access repack is stable"
+        );
+    }
+}
+
+/// A console build's asset index (`index.tsv`, issue #121): every line as
+/// the N64 and 3DS loaders read it (`IndexLine`, the tier column, a sound's
+/// codec and bus), and the same text as a group entry's locator. A parsed
+/// line written back as the bake writes it parses to the same line.
+pub fn asset_index(data: &[u8]) {
+    use trino_core::HwTier;
+    use trino_core::asset::{IndexKind, IndexLine, Locator, SoundColumns};
+    let Ok(text) = core::str::from_utf8(data) else {
+        return;
+    };
+    for raw in text.lines().take(4096) {
+        let loc = Locator::parse(raw);
+        keep(loc.file);
+        keep(SoundColumns::read(&mut loc.extra()));
+        keep(loc.extra().count());
+        let Some(line) = IndexLine::parse(raw) else {
+            continue;
+        };
+        keep((line.loads_on(HwTier::Base), line.loads_on(HwTier::Expanded)));
+        keep(SoundColumns::read(&mut line.extra()));
+        keep(line.extra().count());
+        let label = match line.kind {
+            IndexKind::Entry(k) => k.label(),
+            IndexKind::Group => "group",
+            IndexKind::Boot => "boot",
+            IndexKind::Compression => "compression",
+            IndexKind::Mixer => "mixer",
+            IndexKind::Unknown(l) => l,
+        };
+        // The bake's form (`{id:08x} \t kind \t file`) reads back the same.
+        let canon = format!("{:08x}\t{label}\t{}", line.id, line.file);
+        let back = IndexLine::parse(&canon).expect("a written index line parses");
+        assert_eq!(
+            (back.id, back.kind, back.file, back.tier),
+            (line.id, line.kind, line.file, None)
         );
     }
 }

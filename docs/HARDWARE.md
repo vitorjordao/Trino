@@ -201,6 +201,46 @@ Luma3DS's Rosalina has a GDB stub. Its README gives the ports:
 
 The release ELF has symbols (function names, backtraces) but no line tables.
 
+## Save power cuts
+
+A save must survive the power going in the middle of it (issue #121): the
+N64 writes its EEPROM one 8-byte block a frame (`save_begin` /
+`save_step`), the 3DS replaces a slot file (temp file, then rename). The
+engine's tests cut a save at every byte (`crates/core/tests/save_recovery.rs`)
+and the `save recovery` self-test step cuts one short on each console; this
+is the real cut.
+
+`cargo xtask save soak` builds the soak (`castle64::soak`): the app does
+nothing but save a 96-byte counter, frame after frame (14 EEPROM blocks a
+save on the N64), with a dark red screen. It logs:
+
+```
+TRINO_SOAK boot seq=<n> status=<ok|recovered-from-backup|...>   # what survived
+TRINO_SOAK wrote seq=<n>                                        # a save finished
+```
+
+After a cut the `boot` line must read the last `wrote` the log showed, or a
+later one (the log lags, and the save in flight may have finished). Never
+less, never `corrupted`, never `empty` once a save finished.
+
+| Target | Command | What cuts the power |
+|---|---|---|
+| 3DS in Azahar | `cargo xtask save soak 3ds [--cycles 8]` | the harness kills Azahar (SIGKILL) after 3 to 40 saves, boots it again, checks, `--cycles` times |
+| 3DS | `cargo xtask save soak 3ds --device network --ip <IP>` | you: hold the power button, or pull the SD card, while `wrote` lines scroll |
+| N64 (SC64, EverDrive) | `cargo xtask save soak n64 --device sc64\|everdrive` | you: switch the console off, or pull the cartridge, while `wrote` lines scroll |
+
+On hardware, run the same command again after the cut and read its first
+`TRINO_SOAK boot` line against the last `wrote` before the cut. Do it ten
+times or so, at different moments. The N64 soak writes the cartridge's own
+EEPROM save (back it up with the flashcart's menu first); the 3DS soak
+writes `sdmc:/3ds/trino/<name>-soak/`, never the game's folder. ares can't
+stand in for the N64: it writes the `.eeprom` file only when it exits, so a
+killed ares loses every save of the run.
+
+**Status (2026-10-29):** the Azahar soak passes (8 cuts, each boot read the
+last finished save). The hardware runs (an SC64 with its EEPROM, a 3DS with
+its SD card) have not been done yet.
+
 ## Troubleshooting
 
 - **`sc64deployer` / `UNFLoader` / `3dslink` not found.** Each error names the

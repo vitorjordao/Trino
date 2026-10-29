@@ -204,6 +204,77 @@ pub struct Caps {
     pub max_collision_tris: u32,
 }
 
+/// How a texture's texels sit in texture memory: the N64 formats the
+/// asset pipeline picks per texture (`trino_asset_pipeline::N64Format`),
+/// and RGBA32 for targets with 32-bit textures. The PC's strict mode
+/// checks a texture by the format the N64 bake chose for it (GitHub #125:
+/// a CI texture has only half of TMEM, a 4-bit one takes half the bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TexelFormat {
+    /// 4-bit palette indices; the 16-color palette sits in TMEM's upper half.
+    Ci4,
+    /// 8-bit palette indices; the 256-color palette fills TMEM's upper half.
+    Ci8,
+    /// 4-bit intensity.
+    I4,
+    /// 8-bit intensity.
+    I8,
+    /// 16-bit color (the N64's RGBA5551).
+    Rgba16,
+    /// 32-bit color.
+    Rgba32,
+}
+
+impl TexelFormat {
+    pub const ALL: [TexelFormat; 6] = [
+        TexelFormat::Ci4,
+        TexelFormat::Ci8,
+        TexelFormat::I4,
+        TexelFormat::I8,
+        TexelFormat::Rgba16,
+        TexelFormat::Rgba32,
+    ];
+
+    pub const fn bits_per_texel(self) -> u32 {
+        match self {
+            TexelFormat::Ci4 | TexelFormat::I4 => 4,
+            TexelFormat::Ci8 | TexelFormat::I8 => 8,
+            TexelFormat::Rgba16 => 16,
+            TexelFormat::Rgba32 => 32,
+        }
+    }
+
+    /// A palette format: its palette takes the upper half of texture
+    /// memory, and the texels have the lower half.
+    pub const fn paletted(self) -> bool {
+        matches!(self, TexelFormat::Ci4 | TexelFormat::Ci8)
+    }
+
+    /// The asset pipeline's name (`CI4`, `CI8`, `I4`, `I8`, `RGBA5551` or
+    /// `RGBA16`, `RGBA32`).
+    pub fn parse(name: &str) -> Option<TexelFormat> {
+        Some(match name {
+            "CI4" => TexelFormat::Ci4,
+            "CI8" => TexelFormat::Ci8,
+            "I4" => TexelFormat::I4,
+            "I8" => TexelFormat::I8,
+            "RGBA5551" | "RGBA16" => TexelFormat::Rgba16,
+            "RGBA32" => TexelFormat::Rgba32,
+            _ => return None,
+        })
+    }
+
+    /// The worst case for a target without a known format: 16-bit texels
+    /// on a 16-bit target (the N64), else 32-bit.
+    pub const fn worst_for(caps: &Caps) -> TexelFormat {
+        if caps.color_depth_bits <= 16 {
+            TexelFormat::Rgba16
+        } else {
+            TexelFormat::Rgba32
+        }
+    }
+}
+
 /// Why a piece of content does not fit in a target's [`Caps`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CapsError {
@@ -502,6 +573,49 @@ impl Caps {
         }
         Ok(())
     }
+
+    /// Texture-memory bytes the texels of a `width`x`height` texture in
+    /// `format` take when loaded whole, and the room they have: rows are
+    /// padded to 8 bytes (the RDP's TMEM lines), and a palette format's
+    /// texels get the lower half of texture memory (its palette is loaded
+    /// into the upper half). On the N64 that is the room the shim's
+    /// resident text atlas and a 3D draw hold a texture to.
+    pub const fn texture_texels(&self, format: TexelFormat, width: u32, height: u32) -> (u64, u64) {
+        let row = (width as u64 * format.bits_per_texel() as u64).div_ceil(8);
+        let used = row.next_multiple_of(8) * height as u64;
+        let room = if format.paletted() {
+            self.texture_memory_bytes as u64 / 2
+        } else {
+            self.texture_memory_bytes as u64
+        };
+        (used, room)
+    }
+
+    /// [`validate_texture`](Self::validate_texture) by the texture's format
+    /// ([`texture_texels`](Self::texture_texels)) instead of a byte count
+    /// per pixel.
+    pub fn validate_texture_as(
+        &self,
+        width: u16,
+        height: u16,
+        format: TexelFormat,
+    ) -> Result<(), CapsError> {
+        if width > self.max_texture_dim || height > self.max_texture_dim {
+            return Err(CapsError::TextureTooLarge {
+                width,
+                height,
+                max_dim: self.max_texture_dim,
+            });
+        }
+        let (used, room) = self.texture_texels(format, width as u32, height as u32);
+        if used > room {
+            return Err(CapsError::TextureExceedsMemory {
+                bytes: used.min(u32::MAX as u64) as u32,
+                budget: room as u32,
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -527,6 +641,56 @@ mod tests {
         assert!(Caps::N64.validate_texture(32, 32, 2).is_ok());
         // 64x64 @ 0.5 byte/pixel (CI4) would be 2048 bytes, but the API takes
         // whole bytes; CI4 is validated by the asset pipeline in Fase 2.
+    }
+
+    /// GitHub #125: the room depends on the format, not a byte count per
+    /// pixel — CI textures have 2 KB, 4-bit ones take half the bytes.
+    #[test]
+    fn n64_texture_room_follows_the_format() {
+        let n64 = Caps::N64;
+        // trino5x7 before #99 (CI4, 72x40 texels): 5760 bytes counted as
+        // 16-bit; 1600 of texels (36-byte rows padded to 40) against CI's
+        // 2 KB.
+        assert_eq!(n64.texture_texels(TexelFormat::Ci4, 72, 40), (1600, 2048));
+        assert!(n64.validate_texture_as(72, 40, TexelFormat::Ci4).is_ok());
+        // 64x64 CI4 = 2048 bytes: exactly the room beside the palette.
+        assert!(n64.validate_texture_as(64, 64, TexelFormat::Ci4).is_ok());
+        // 48x48 CI8 = 2304 bytes: under 4 KB, over the CI room.
+        assert_eq!(
+            n64.validate_texture_as(48, 48, TexelFormat::Ci8),
+            Err(CapsError::TextureExceedsMemory {
+                bytes: 2304,
+                budget: 2048
+            })
+        );
+        // 64x64 I4 = 2048 bytes: fits, where 16-bit texels would not.
+        assert!(n64.validate_texture_as(64, 64, TexelFormat::I4).is_ok());
+        assert!(n64.validate_texture(64, 64, 2).is_err());
+        // 64x32 I8 and 32x32 RGBA16 fill or half-fill 4 KB.
+        assert!(n64.validate_texture_as(64, 64, TexelFormat::I8).is_ok());
+        assert!(n64.validate_texture_as(64, 65, TexelFormat::I8).is_err());
+        assert!(n64.validate_texture_as(32, 64, TexelFormat::Rgba16).is_ok());
+        // Rows pad to 8 bytes: 3 texels of RGBA16 take a whole line.
+        assert_eq!(n64.texture_texels(TexelFormat::Rgba16, 3, 10), (80, 4096));
+        assert_eq!(n64.texture_texels(TexelFormat::I4, 1, 4), (32, 4096));
+    }
+
+    #[test]
+    fn texel_formats_parse_the_pipeline_names() {
+        for (name, f) in [
+            ("CI4", TexelFormat::Ci4),
+            ("CI8", TexelFormat::Ci8),
+            ("I4", TexelFormat::I4),
+            ("I8", TexelFormat::I8),
+            ("RGBA5551", TexelFormat::Rgba16),
+            ("RGBA16", TexelFormat::Rgba16),
+            ("RGBA32", TexelFormat::Rgba32),
+        ] {
+            assert_eq!(TexelFormat::parse(name), Some(f));
+        }
+        assert_eq!(TexelFormat::parse("ETC1"), None);
+        assert_eq!(TexelFormat::worst_for(&Caps::N64), TexelFormat::Rgba16);
+        assert_eq!(TexelFormat::worst_for(&Caps::PC), TexelFormat::Rgba32);
     }
 
     #[test]

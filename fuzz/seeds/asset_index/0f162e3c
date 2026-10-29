@@ -1,0 +1,11 @@
+00000002	compression	libdragon
+0d5c1f2a	sprite	0d5c1f2a.sprite
+3b7a01c4	sound	3b7a01c4.wav64		vadpcm	sfx
+77e0aa10	music	77e0aa10.wav64		opus	music
+5a5a0001	model	5a5a0001.tmdl
+5a5a0002	model	5a5a0002.tmdl	expanded
+9e3779b9	blob	9e3779b9.base.blob	base
+9e3779b9	blob	9e3779b9.expanded.blob	expanded
+1234abcd	font	1234abcd.tfnt
+00000000	mixer	audio/mixer
+c0ffee01	group	groups/level1.tbnd

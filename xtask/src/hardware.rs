@@ -60,7 +60,7 @@ impl Device {
     }
 
     /// The console this device runs (`n64` / `3ds`).
-    fn platform(self) -> &'static str {
+    pub fn platform(self) -> &'static str {
         match self {
             Device::Sc64 | Device::EverDrive => "n64",
             Device::Network => "3ds",
@@ -208,6 +208,8 @@ pub fn check_invocation(
 ) -> Result<(), String> {
     match (cmd, platform) {
         (Some("run"), Some(p @ ("n64" | "3ds"))) if p == d.device.platform() => Ok(()),
+        // `save soak n64|3ds --device …` (issue #121) checks its platform.
+        (Some("save"), Some("soak")) => Ok(()),
         (Some("run"), Some(p @ ("n64" | "3ds"))) => Err(format!(
             "xtask: --device {} is a {} device, not {p} (use {})",
             d.device.name(),

@@ -184,11 +184,16 @@ unsafe extern "C" {
     /// `rgba8888` first) or the left one (0). 0 = no right-eye target.
     pub fn trino_stereo_eye(eye: u32, rgba8888: u32) -> u32;
 
-    /// Save slot file `slot` on the SD card (0 = A, 1 = B, 2 = the single
-    /// file from before the slots): returns its size (0 = none, -1 =
-    /// error), copying up to `cap` bytes into `dest`.
+    /// The game's save folder (`crate::savedir::dir`, NUL-terminated), set
+    /// once at boot (GitHub #119).
+    pub fn trino_save_init(dir: *const c_char);
+    /// Save file `slot` on the SD card (`crate::savedir::File`: 0/1 the
+    /// game's A/B, 2 the shared save.bin, 3/4 the shared A/B from before
+    /// #119): returns its size (0 = none, -1 = error), copying up to `cap`
+    /// bytes into `dest`.
     pub fn trino_save_load(slot: u32, dest: *mut u8, cap: u32) -> i32;
-    /// Atomically replace slot `slot` (0 or 1); 0 = ok, -1 = error.
+    /// Atomically replace the game's own slot `slot` (0 or 1); 0 = ok, -1 =
+    /// error.
     pub fn trino_save_store(slot: u32, src: *const u8, len: u32) -> i32;
 
     // newlib, for the global allocator.

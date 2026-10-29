@@ -23,6 +23,8 @@ impl Audio for Mute {
 struct Cart {
     save: std::vec::Vec<u8>,
     writes: u32,
+    /// What the medium reports after a read (`Platform::save_status`).
+    status: trino_core::SaveStatus,
 }
 
 impl Platform for Cart {
@@ -37,6 +39,9 @@ impl Platform for Cart {
         let n = self.save.len().min(buf.len());
         buf[..n].copy_from_slice(&self.save[..n]);
         Ok(n)
+    }
+    fn save_status(&self) -> trino_core::SaveStatus {
+        self.status
     }
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
         if data.len() > self.save_capacity() {
@@ -304,6 +309,11 @@ fn a_career_round_trip_survives_the_save() {
     assert_eq!(d.g.scene, Scene::Title);
     d.idle(2);
     let saved = d.g.world.clone();
+    // Tagged with the engine's save version (issue #121).
+    assert_eq!(
+        trino_core::save::split_version(&d.cart.save).0,
+        super::app::SAVE_FORMAT
+    );
     // A new game on the same cartridge resumes the career.
     let mut e = Driver::new(core::mem::take(&mut d.cart));
     e.idle(1);
@@ -401,6 +411,9 @@ impl Platform for PcHost {
     }
     fn save_read(&mut self, buf: &mut [u8]) -> Result<usize, SaveError> {
         self.cart.save_read(buf)
+    }
+    fn save_status(&self) -> trino_core::SaveStatus {
+        self.cart.save_status()
     }
     fn save_write(&mut self, data: &[u8]) -> Result<(), SaveError> {
         self.cart.save_write(data)
@@ -934,4 +947,102 @@ fn the_pause_menu_draws_and_walks_its_three_rows() {
     assert_eq!(d.g.cur.pause, 2, "quit");
     d.press(Button::B);
     assert_eq!(d.g.scene, Scene::Match, "B resumes");
+}
+
+/// A career image as every build before issue #121 wrote it (no version
+/// tag): its user club on and the settings' career flag set.
+fn untagged_career() -> (Career, std::vec::Vec<u8>) {
+    let world = Career::new(5, 0x0121_5AFE);
+    let mut st = super::app::Settings::DEFAULT.bytes();
+    st[3] = 1;
+    let mut buf = [0u8; crate::sim::league::SAVE_MAX];
+    let n = world.save(st, &mut buf);
+    (world, buf[..n].to_vec())
+}
+
+/// Issue #121: a save from before the engine's version tag is version 0,
+/// and `migrate_save` brings it forward (the career and its settings).
+#[test]
+fn a_save_from_before_the_version_tag_migrates() {
+    let (world, image) = untagged_career();
+    let mut d = Driver::new(Cart {
+        save: image,
+        ..Cart::default()
+    });
+    d.idle(1);
+    assert!(d.g.career_on);
+    assert_eq!(d.g.world, world);
+    assert_eq!(d.g.toast, None, "a migration is not news");
+    assert!(!d.g.save_blocked);
+}
+
+/// Issue #121: the player hears about a save restored from its backup
+/// (amber) or lost (red), once, at boot.
+#[test]
+fn the_save_status_shows_a_toast() {
+    use crate::ui::i18n::S;
+    use trino_core::SaveStatus;
+    for (status, text, warn) in [
+        (SaveStatus::RecoveredFromBackup, S::SaveRecovered, true),
+        (SaveStatus::Corrupted, S::SaveCorrupted, false),
+    ] {
+        let (_, image) = untagged_career();
+        let save = if status == SaveStatus::Corrupted {
+            std::vec::Vec::new()
+        } else {
+            image
+        };
+        let mut d = Driver::new(Cart {
+            save,
+            status,
+            ..Cart::default()
+        });
+        d.idle(1);
+        let t = d.g.toast.expect("a toast");
+        assert_eq!((t.text, t.warn, t.good), (text, warn, false), "{status:?}");
+        // It goes away by itself.
+        d.idle(200);
+        assert_eq!(d.g.toast, None);
+    }
+}
+
+/// Issue #121: a save from a newer build loads nothing and is never
+/// overwritten by this one.
+#[test]
+fn a_save_from_a_newer_version_is_never_overwritten() {
+    use crate::ui::i18n::S;
+    let (_, image) = untagged_career();
+    let mut tagged = std::vec![0u8; image.len() + trino_core::save::VERSION_HEADER];
+    let k = trino_core::save::write_versioned(super::app::SAVE_FORMAT + 1, &image, &mut tagged)
+        .unwrap();
+    tagged.truncate(k);
+    let mut d = Driver::new(Cart {
+        save: tagged.clone(),
+        ..Cart::default()
+    });
+    d.idle(1);
+    assert!(d.g.save_blocked);
+    assert!(!d.g.career_on);
+    assert_eq!(d.g.toast.map(|t| t.text), Some(S::SaveNewer));
+    // Start a career (a change that saves elsewhere): the newer save stays.
+    d.idle(150);
+    d.press(Button::DpadDown);
+    d.press(Button::A);
+    d.press(Button::A);
+    d.idle(4);
+    assert_eq!(d.g.scene, Scene::Club);
+    assert_eq!(d.cart.save, tagged);
+    assert_eq!(d.cart.writes, 0);
+}
+
+/// The tagged career fits the N64's EEPROM (16 Kbit less the slot header;
+/// the platform compresses it into one half when it can).
+#[test]
+fn the_tagged_save_fits_the_n64_eeprom() {
+    let capacity = trino_core::save::capacity(trino_core::Caps::N64.save_bytes as usize);
+    assert!(
+        crate::sim::league::SAVE_LEN + trino_core::save::VERSION_HEADER <= capacity,
+        "{} + 4 > {capacity}",
+        crate::sim::league::SAVE_LEN
+    );
 }

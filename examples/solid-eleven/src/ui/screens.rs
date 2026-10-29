@@ -249,8 +249,9 @@ fn toast(g: &mut SolidElevenGame, r: &mut dyn Renderer, t: crate::game::app::Toa
     impl trino_core::ui::UiData for Toast {
         fn value(&self, key: &str, _: u16) -> Option<trino_core::ui::UiValue> {
             match key {
-                "good" => flag(self.0.good),
-                "bad" => flag(!self.0.good),
+                "good" => flag(self.0.good && !self.0.warn),
+                "bad" => flag(!self.0.good && !self.0.warn),
+                "warn" => flag(self.0.warn),
                 "text" => txt(tr(self.1, self.0.text)),
                 _ => None,
             }

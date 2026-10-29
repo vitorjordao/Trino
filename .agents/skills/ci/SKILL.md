@@ -41,6 +41,19 @@ before it lands. **A step that needs nightly says `cargo +nightly`:** the repo's
 available for the 'stable' toolchain"). The per-PR half is `cargo test -p trino-fuzz` inside `cargo test
 --workspace` (seeds, regressions, mutations).
 
+Since issue #121 the `miri` job also runs `--test save_recovery --test save_slots` (their
+exhaustive loops stride under `cfg(miri)`: ~3 min), every fuzz shard installs
+`mesa-vulkan-drivers` (`pc_renderer` draws on lavapipe; targets go round-robin, so any
+shard may get it) and `llvm-tools-preview`, and after fuzzing runs `cargo xtask fuzz
+coverage <its targets>` (a PR: the shard's first target only), appends
+`fuzz/coverage/summary.md` to the job summary and uploads `fuzz-coverage-<shard>`
+(`summary.{json,md}`, a per-file `report.txt` per target). `robustness-weekly.yml`
+(Sundays 04:41 UTC, `workflow_dispatch`, and a PR that changes the file itself) runs ASan over the platform
+crates' host tests (`trino-platform-pc`, `-render-wgpu`, `trino-runner-pc`,
+`-platform-3ds`, `-platform-n64`) with lavapipe and `TRINO_REQUIRE_GPU=1`; it has its own
+file so its cron doesn't re-trigger the nightly jobs. Replicate it locally with the
+command in the `robustness` skill.
+
 `release.yml` tags new workspace versions on main and publishes editor binaries, demo
 ROMs and SHA256SUMS. A version with a pre-release part (`0.2.0-dev.1`) publishes a GitHub
 pre-release; `docs/releases/v<version>.md`, when present, is the release body (GitHub's

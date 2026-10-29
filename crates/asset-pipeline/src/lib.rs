@@ -60,6 +60,7 @@ pub use groups::{BundleBuilder, Compression, GroupDecl};
 pub use loader::{
     AssetError, BundleLoad, CompressedSprite, LoadedAssets, LoadedBlob, LoadedFont, LoadedModel,
     LoadedSound, LoadedSprite, load_boot, load_boot_report, load_dir, load_dir_report, parse_baked,
+    texture_formats,
 };
 pub use manifest::{Manifest, Platform};
 pub use model::{

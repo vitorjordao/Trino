@@ -109,11 +109,22 @@ pub fn tsn2_decode(data: &[u8]) {
     if blob.frames as usize > crate::core_targets::MAX_DECODE {
         return;
     }
+    // A prefix of the audio (issue #121): the setup header and the first
+    // packets are where a bad file goes wrong; minutes of valid audio
+    // only cost the fuzzer time.
     keep(
-        trino_platform_pc::audio::decode_blob(blob.codec, blob.sample_rate, blob.payload)
-            .map(|(r, s)| (r, s.len())),
+        trino_platform_pc::audio::decode_blob_limit(
+            blob.codec,
+            blob.sample_rate,
+            blob.payload,
+            TSN2_DECODE_SAMPLES,
+        )
+        .map(|(r, s)| (r, s.len())),
     );
 }
+
+/// The samples `tsn2_decode` decodes of a payload at most.
+pub const TSN2_DECODE_SAMPLES: usize = 1 << 14;
 
 /// The 3DS's `T3AU` sound container (`asset-pipeline`, read back by
 /// `audio inspect` and the editor).
@@ -126,10 +137,11 @@ pub fn t3au(data: &[u8]) {
     }
 }
 
-/// Every RON format an agent or the editor writes: scenes, prefabs,
-/// materials, UI screens, string tables, achievements and its lock,
-/// palettes, physics layers, animation graphs.
-pub fn ron(data: &[u8]) {
+/// Scenes and prefabs, the editor's biggest RON files (split out of `ron`
+/// in issue #121: each full-document parse of a 20 KB scene costs ~1 ms,
+/// and `ron` paid six of them per input). A scene the editor writes back
+/// parses to the same scene.
+pub fn ron_scene(data: &[u8]) {
     use trino_scene as s;
     let Some(t) = text(data) else { return };
     if let Ok(scene) = s::Scene::from_ron(t) {
@@ -139,6 +151,14 @@ pub fn ron(data: &[u8]) {
         assert_eq!(back.to_ron(), out, "scene RON round trip");
     }
     keep(s::prefab::Prefab::from_ron(t).is_ok());
+}
+
+/// Every other RON format an agent or the editor writes: materials, UI
+/// screens, string tables, achievements and its lock, palettes, physics
+/// layers, animation graphs (scenes and prefabs: [`ron_scene`]).
+pub fn ron(data: &[u8]) {
+    use trino_scene as s;
+    let Some(t) = text(data) else { return };
     keep(s::material::MaterialDef::from_ron(t).is_ok());
     if let Ok(screen) = s::ui::ScreenDef::from_ron(t) {
         keep(s::ui::validate(&screen).len());
@@ -244,4 +264,104 @@ pub fn pc_bundle(data: &[u8]) {
         steps += 1;
     }
     keep(load.progress());
+}
+
+/// The 3DS shim's `T3AU` header check in C (`t3au_header.h`, compiled for
+/// the host by build.rs), as the shim's `trino_wav_load` runs it.
+pub mod shim {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default, Debug)]
+    pub struct T3auHeader {
+        pub adpcm: u8,
+        pub bus: u8,
+        pub looped: u8,
+        pub stream: u8,
+        pub sample_rate: u32,
+        pub nsamples: u32,
+        pub data_bytes: u32,
+        pub chunk_samples: u32,
+        pub ncontexts: u32,
+        pub data_offset: u32,
+        pub coefs: [i16; 16],
+    }
+
+    unsafe extern "C" {
+        fn trino_fuzz_t3au_parse(file: *const u8, len: usize, out: *mut T3auHeader) -> i32;
+        fn trino_fuzz_t3au_context(c: *const u8, index: *mut u16, h0: *mut i16, h1: *mut i16);
+        fn trino_fuzz_t3au_buses() -> u32;
+    }
+
+    /// The header the shim reads from the whole file `file`, `None` when
+    /// the shim refuses it.
+    pub fn parse(file: &[u8]) -> Option<T3auHeader> {
+        let mut out = T3auHeader::default();
+        // SAFETY: the C reads `len` bytes of `file` at most and writes `out`.
+        let ok = unsafe { trino_fuzz_t3au_parse(file.as_ptr(), file.len(), &mut out) };
+        (ok != 0).then_some(out)
+    }
+
+    /// The shim's read of one 8-byte context: (index, history0, history1).
+    pub fn context(c: &[u8; 8]) -> (u16, i16, i16) {
+        let (mut i, mut h0, mut h1) = (0, 0, 0);
+        // SAFETY: the C reads the 8 bytes and writes the three outputs.
+        unsafe { trino_fuzz_t3au_context(c.as_ptr(), &mut i, &mut h0, &mut h1) };
+        (i, h0, h1)
+    }
+
+    /// `TRINO_T3AU_BUSES`.
+    pub fn buses() -> usize {
+        // SAFETY: returns a constant.
+        unsafe { trino_fuzz_t3au_buses() as usize }
+    }
+}
+
+/// Differential (issue #121): the 3DS shim's `T3AU` check (C) against the
+/// pipeline's `T3au::parse` (Rust), which claim the same rules. Both accept
+/// or both refuse; what both accept they read the same way (every header
+/// field, the stream decision, every context).
+pub fn t3au_shim(data: &[u8]) {
+    use trino_asset_pipeline::audio::{Codec, T3au};
+    let c = shim::parse(data);
+    let r = T3au::parse(data);
+    let (c, r) = match (c, r) {
+        (None, Err(_)) => return,
+        (Some(c), Ok(r)) => (c, r),
+        (c, r) => panic!(
+            "T3AU: the shim {} what the pipeline {} ({:?} / {:?})",
+            if c.is_some() { "accepts" } else { "refuses" },
+            if r.is_ok() { "accepts" } else { "refuses" },
+            c,
+            r.err()
+        ),
+    };
+    assert_eq!(c.adpcm != 0, r.codec == Codec::DspAdpcm, "codec");
+    assert_eq!(c.bus as usize, r.bus.index(), "bus");
+    assert_eq!(c.looped != 0, r.looped, "loop");
+    assert_eq!(
+        c.stream != 0,
+        r.stream && r.chunk_samples > 0 && r.samples > 0,
+        "stream"
+    );
+    assert_eq!(c.sample_rate, r.rate, "rate");
+    assert_eq!(c.nsamples as usize, r.samples, "samples");
+    assert_eq!(c.data_bytes as usize, r.data.len(), "data bytes");
+    assert_eq!(c.chunk_samples as usize, r.chunk_samples, "chunk");
+    assert_eq!(c.ncontexts as usize, r.contexts.len(), "contexts");
+    assert_eq!(
+        c.data_offset as usize,
+        data.len() - r.data.len(),
+        "data offset"
+    );
+    assert_eq!(c.coefs, r.coefs, "coefficients");
+    let raw = &data[60..c.data_offset as usize];
+    for (k, (bytes, ctx)) in raw.as_chunks::<8>().0.iter().zip(&r.contexts).enumerate() {
+        assert_eq!(
+            shim::context(bytes),
+            (ctx.header as u16, ctx.hist1, ctx.hist2),
+            "context {k}"
+        );
+    }
+    if r.samples <= crate::core_targets::MAX_DECODE {
+        keep(r.decode().len());
+    }
 }

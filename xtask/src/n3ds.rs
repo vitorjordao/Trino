@@ -121,11 +121,13 @@ fn compile_shader(root: &Path, dkp: &Path) -> Result<(), String> {
 fn compile_shim(root: &Path, dkp: &Path) -> Result<(), String> {
     compile_shader(root, dkp)?;
     let shim_src = root.join("crates/platform-3ds/shim/trino_shim_3ds.c");
+    // Included by the shim; the host fuzzes it too (`t3au_shim`, #121).
+    let t3au_h = root.join("crates/platform-3ds/shim/t3au_header.h");
     let shader_h = root.join("target/3ds/tri3d_shbin.h");
     let tnl_h = root.join("target/3ds/tnl3d_shbin.h");
     let water_h = root.join("target/3ds/water_shbin.h");
     let shim_obj = root.join("target/3ds/shim.o");
-    let newest_input = [&shim_src, &shader_h, &tnl_h, &water_h]
+    let newest_input = [&shim_src, &t3au_h, &shader_h, &tnl_h, &water_h]
         .iter()
         .filter_map(|p| p.metadata().and_then(|m| m.modified()).ok())
         .max();
@@ -477,6 +479,13 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     if test_mode {
         std::fs::write(romfs.join("test_mode"), "1").map_err(|e| e.to_string())?;
     }
+    // `cargo xtask save soak` (issue #121): the app only saves a counter.
+    if std::env::var_os("TRINO_SAVE_SOAK").is_some() {
+        std::fs::write(romfs.join("save_soak"), "1").map_err(|e| e.to_string())?;
+    }
+    // The game's own SD save folder (GitHub #119); a self-test build gets
+    // its own, so a test run never touches the player's save.
+    std::fs::write(romfs.join("save_name"), save_name(p, test_mode)).map_err(|e| e.to_string())?;
     // `replay run` / `run --record` (issue #67): the session's files.
     crate::replay::stage(&romfs)?;
     // `[3ds] speedup = false` (or `--speedup off`): the app leaves a New
@@ -485,6 +494,19 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         std::fs::write(romfs.join("no_speedup"), "1").map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The RomFS's `save_name`: the project's `[3ds] save_name`, `-selftest`
+/// appended for a self-test build and `-soak` for `save soak`'s
+/// (`trino_platform_3ds::savedir`): neither touches the player's save.
+pub fn save_name(p: &Project, test_mode: bool) -> String {
+    if std::env::var_os("TRINO_SAVE_SOAK").is_some() {
+        format!("{}-soak", p.n3ds_save_name)
+    } else if test_mode {
+        format!("{}-selftest", p.n3ds_save_name)
+    } else {
+        p.n3ds_save_name.clone()
+    }
 }
 
 /// A master -> the `T3AU` the shim's `trino_wav_load` reads
@@ -733,6 +755,11 @@ log_filter\\default=false
 confirmClose=false
 confirmClose\\default=false
 ";
+
+/// Azahar's log file (`save soak` finds the SD card beside it).
+pub(crate) fn azahar_log_path() -> Option<PathBuf> {
+    azahar_log()
+}
 
 fn azahar_log() -> Option<PathBuf> {
     azahar_paths().map(|(log, _)| log)
@@ -1268,6 +1295,23 @@ fn boot_test(
         }
     };
     let kind = if new3ds { "a New 3DS" } else { "an old 3DS" };
+    // The engine's self-test migrates a seeded shared save into its own SD
+    // folder (GitHub #119); the shared folder's files come back after.
+    let own_saves = save_name(p, true);
+    let seeded = if p.is_engine {
+        match crate::n3ds_saves::sd_root(&log)
+            .ok_or_else(|| "cannot locate Azahar's SD card".to_string())
+            .and_then(|sd| crate::n3ds_saves::seed(&sd, &own_saves))
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("[3ds] {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     // Azahar truncates the log per session; remove any stale one so we never
     // match output from a previous run.
     let _ = std::fs::remove_file(&log);
@@ -1298,6 +1342,7 @@ fn boot_test(
     let mut worker_step = None;
     let mut players_step: Option<String> = None;
     let mut replay_step: Option<String> = None;
+    let mut save_step: Option<String> = None;
     let mut rerecord = crate::replay::Rerecord::default();
     let verdict = loop {
         if let Some(why) = watchdog.expired(Instant::now()) {
@@ -1362,6 +1407,9 @@ fn boot_test(
             if line.contains("TRINO_STEP:replay ok ") {
                 replay_step = Some(line.to_string());
             }
+            if line.contains("TRINO_STEP:save folder dir=") {
+                save_step = Some(line.to_string());
+            }
         }
         if fresh.contains("TRINO_TEST_PASS") {
             break Ok(());
@@ -1405,6 +1453,10 @@ fn boot_test(
             println!("[3ds] replay: {r}");
             let again = rerecord.check(&p.engine, &p.engine.join("target/3ds/replay-3ds.trec"))?;
             println!("[3ds] re-recording: {again}");
+            if let Some(s) = &seeded {
+                let msg = s.check(save_step.as_deref(), &own_saves)?;
+                println!("[3ds] save folder: {msg}");
+            }
         }
         Ok(())
     });

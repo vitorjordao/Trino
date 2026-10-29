@@ -66,6 +66,7 @@ pub mod trace;
 pub mod ui;
 pub mod version;
 pub mod vis;
+pub mod vorbis;
 pub mod water;
 
 pub use access::{
@@ -81,7 +82,7 @@ pub use audio::{
     MAX_DUCK_RULES, MixerConfig, MusicId, SoundBlob, SoundCodec, SoundId, SoundParams, SoundSource,
     VoiceId, spatialize,
 };
-pub use caps::{Caps, CapsError, Family, HwTier};
+pub use caps::{Caps, CapsError, Family, HwTier, TexelFormat};
 pub use collide::{MoveResult, move_and_collide};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;

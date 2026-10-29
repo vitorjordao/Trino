@@ -73,26 +73,36 @@ impl N64Format {
     /// palette 4 times into TMEM's upper half) and the bytes available to
     /// texels (a palette leaves half of the 4 KB).
     pub fn tmem(self, width: u32, height: u32) -> (u64, u64) {
-        let rows = (width * self.bits_per_texel() / 8).next_multiple_of(8) as u64 * height as u64;
-        match self {
-            N64Format::Ci4 => (rows + 128, 2048),
-            N64Format::Ci8 => (rows + 2048, 2048),
-            _ => (rows, 4096),
-        }
+        let (texels, room) = self.tmem_texels(width, height);
+        let palette = match self {
+            N64Format::Ci4 => 128,
+            N64Format::Ci8 => 2048,
+            _ => 0,
+        };
+        (texels + palette, room)
     }
 
     /// TMEM bytes the texels take when loaded whole and the room they
     /// have: 4 KB, or the lower 2 KB beside a palette — the limit the
     /// shim's resident text atlas (`trino_text_begin`) and a 3D draw
     /// hold a texture to.
+    ///
+    /// The rule is the core's ([`trino_core::Caps::texture_texels`]), so the
+    /// PC's strict mode on the N64 profile checks a texture exactly as the
+    /// tools count it (GitHub #125).
     pub fn tmem_texels(self, width: u32, height: u32) -> (u64, u64) {
-        let (used, room) = self.tmem(width, height);
-        let palette = match self {
-            N64Format::Ci4 => 128,
-            N64Format::Ci8 => 2048,
-            _ => 0,
-        };
-        (used - palette, room)
+        trino_core::Caps::N64.texture_texels(self.texel_format(), width, height)
+    }
+
+    /// The core's name for this format (what strict mode checks).
+    pub fn texel_format(self) -> trino_core::TexelFormat {
+        match self {
+            N64Format::Ci4 => trino_core::TexelFormat::Ci4,
+            N64Format::Ci8 => trino_core::TexelFormat::Ci8,
+            N64Format::I4 => trino_core::TexelFormat::I4,
+            N64Format::I8 => trino_core::TexelFormat::I8,
+            N64Format::Rgba5551 => trino_core::TexelFormat::Rgba16,
+        }
     }
 
     /// Does the whole texture fit TMEM (what a 3D draw needs; 2D blits
@@ -219,6 +229,42 @@ mod tests {
         assert!(N64Format::Ci8.fits_tmem(32, 32) && !N64Format::Ci8.fits_tmem(64, 64));
         // A 6-texel-wide I4 row (3 bytes) pads to 8.
         assert_eq!(N64Format::I4.tmem(6, 2).0, 16);
+        // An odd 4-bit row rounds its last half byte up (it used to round
+        // down: a 1-texel-wide I4 column counted no TMEM at all).
+        assert_eq!(N64Format::I4.tmem(1, 4).0, 32);
+        assert_eq!(N64Format::Ci4.tmem(17, 2), (2 * 16 + 128, 2048));
+    }
+
+    /// GitHub #125: TMEM as texels against their room, checked against a
+    /// formula written out here (rows of `ceil(w · bits / 8)` bytes padded
+    /// to 8, 2 KB beside a palette), over sizes that pad, sizes that fill
+    /// the room exactly, and sizes one row over it.
+    #[test]
+    fn tmem_texels_by_format() {
+        for f in N64Format::ALL {
+            let room = if matches!(f, N64Format::Ci4 | N64Format::Ci8) {
+                2048
+            } else {
+                4096
+            };
+            for (w, h) in [
+                (1, 1),
+                (1, 64),
+                (3, 7),
+                (17, 9),
+                (72, 40),
+                (64, 64),
+                (32, 32),
+            ]
+            .into_iter()
+            .chain([(256, 1), (16, 128), (16, 129), (64, 33), (64, 32)])
+            {
+                let row = (w as u64 * f.bits_per_texel() as u64).div_ceil(8);
+                let want = row.next_multiple_of(8) * h as u64;
+                assert_eq!(f.tmem_texels(w, h), (want, room), "{} {w}x{h}", f.name());
+                assert_eq!(f.fits_tmem(w, h), want <= room, "{} {w}x{h}", f.name());
+            }
+        }
     }
 
     #[test]

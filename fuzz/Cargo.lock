@@ -2394,6 +2394,8 @@ version = "0.2.0-dev.1"
 name = "trino-fuzz"
 version = "0.2.0-dev.1"
 dependencies = [
+ "cc",
+ "pollster",
  "trino-asset-pipeline",
  "trino-core",
  "trino-net",

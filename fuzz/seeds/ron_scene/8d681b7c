@@ -1,0 +1,34 @@
+(
+    version: 2,
+    root: (
+        name: "tree",
+        children: [
+            (
+                name: "trunk",
+                model: Some((
+                    path: "models/tree-trunk",
+                    material: Some("materials/wood"),
+                    // Past the fog the trunk is invisible anyway: skip it.
+                    lod: [(distance: 30.0, path: None)],
+                )),
+                collider: Some(()),
+            ),
+            (
+                name: "leaves",
+                transform: (
+                    pos: (0.0, 1.1, 0.0),
+                    rot: (0.0, 0.0, 0.0),
+                    scale: (1.0, 1.0, 1.0),
+                ),
+                model: Some((
+                    path: "models/tree-top",
+                    material: Some("materials/grass"),
+                    lod: [
+                        (distance: 14.0, path: Some("models/tree-top-far")),
+                        (distance: 40.0, path: None),
+                    ],
+                )),
+            ),
+        ],
+    ),
+)

@@ -26,6 +26,7 @@
 #include <arpa/inet.h>
 #include <3ds.h>
 #include <citro2d.h>
+#include "t3au_header.h"
 
 // tri3d.v.pica compiled by picasso and embedded as a C array by
 // `cargo xtask build 3ds` (target/3ds/tri3d_shbin.h).
@@ -1209,49 +1210,76 @@ void trino_water_draw(void* mesh, const float* u, void* sheet, uint32_t flags)
 }
 
 // ---------------------------------------------------------------------------
-// Save data: one file on the SD card, replaced atomically (write a temp
-// file, then rename). Framing/checksums live on the Rust side.
+// Save data: each game's A/B slot files in its own folder on the SD card,
+// `sdmc:/3ds/trino/<name>/save.{a,b}` (GitHub #119), each replaced
+// atomically (write a temp file, then rename). The folder comes from Rust
+// (`trino_save_init`, `crate::savedir`); framing, checksums and the
+// migration from the folder every game shared before #119 live there too.
 
-#define TRINO_SAVE_DIR "sdmc:/3ds/trino"
-// Slot 2: the single save file from before the A/B slots (issue #68),
-// read only when neither slot is intact.
-static const char* const TRINO_SAVE_PATHS[3] = {
-    TRINO_SAVE_DIR "/save.a", TRINO_SAVE_DIR "/save.b", TRINO_SAVE_DIR "/save.bin"};
-static const char* const TRINO_SAVE_TMPS[3] = {
-    TRINO_SAVE_DIR "/save.a.tmp", TRINO_SAVE_DIR "/save.b.tmp", TRINO_SAVE_DIR "/save.tmp"};
+#define TRINO_SAVE_ROOT "sdmc:/3ds/trino"
+static char s_save_dir[96] = TRINO_SAVE_ROOT "/game";
+
+// The game's folder, set once at boot (a NUL-terminated path under
+// TRINO_SAVE_ROOT; longer ones are refused and the default stays).
+void trino_save_init(const char* dir)
+{
+    if (dir && strlen(dir) < sizeof(s_save_dir)) strcpy(s_save_dir, dir);
+}
+
+// The file of `slot` (and its temp file): 0/1 the game's own save.a/save.b;
+// 2 the shared save.bin from before the A/B slots (issue #68); 3/4 the
+// shared save.a/save.b every game used before #119. Returns 0 on a bad slot.
+static int trino_save_path(uint32_t slot, int tmp, char* out, size_t cap)
+{
+    static const char* const names[5] = {"save.a", "save.b", "save.bin", "save.a", "save.b"};
+    static const char* const tmps[5] = {"save.a.tmp", "save.b.tmp", "save.tmp", "save.a.tmp",
+                                        "save.b.tmp"};
+    if (slot > 4) return 0;
+    const char* dir = slot < 2 ? s_save_dir : TRINO_SAVE_ROOT;
+    int n = snprintf(out, cap, "%s/%s", dir, tmp ? tmps[slot] : names[slot]);
+    return n > 0 && (size_t)n < cap;
+}
 
 // Returns the slot file's size (0 = none, -1 = error), copying up to `cap`
-// bytes into `dest`. A missing file falls back to its temp file (a crash
-// between the flushed write and the rename).
+// bytes into `dest` (`cap` 0 only asks whether it exists). A missing file
+// falls back to its temp file (a crash between the flushed write and the
+// rename).
 int32_t trino_save_load(uint32_t slot, uint8_t* dest, uint32_t cap)
 {
-    if (slot > 2) return -1;
-    FILE* f = fopen(TRINO_SAVE_PATHS[slot], "rb");
-    if (!f) f = fopen(TRINO_SAVE_TMPS[slot], "rb");
+    char path[128], tmp[128];
+    if (!trino_save_path(slot, 0, path, sizeof(path)) ||
+        !trino_save_path(slot, 1, tmp, sizeof(tmp)))
+        return -1;
+    FILE* f = fopen(path, "rb");
+    if (!f) f = fopen(tmp, "rb");
     if (!f) return 0;
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
     size_t want = (size_t)size < cap ? (size_t)size : cap;
-    size_t got = fread(dest, 1, want, f);
+    size_t got = want ? fread(dest, 1, want, f) : 0;
     fclose(f);
     if (size < 0 || got != want) return -1;
     return (int32_t)size;
 }
 
-// Replace slot `slot` (0 or 1): a temp file, then the rename. Returns 0 on
-// success, -1 on error.
+// Replace the game's own slot `slot` (0 or 1; the shared files are never
+// written): a temp file, then the rename. Returns 0 on success, -1 on error.
 int32_t trino_save_store(uint32_t slot, const uint8_t* src, uint32_t len)
 {
-    if (slot > 1) return -1;
+    char path[128], tmp[128];
+    if (slot > 1 || !trino_save_path(slot, 0, path, sizeof(path)) ||
+        !trino_save_path(slot, 1, tmp, sizeof(tmp)))
+        return -1;
     mkdir("sdmc:/3ds", 0777);
-    mkdir(TRINO_SAVE_DIR, 0777);
-    FILE* f = fopen(TRINO_SAVE_TMPS[slot], "wb");
+    mkdir(TRINO_SAVE_ROOT, 0777);
+    mkdir(s_save_dir, 0777);
+    FILE* f = fopen(tmp, "wb");
     if (!f) return -1;
     size_t put = fwrite(src, 1, len, f);
     if (fclose(f) != 0 || put != len) return -1;
-    remove(TRINO_SAVE_PATHS[slot]);
-    return rename(TRINO_SAVE_TMPS[slot], TRINO_SAVE_PATHS[slot]) == 0 ? 0 : -1;
+    remove(path);
+    return rename(tmp, path) == 0 ? 0 : -1;
 }
 
 // Wait two vblanks for the last presented frame's display transfer to land,
@@ -1433,7 +1461,7 @@ uint32_t trino_touch(void)
 // (woken by ndsp every audio frame). Every wave buffer carries its ADPCM
 // context, so loops and chunk seams decode exactly like the bake's preview.
 
-#define T3AU_HEADER 60
+#define T3AU_HEADER TRINO_T3AU_HEADER
 #define TRINO_NDSP_CHANNELS 16
 #define TRINO_STREAM_BUFS 3
 #define TRINO_MAX_STREAMS 4
@@ -1498,8 +1526,19 @@ void* trino_wav_load(const char* romfs_path)
     FILE* f = fopen(romfs_path, "rb");
     if (!f) return NULL;
     uint8_t h[T3AU_HEADER];
-    if (fread(h, 1, sizeof(h), f) != sizeof(h) || memcmp(h, "T3AU", 4) != 0 || h[4] > 1 ||
-        h[7] != 1 || strlen(romfs_path) >= sizeof(((trino_wav_t*)0)->path)) {
+    // The header check is `t3au_header.h` (issue #121): the pipeline's
+    // `T3au::parse` rules, fuzzed against it on the host (`t3au_shim`).
+    // The file's size is part of it: a header must describe its own data
+    // (issue #68), since the DSP reads `nsamples` from the buffer whatever
+    // was allocated, and a stream reads its chunks from the file.
+    trino_t3au_header_t t;
+    long size = -1;
+    if (fread(h, 1, sizeof(h), f) == sizeof(h) && fseek(f, 0, SEEK_END) == 0) {
+        size = ftell(f);
+    }
+    if (size < 0 || fseek(f, T3AU_HEADER, SEEK_SET) != 0 ||
+        !trino_t3au_parse(h, (uint64_t)size, &t) ||
+        strlen(romfs_path) >= sizeof(((trino_wav_t*)0)->path)) {
         fclose(f);
         return NULL;
     }
@@ -1508,38 +1547,29 @@ void* trino_wav_load(const char* romfs_path)
         fclose(f);
         return NULL;
     }
-    w->adpcm = h[4];
-    w->bus = h[5];
-    w->looped = h[6] & 1;
-    w->sample_rate = rd32(h + 8);
-    w->nsamples = rd32(h + 12);
-    w->data_bytes = rd32(h + 16);
-    w->chunk_samples = rd32(h + 20);
-    w->ncontexts = rd32(h + 24);
-    for (int i = 0; i < 16; i++) w->coefs[i] = (u16)rd16(h + 28 + i * 2);
-    // Streams play in whole ADPCM frames (14 samples) per chunk.
-    w->stream = (h[6] & 2) && w->chunk_samples && w->nsamples &&
-                (!w->adpcm || (w->chunk_samples % 14 == 0 &&
-                               w->ncontexts == (w->nsamples + w->chunk_samples - 1) / w->chunk_samples));
-    // The header must describe its own data (issue #68, the same checks as
-    // the pipeline's `T3au::parse`): the DSP reads `nsamples` from the
-    // buffer, whatever was allocated.
-    uint64_t need = w->adpcm ? ((uint64_t)w->nsamples + 13) / 14 * 8 : (uint64_t)w->nsamples * 2;
-    int ok = w->ncontexts <= (1u << 20) && (w->stream || need <= w->data_bytes) &&
-             (!w->stream || !w->adpcm || w->ncontexts > 0);
-    if (ok && w->ncontexts) {
+    w->adpcm = t.adpcm;
+    w->bus = t.bus;
+    w->looped = t.looped;
+    w->stream = t.stream;
+    w->sample_rate = t.sample_rate;
+    w->nsamples = t.nsamples;
+    w->data_bytes = t.data_bytes;
+    w->chunk_samples = t.chunk_samples;
+    w->ncontexts = t.ncontexts;
+    for (int i = 0; i < 16; i++) w->coefs[i] = (u16)t.coefs[i];
+    int ok = 1;
+    if (w->ncontexts) {
         w->contexts = malloc(w->ncontexts * sizeof(ndspAdpcmData));
         ok = w->contexts != NULL;
         for (uint32_t i = 0; ok && i < w->ncontexts; i++) {
             uint8_t c[8];
             ok = fread(c, 1, 8, f) == 8;
-            w->contexts[i].index = (u16)rd16(c);
-            w->contexts[i].history0 = rd16(c + 2);
-            w->contexts[i].history1 = rd16(c + 4);
+            trino_t3au_context(c, &w->contexts[i].index, &w->contexts[i].history0,
+                               &w->contexts[i].history1);
         }
         if (ok) s_resident += w->ncontexts * sizeof(ndspAdpcmData);
     }
-    w->data_offset = T3AU_HEADER + w->ncontexts * 8;
+    w->data_offset = t.data_offset;
     if (ok && w->stream) {
         strcpy(w->path, romfs_path);
         if (w->adpcm) w->start = w->contexts[0];

@@ -1261,7 +1261,73 @@ fn damaged_assets_rebake_from_the_console_and_saves_decode_in_their_tab() {
             .is_some()
     );
     evidence(&mut h, "saves-tab.png");
+
+    // The N64 source (issue #121): ares's EEPROM image beside the ROM.
+    console_save_fixtures(tmp.path());
+    let root = tmp.path().to_path_buf();
+    h.state_mut()
+        .saves
+        .show(crate::panels::saves::Source::N64, &root);
+    h.run_steps(4);
+    assert!(h.query_by_label("castle64.eeprom").is_some());
+    assert!(h.query_by_label_contains("Reads 13 bytes from").is_some());
+    evidence(&mut h, "saves-tab-n64.png");
+    // The 3DS source: Azahar's SD card, a game's folder before its first
+    // save (it reads the shared folder's once) and the shared folder.
+    h.state_mut()
+        .saves
+        .show(crate::panels::saves::Source::N3ds, &root);
+    h.run_steps(4);
+    assert!(h.query_by_label("castle64").is_some());
+    assert!(
+        h.query_by_label("3ds/trino (shared, before #119)")
+            .is_some()
+    );
+    h.state_mut().saves.selected = Some(1);
+    h.state_mut().saves.inspect();
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("from the shared folder (migrates once)")
+            .is_some()
+    );
+    evidence(&mut h, "saves-tab-3ds.png");
+    // SAFETY: tests that change the environment run alone (`--test-threads=1`).
+    unsafe { std::env::remove_var("TRINO_AZAHAR_SDMC") };
     leave_temp_project(&repo);
+}
+
+/// An N64 EEPROM image as ares writes it beside the ROM (two saves, A/B)
+/// and an Azahar SD card (`TRINO_AZAHAR_SDMC`) with the shared folder from
+/// before #119 holding a save and castle64's own folder still empty.
+fn console_save_fixtures(root: &std::path::Path) {
+    use trino_core::save::{self, Lz, Medium};
+    struct Image(Vec<u8>);
+    impl Medium for Image {
+        fn size(&self) -> usize {
+            self.0.len()
+        }
+        fn read(&mut self, at: usize, buf: &mut [u8]) {
+            buf.copy_from_slice(&self.0[at..at + buf.len()]);
+        }
+        fn write(&mut self, at: usize, data: &[u8]) {
+            self.0[at..at + data.len()].copy_from_slice(data);
+        }
+    }
+    let mut m = Image(vec![0xFF; 2048]);
+    let (mut body, mut scratch) = (vec![0u8; 2048], vec![0u8; 2048]);
+    for data in [&b"stars=1;coins=4"[..], b"stars=2;coins"] {
+        save::write_now(&mut m, data, &mut body, &mut scratch, &mut Lz::default()).unwrap();
+    }
+    std::fs::create_dir_all(root.join("target/n64")).unwrap();
+    std::fs::write(root.join("target/n64/castle64.eeprom"), &m.0).unwrap();
+    let sd = root.join("sdmc");
+    let shared = sd.join("3ds/trino");
+    std::fs::create_dir_all(shared.join("castle64")).unwrap();
+    let mut a = vec![0u8; 64];
+    let n = save::encode_slot(4, b"shared-save", &mut a).unwrap();
+    std::fs::write(shared.join("save.a"), &a[..n]).unwrap();
+    // SAFETY: tests that change the environment run alone (`--test-threads=1`).
+    unsafe { std::env::set_var("TRINO_AZAHAR_SDMC", &sd) };
 }
 
 /// Play here records and replays (issue #67): Rec restarts the scene and

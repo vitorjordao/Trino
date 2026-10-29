@@ -111,7 +111,10 @@ fn a_power_cut_anywhere_keeps_the_previous_save() {
         write(&mut probe, &new)
     };
     let written = plan.body_len + SLOT_HEADER;
-    for cut in 0..=written {
+    // Under Miri (the nightly job, issue #121) every 13th byte of the body
+    // and every byte from the header on: the same loop, minutes not hours.
+    let stride = if cfg!(miri) { 13 } else { 1 };
+    for cut in (0..=written).filter(|c| c.is_multiple_of(stride) || *c >= plan.body_len) {
         let mut m = Ram {
             bytes: base.bytes.clone(),
             cut: Some(cut),

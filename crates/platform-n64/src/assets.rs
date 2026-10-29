@@ -26,6 +26,7 @@ use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use trino_core::asset::{IndexKind, IndexLine, Locator, SoundColumns};
 use trino_core::bundle::{Bundle, EntryKind};
 use trino_core::group::HeapMeter;
 use trino_core::mem::FrameArena;
@@ -149,41 +150,37 @@ impl N64Assets {
         // before` is the reserve `trino_asset_pipeline::memory` plans with.
         let (before, heap_total) = runtime::heap();
         for line in index.lines() {
-            let mut cols = line.split('\t');
-            let (Some(id_hex), Some(kind), Some(file)) = (cols.next(), cols.next(), cols.next())
-            else {
+            // `trino_core::asset::IndexLine`: the parse the 3DS shares and
+            // the `asset_index` fuzz target covers on the host (#121).
+            let Some(line) = IndexLine::parse(line) else {
                 continue;
             };
-            if !trino_core::asset::loads_on(cols.next(), tier) {
+            if !line.loads_on(tier) {
                 continue;
             }
-            let Ok(id) = u32::from_str_radix(id_hex, 16) else {
-                continue;
-            };
-            match kind {
-                "group" => {
+            let (id, file) = (line.id, line.file);
+            let kind = match line.kind {
+                IndexKind::Group => {
                     if platform.groups.table.add(GroupId(id)) {
                         platform.groups.files.insert(id, String::from(file));
                     }
                     continue;
                 }
-                "compression" => {
+                IndexKind::Compression => {
                     // SAFETY: plain C, called before the assets it decodes.
                     unsafe { crate::ffi::trino_asset_compression(id as i32) };
                     continue;
                 }
-                "mixer" => {
+                IndexKind::Mixer => {
                     let mut path = String::from("rom:/");
                     path.push_str(file);
                     mixer = read_bytes(&path);
                     continue;
                 }
-                _ => {}
-            }
-            let Some(kind) = EntryKind::parse(kind) else {
-                continue;
+                IndexKind::Entry(kind) => kind,
+                IndexKind::Boot | IndexKind::Unknown(_) => continue,
             };
-            match load_one(kind, id, file, &mut cols, renderer, audio) {
+            match load_one(kind, id, file, &mut line.extra(), renderer, audio) {
                 Loaded::Bytes(b) => platform.groups.memory.add(kind.category(), b),
                 Loaded::Blob(bytes) => {
                     platform
@@ -344,11 +341,8 @@ fn hold(
         h.0 += 1;
         return true;
     }
-    let mut cols = locator.split('\t');
-    let Some(file) = cols.next() else {
-        return false;
-    };
-    let bytes = match load_one(kind, id, file, &mut cols, renderer, audio) {
+    let loc = Locator::parse(locator);
+    let bytes = match load_one(kind, id, loc.file, &mut loc.extra(), renderer, audio) {
         Loaded::Bytes(b) => b,
         Loaded::Blob(bytes) => {
             let n = bytes.len() as u32;
@@ -433,16 +427,13 @@ fn load_one<'a>(
             Loaded::Bytes(grew())
         }
         EntryKind::Sound | EntryKind::Music => {
-            let codec = cols.next().unwrap_or("vadpcm");
+            let SoundColumns { codec, bus } = SoundColumns::read(cols);
             let music = kind == EntryKind::Music;
-            let bus = cols
-                .next()
-                .and_then(trino_core::Bus::from_label)
-                .unwrap_or(if music {
-                    trino_core::Bus::Music
-                } else {
-                    trino_core::Bus::Sfx
-                });
+            let bus = bus.unwrap_or(if music {
+                trino_core::Bus::Music
+            } else {
+                trino_core::Bus::Sfx
+            });
             // libdragon asserts on an Opus wav64 it can't decode.
             if codec == "opus" && !audio.enable_opus() {
                 runtime::log(&alloc::format!(

@@ -1,0 +1,8 @@
+8a1e2b3c	boot	groups/boot.tbnd
+3b7a01c4	sound	3b7a01c4.t3au
+0d5c1f2a	sprite	0d5c1f2a.t3x
+5a5a0002	model	5a5a0002.tmdl	base
+c0ffee01	group	groups/level1.tbnd
+zz	blob	bad-id.blob
+00000001	deluxe	unknown-kind
+00000001	blob

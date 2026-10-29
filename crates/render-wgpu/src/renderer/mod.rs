@@ -366,6 +366,10 @@ pub struct PcRenderer {
     tri_buf: wgpu::Buffer,
     tri_capacity: u64,
     sprites: HashMap<u32, SpriteEntry>,
+    /// Each sprite's N64 format as its bake chose it
+    /// ([`PcRenderer::set_texture_format`]): what strict mode on the N64
+    /// profile checks TMEM by (GitHub #125). Kept across re-uploads.
+    texture_formats: HashMap<u32, trino_core::TexelFormat>,
     /// Sprite textures as 3D textures (base + detail layer, their samplers),
     /// by texture state.
     tex3d: HashMap<TexKey, wgpu::BindGroup>,
@@ -2283,6 +2287,7 @@ impl PcRenderer {
             tri_buf,
             tri_capacity,
             sprites: HashMap::new(),
+            texture_formats: HashMap::new(),
             tex3d: HashMap::new(),
             tex3d_bgl,
             tex3d_nearest,
@@ -2922,6 +2927,19 @@ impl PcRenderer {
     /// Defaults to off; `TRINO_STRICT=1` enables it.
     pub fn set_strict(&mut self, on: bool) {
         self.strict = on;
+    }
+
+    /// The N64 format the bake chose for sprite `id` (the PC index's
+    /// `n64_format`, `trino_asset_pipeline::N64Format::texel_format`), or
+    /// `None` to forget it. Strict mode on the N64 profile checks a texture
+    /// by it: a CI texture's texels have TMEM's lower 2 KB (the palette
+    /// takes the upper half), a 4-bit one takes half a 16-bit one's bytes
+    /// (GitHub #125). Without it, the check assumes 16-bit texels.
+    pub fn set_texture_format(&mut self, id: SpriteId, format: Option<trino_core::TexelFormat>) {
+        match format {
+            Some(f) => self.texture_formats.insert(id.0, f),
+            None => self.texture_formats.remove(&id.0),
+        };
     }
 
     /// Override the main screen's safe area ([`Renderer::safe_area`]);
@@ -3692,12 +3710,22 @@ impl PcRenderer {
     /// Upload an RGBA8 texture for `id`. Re-uploading the same id replaces
     /// the content (this is what makes asset live-reload work: handles are
     /// stable, content is swapped in place).
+    ///
+    /// A size the device can't make (0, or past
+    /// `max_texture_dimension_2d`) or pixel data of another length uploads
+    /// nothing and logs why (issue #121: it reached wgpu's validation,
+    /// which aborts): what a damaged or modded asset file can ask for.
     pub fn upload_sprite(&mut self, id: SpriteId, width: u32, height: u32, rgba: &[u8]) {
-        assert_eq!(
-            rgba.len(),
-            (width * height * 4) as usize,
-            "sprite {id:?}: pixel data does not match {width}x{height} RGBA8"
-        );
+        if !self.sprite_size_ok(id, width, height) {
+            return;
+        }
+        if rgba.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            eprintln!(
+                "[trino] sprite {id:?}: {} bytes of pixels do not make {width}x{height} RGBA8; not uploaded",
+                rgba.len()
+            );
+            return;
+        }
         let alpha = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
         self.install_sprite(
             id,
@@ -3753,7 +3781,8 @@ impl PcRenderer {
     /// Upload a block-compressed texture for `id` (`width` and `height`
     /// multiples of 4, `blocks` in row-major order), replacing any previous
     /// one. Returns `false` and uploads nothing when the renderer doesn't
-    /// sample `format` ([`PcRenderer::supports_compressed`]): the caller
+    /// sample `format` ([`PcRenderer::supports_compressed`]), or the size
+    /// or the block data is not a texture it can make (logged): the caller
     /// uploads decoded RGBA8 instead. `alpha`: whether some texel blends
     /// (a model drawn with it stays on the CPU path); `None` reads it from
     /// BC blocks, and takes the ETC2 RGBA and ASTC formats as blending.
@@ -3769,16 +3798,23 @@ impl PcRenderer {
         if !self.supports_compressed(format) {
             return false;
         }
-        assert!(
-            width.is_multiple_of(4) && height.is_multiple_of(4) && width > 0 && height > 0,
-            "sprite {id:?}: {width}x{height} is not whole 4x4 blocks"
-        );
+        // Sizes and lengths a bad file can carry: refused (the caller then
+        // uploads the decoded pixels) instead of failing wgpu's validation.
+        if !self.sprite_size_ok(id, width, height) {
+            return false;
+        }
+        if !width.is_multiple_of(4) || !height.is_multiple_of(4) {
+            eprintln!("[trino] sprite {id:?}: {width}x{height} is not whole 4x4 blocks");
+            return false;
+        }
         let row = width / 4 * format.block_bytes();
-        assert_eq!(
-            blocks.len(),
-            (row * height / 4) as usize,
-            "sprite {id:?}: block data does not match {width}x{height} {format:?}"
-        );
+        if blocks.len() as u64 != u64::from(row) * u64::from(height / 4) {
+            eprintln!(
+                "[trino] sprite {id:?}: {} bytes of blocks do not make {width}x{height} {format:?}",
+                blocks.len()
+            );
+            return false;
+        }
         let alpha = alpha.unwrap_or_else(|| match format {
             CompressedFormat::Bc1 | CompressedFormat::Bc3 | CompressedFormat::Bc7 => {
                 gpu_tnl::bc_alpha(format, blocks)
@@ -3788,6 +3824,19 @@ impl PcRenderer {
         });
         self.install_sprite(id, (width, height), format.wgpu(), blocks, row, alpha);
         true
+    }
+
+    /// Whether the device makes a `width`×`height` texture (each side 1 to
+    /// `max_texture_dimension_2d`); logs why not.
+    fn sprite_size_ok(&self, id: SpriteId, width: u32, height: u32) -> bool {
+        let max = self.device.limits().max_texture_dimension_2d;
+        let ok = (1..=max).contains(&width) && (1..=max).contains(&height);
+        if !ok {
+            eprintln!(
+                "[trino] sprite {id:?}: {width}x{height} is no texture this GPU makes (1 to {max} a side); not uploaded"
+            );
+        }
+        ok
     }
 
     /// The sprite textures held now: how many, their GPU bytes, how many
@@ -5654,6 +5703,7 @@ impl PcRenderer {
             texture_budget(
                 TextureBudget {
                     sprites: &self.sprites,
+                    formats: &self.texture_formats,
                     caps: &self.caps,
                     strict: self.strict,
                     profile: self.profile,
@@ -5790,6 +5840,7 @@ impl PcRenderer {
 /// mesh being drawn, so it works while a mesh is borrowed).
 struct TextureBudget<'a> {
     sprites: &'a HashMap<u32, SpriteEntry>,
+    formats: &'a HashMap<u32, trino_core::TexelFormat>,
     caps: &'a Caps,
     strict: bool,
     profile: SimProfile,
@@ -5891,11 +5942,24 @@ fn texture_budget(r: TextureBudget<'_>, t: SpriteId, tiled: bool) {
                  not power-of-two sized — consoles can only tile POT textures."
             );
         }
-        if let Err(e) = r.caps.validate_texture(w as u16, h as u16, bpp) {
+        // The N64 profile checks the format the N64 bake chose (GitHub
+        // #125); without one, 16-bit texels (the worst case it can tell).
+        let format = r
+            .formats
+            .get(&t.0)
+            .filter(|_| r.profile == SimProfile::N64)
+            .copied();
+        let checked = match format {
+            Some(f) => r.caps.validate_texture_as(w as u16, h as u16, f),
+            None => r.caps.validate_texture(w as u16, h as u16, bpp),
+        };
+        if let Err(e) = checked {
+            let as_ = format.map_or(String::new(), |f| format!(" as {f:?}"));
             panic!(
-                "strict mode: 3D texture {t:?} ({w}x{h}) busts the {:?} profile \
+                "strict mode: 3D texture {t:?} ({w}x{h}{as_}) busts the {:?} profile \
                  budget: {e:?}. One texture per draw must fit texture memory \
-                 (N64 TMEM: 4 KB — e.g. 32x32 RGBA16 or 64x64 CI4).",
+                 (N64 TMEM: 4 KB, and 2 KB for the texels of a CI4/CI8 texture \
+                 beside its palette — e.g. 32x32 RGBA16, 64x64 I4 or 64x64 CI4).",
                 r.profile
             );
         }
@@ -6236,6 +6300,7 @@ impl Renderer for PcRenderer {
             texture_budget(
                 TextureBudget {
                     sprites: &self.sprites,
+                    formats: &self.texture_formats,
                     caps: &self.caps,
                     strict: self.strict,
                     profile: self.profile,
@@ -6246,17 +6311,34 @@ impl Renderer for PcRenderer {
             );
         }
         if let (Some(t), Some(d), true) = (texture, params.detail, self.strict) {
-            // Base and detail share texture memory (the N64's TMEM), at
-            // worst 16-bit texels; the console drops a detail that doesn't
-            // fit, strict mode says so.
-            let bytes = |id: SpriteId| self.sprites.get(&id.0).map_or(0, |e| e.size.0 * e.size.1);
-            let bpp = if self.caps.color_depth_bits <= 16 {
-                2
-            } else {
-                4
+            // Base and detail share texture memory (the N64's TMEM), each
+            // in the format its N64 bake chose (else 16-bit texels); the
+            // console drops a detail that doesn't fit, strict mode says so.
+            let n64 = self.profile == SimProfile::N64;
+            let format = |id: SpriteId| {
+                self.texture_formats
+                    .get(&id.0)
+                    .filter(|_| n64)
+                    .copied()
+                    .unwrap_or(trino_core::TexelFormat::worst_for(&self.caps))
             };
-            let total = (bytes(t) + bytes(d.sprite)) * bpp;
-            if total > self.caps.texture_memory_bytes {
+            if format(t).paletted() {
+                panic!(
+                    "strict mode: texture {t:?} has a detail layer ({:?}) but is a \
+                     {:?} texture on the N64: its palette takes TMEM's upper half and \
+                     the console draws it without the detail. Give a detailed base a \
+                     16-bit or intensity format (RGBA5551, I4, I8).",
+                    d.sprite,
+                    format(t)
+                );
+            }
+            let texels = |id: SpriteId| {
+                self.sprites.get(&id.0).map_or(0, |e| {
+                    self.caps.texture_texels(format(id), e.size.0, e.size.1).0
+                })
+            };
+            let total = texels(t) + texels(d.sprite);
+            if total > self.caps.texture_memory_bytes as u64 {
                 panic!(
                     "strict mode: texture {t:?} with detail {:?} needs {total} bytes of \
                      texture memory together, over the {:?} profile's {} (N64 TMEM: \
@@ -6640,6 +6722,7 @@ impl Renderer for PcRenderer {
         texture_budget(
             TextureBudget {
                 sprites: &self.sprites,
+                formats: &self.texture_formats,
                 caps: &self.caps,
                 strict: self.strict,
                 profile: self.profile,

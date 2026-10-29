@@ -1,8 +1,13 @@
-//! The Saves tab (issue #68): the project's PC saves (`target/save/`, what
-//! Play and `cargo xtask run pc` write) decoded read-only, as the engine
-//! reads them — which slot is the newest, each slot's sequence number and
-//! check, the version tag, the first bytes. The same report as `cargo xtask
-//! save inspect <file> --json` (`trino_asset_pipeline::saves`).
+//! The Saves tab (issue #68): the project's saves decoded read-only, as the
+//! engine reads them — which slot is the newest, each slot's sequence
+//! number and check, the version tag, the first bytes. The same report as
+//! `cargo xtask save inspect <file> --json` (`trino_asset_pipeline::saves`).
+//!
+//! Three sources (issue #121): the PC's (`target/save/`, what Play and
+//! `cargo xtask run pc` write), the N64 cartridge's EEPROM as ares keeps it
+//! beside the ROM (`target/n64/<rom>.eeprom`), and the 3DS SD card of
+//! Azahar (`sdmc:/3ds/trino/<game>/`, and the folder every game shared
+//! before #119, which a game's empty folder reads once).
 
 use std::path::{Path, PathBuf};
 
@@ -13,9 +18,55 @@ use trino_core::SaveStatus;
 use crate::app::App;
 use crate::theme::{self, c, icon};
 
+/// Where saves come from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Source {
+    /// `target/save/` (the PC's slot files).
+    #[default]
+    Pc,
+    /// `target/n64/*.eeprom` (ares's cartridge EEPROM images).
+    N64,
+    /// Azahar's SD card (`sdmc/3ds/trino/…`).
+    N3ds,
+}
+
+impl Source {
+    pub const ALL: [Source; 3] = [Source::Pc, Source::N64, Source::N3ds];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Pc => "PC",
+            Source::N64 => "N64 (ares)",
+            Source::N3ds => "3DS (Azahar)",
+        }
+    }
+
+    /// Where this source looks for a project at `root` (`None`: Azahar's SD
+    /// card isn't there).
+    pub fn dir(self, root: &Path) -> Option<PathBuf> {
+        match self {
+            Source::Pc => Some(root.join("target/save")),
+            Source::N64 => Some(root.join("target/n64")),
+            Source::N3ds => saves::azahar_sd(),
+        }
+    }
+
+    /// The saves this source holds under `dir`.
+    pub fn scan(self, dir: &Path) -> Vec<PathBuf> {
+        match self {
+            Source::Pc => SavesPanel::scan(dir),
+            Source::N64 => saves::ares_eeproms(dir),
+            Source::N3ds => saves::n3ds_folders(dir),
+        }
+    }
+}
+
 /// The tab's state: the saves found and the one shown.
 #[derive(Default)]
 pub struct SavesPanel {
+    pub source: Source,
+    /// The folder [`source`](Self::source) scanned (`None`: not found).
+    pub dir: Option<PathBuf>,
     pub files: Vec<PathBuf>,
     pub selected: Option<usize>,
     pub report: Option<Result<Report, String>>,
@@ -54,8 +105,13 @@ impl SavesPanel {
         out
     }
 
-    pub fn refresh(&mut self, dir: &Path) {
-        self.files = Self::scan(dir);
+    /// Scan the current source for the project at `root`.
+    pub fn refresh(&mut self, root: &Path) {
+        self.dir = self.source.dir(root);
+        self.files = self
+            .dir
+            .as_deref()
+            .map_or_else(Vec::new, |d| self.source.scan(d));
         self.scanned = true;
         if self.selected.is_none_or(|i| i >= self.files.len()) {
             self.selected = (!self.files.is_empty()).then_some(0);
@@ -64,10 +120,34 @@ impl SavesPanel {
     }
 
     pub fn inspect(&mut self) {
+        let medium = self.source == Source::N64;
         self.report = self
             .selected
             .and_then(|i| self.files.get(i))
-            .map(|p| saves::inspect(p, false));
+            .map(|p| saves::inspect(p, medium));
+    }
+
+    /// Show `source` (the tab's buttons; `TRINO_EDITOR_SAVES=pc|n64|3ds`).
+    pub fn show(&mut self, source: Source, root: &Path) {
+        if self.source != source {
+            self.source = source;
+            self.selected = None;
+        }
+        self.refresh(root);
+    }
+
+    /// A list row's name: the file, or for a 3DS folder its game (the
+    /// shared folder from before #119 says so).
+    fn row_name(&self, p: &Path) -> String {
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if self.source == Source::N3ds && p.ends_with("3ds/trino") {
+            "3ds/trino (shared, before #119)".into()
+        } else {
+            name
+        }
     }
 }
 
@@ -81,10 +161,17 @@ fn status_color(s: SaveStatus) -> egui::Color32 {
 }
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
-    let dir = app.project.root.join("target/save");
+    let root = app.project.root.clone();
     let panel = &mut app.saves;
     if !panel.scanned {
-        panel.refresh(&dir);
+        if let Ok(s) = std::env::var("TRINO_EDITOR_SAVES") {
+            panel.source = match s.as_str() {
+                "n64" => Source::N64,
+                "3ds" => Source::N3ds,
+                _ => Source::Pc,
+            };
+        }
+        panel.refresh(&root);
     }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -96,32 +183,54 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                         .color(c::TEXT),
                 );
                 if theme::icon_button(ui, icon::ARROWS_CLOCKWISE, "Scan again").clicked() {
-                    panel.refresh(&dir);
+                    panel.refresh(&root);
                 }
             });
+            ui.horizontal(|ui| {
+                let mut pick = None;
+                for s in Source::ALL {
+                    if ui.selectable_label(panel.source == s, s.label()).clicked() {
+                        pick = Some(s);
+                    }
+                }
+                if let Some(s) = pick {
+                    panel.show(s, &root);
+                }
+            });
+            let where_ = panel
+                .dir
+                .as_ref()
+                .map_or("(not found)".to_string(), |d| d.display().to_string());
+            let what = match panel.source {
+                Source::Pc => "the PC saves",
+                Source::N64 => "the N64 EEPROM images ares keeps beside the ROMs",
+                Source::N3ds => "the 3DS save folders on Azahar's SD card",
+            };
             ui.label(
                 RichText::new(format!(
-                    "Read-only: the PC saves in {} as the engine reads them (A/B slots, \
-                     newest intact first). Damage one by hand with `cargo xtask save corrupt`.",
-                    dir.display()
+                    "Read-only: {what} in {where_} as the engine reads them (A/B slots, \
+                     newest intact first). Damage one by hand with `cargo xtask save corrupt`."
                 ))
                 .size(11.5)
                 .color(c::TEXT_WEAK),
             );
             ui.add_space(6.0);
             if panel.files.is_empty() {
-                ui.label(
-                    RichText::new("No saves yet: Play the game and save once.").color(c::TEXT_WEAK),
-                );
+                let hint = match panel.source {
+                    Source::Pc => "No saves yet: Play the game and save once.",
+                    Source::N64 => "No EEPROM yet: run the game in ares (cargo xtask run n64).",
+                    Source::N3ds => {
+                        "No save folders: run the game in Azahar (cargo xtask run 3ds), \
+                         or set TRINO_AZAHAR_SDMC to its SD card."
+                    }
+                };
+                ui.label(RichText::new(hint).color(c::TEXT_WEAK));
                 return;
             }
             let mut pick = None;
             crate::app::card().show(ui, |ui| {
                 for (i, f) in panel.files.iter().enumerate() {
-                    let name = f
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                    let name = panel.row_name(f);
                     let on = panel.selected == Some(i);
                     if ui
                         .add(
@@ -182,7 +291,7 @@ fn report(ui: &mut egui::Ui, r: &Report) {
             for s in &r.slots {
                 ui.label(&s.name);
                 let col = match s.state {
-                    "valid" => c::OK,
+                    "valid" | "shared" => c::OK,
                     "damaged" => c::ERROR,
                     _ => c::TEXT_WEAK,
                 };

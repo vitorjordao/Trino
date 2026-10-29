@@ -36,6 +36,7 @@ pub fn encode(samples: &[f32], rate: u32, quality: f32, serial: i32) -> Result<V
 /// cut at the last page's granule position (lewton plays the whole last
 /// block; the encoder padded it).
 pub fn decode(bytes: &[u8]) -> Result<(u32, Vec<f32>), String> {
+    trino_core::vorbis::check(bytes).map_err(|e| format!("Vorbis decode: {e:?}"))?;
     let mut reader =
         OggStreamReader::new(Cursor::new(bytes)).map_err(|e| format!("Vorbis decode: {e}"))?;
     let rate = reader.ident_hdr.audio_sample_rate;

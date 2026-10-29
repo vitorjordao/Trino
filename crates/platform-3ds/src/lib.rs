@@ -23,7 +23,7 @@
 // gated on `target_os = "horizon"` (the armv6k-nintendo-3ds target).
 #![no_std]
 
-#[cfg(target_os = "horizon")]
+#[cfg(any(target_os = "horizon", test))]
 extern crate alloc;
 
 #[cfg(target_os = "horizon")]
@@ -47,6 +47,8 @@ mod pad;
 mod renderer;
 #[cfg(target_os = "horizon")]
 pub mod runtime;
+#[cfg(any(target_os = "horizon", test))]
+pub mod savedir;
 #[cfg(target_os = "horizon")]
 mod stereo;
 #[cfg(target_os = "horizon")]

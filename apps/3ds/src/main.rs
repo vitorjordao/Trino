@@ -44,10 +44,23 @@ mod n3ds {
         // Top screen: 400x240.
         let mut game = castle64::Castle64Game::new(Vec2::new(400.0, 240.0));
 
+        // `cargo xtask save soak 3ds` (issue #121): save a counter every
+        // frame until the power (or the emulator) goes.
+        if N3dsAssets::exists("/save_soak") {
+            let mut soak = castle64::soak::SaveSoak::boot(&mut platform);
+            while runtime::running() {
+                soak.step(&mut platform);
+                trino_core::Renderer::begin_frame(&mut renderer, trino_core::Color::rgb(60, 0, 0));
+                trino_core::Renderer::end_frame(&mut renderer);
+            }
+            return;
+        }
         if N3dsAssets::exists("/test_mode") {
             run_self_test(&mut game, &mut renderer, &mut audio, &mut platform);
             return;
         }
+        // The player's progress in its SD folder (issues #119, #121).
+        game.set_saves(true);
 
         // Play (or replay / record, issue #67) through the engine's host
         // loop; `run 3ds --trace` names the session after castle64.
@@ -328,6 +341,21 @@ mod n3ds {
         platform: &mut N3dsPlatform,
     ) {
         const DT: f32 = 1.0 / 60.0;
+        // The game's own SD save folder (GitHub #119), before any step saves:
+        // `cargo xtask test 3ds` seeded the folder every game shared before
+        // it, and the first read must migrate that save (`seed=1`).
+        runtime::log("TRINO_STEP:save folder\n");
+        {
+            let mut buf = [0u8; 64];
+            let n = trino_core::Platform::save_read(platform, &mut buf).map_or(0, |n| n.min(64));
+            let status = trino_core::Platform::save_status(platform);
+            runtime::log(&format!(
+                "TRINO_STEP:save folder dir={} status={} len={n} seed={}\n",
+                platform.save_dir(),
+                status.label(),
+                (&buf[..n] == b"trino-119-legacy-seed") as u8
+            ));
+        }
         // 0) Engine services through the portable traits (text, blobs, save).
         if let Err(e) = castle64::selftest::engine_checks(renderer, platform) {
             runtime::log(&format!("TRINO_TEST_FAIL:engine: {e}\n"));

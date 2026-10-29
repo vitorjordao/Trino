@@ -150,5 +150,65 @@ Each input is in `fuzz/regressions/<target>/` and replays in `cargo test`.
   cut: ares and Azahar can't cut power mid-write. The `save recovery` step also cuts a
   `save_begin` short after one step (a real power cut's state on the N64), and the host
   tests cut writes at every byte (`save_slots.rs`, `save_recovery.rs`).
-- **The C side of the 3DS T3AU loader** is checked by hand against `T3au::parse`, not
-  fuzzed (it is C).
+- **The C side of the 3DS T3AU loader** was checked by hand against `T3au::parse`, not
+  fuzzed (it is C). Issue #121 fuzzes it: see the addendum.
+
+## Addendum: issue #121 (fuzzing and CI follow-ups)
+
+- **C under the fuzzer.** The shim's T3AU header check is `t3au_header.h` (`<stdint.h>`
+  only), included by `trino_shim_3ds.c` and compiled for the host by `crates/fuzz`
+  (`build.rs`, `cc`; ASan under `cargo fuzz`, libFuzzer coverage with clang). The
+  `t3au_shim` target is differential against `T3au::parse`. They disagreed (streams with
+  no data-size check, any bus, any file length, u32 sums, the pipeline taking any channel
+  count): both now apply one rule set, the shim reading the file's size.
+- **Console-only parsing moves to the core.** The N64's and 3DS's `index.tsv` lines are
+  `trino_core::asset::IndexLine` (+ `Locator`, `SoundColumns`), shared by both loaders
+  and fuzzed by `asset_index`. Code behind a console `cfg` is otherwise never fuzzed.
+- **`pc_renderer`**: the PC renderer's uploads (RGBA8, BC, TMDL, TFNT, KTX2 through the
+  native transcoder) and one frame, on a lazily created headless device per thread,
+  skipped without an adapter. Uploads the device can't make are refused and logged at
+  the API (they reached wgpu's validation, which aborts); `ktx2_to_basis` checks its
+  spans.
+- **Slow targets.** `ron` paid six full-document parses per input; scenes and prefabs are
+  `ron_scene` (26 → 58–76 exec/s, `ron_scene` 50–65). `tsn2_decode` is bounded by
+  lewton's setup-header decode; it decodes at most 16 384 samples now (81–85 →
+  136–162 exec/s). Its 120 s run found lewton reserving a codebook's table from the
+  header (40 GB from 23 KB): `trino_core::vorbis::check` bounds Vorbis setup headers
+  before every lewton call. The PR's CI shard then found lewton sizing the comment
+  header's vendor string, comment list and comments from its own `u32`s (67 GB from
+  4.6 KB): the check also requires the comment packet to hold every byte it declares.
+- **Coverage per target** (`cargo xtask fuzz coverage`, each nightly shard after fuzzing,
+  the `fuzz-coverage-<shard>` artifact): lines, functions and regions of the engine
+  files a target reaches.
+- **Miri** also runs `save_recovery` and `save_slots` (their exhaustive loops stride
+  under `cfg(miri)`: 1112 s → 170 s for `save_slots`), and **ASan** covers the platform
+  crates' host tests weekly (`robustness-weekly.yml`, lavapipe; locally on RADV every
+  platform-pc, runner-pc, render-wgpu and console host test passed with no memory
+  error).
+
+## Addendum (2026-10-29): saves per game, versioned games, power cuts (GitHub #119, #121)
+
+- **3DS saves per game (#119).** `sdmc:/3ds/trino/<save_name>/save.{a,b}`, the name from
+  `trino.toml` `[3ds] save_name` (default `[project] name`; the engine's castle64 is
+  `castle64`, its PC and Web name), staged in the RomFS; self-test builds use
+  `<name>-selftest`. The decisions are plain Rust over a `Files` trait
+  (`trino_platform_3ds::savedir`, tested on the host); the shim only opens files 0–4
+  (own A/B, shared `save.bin`/A/B) and writes only the own two. A folder with no slot
+  file at all migrates the shared save once (read, never written); one with a damaged
+  slot does not, so a damaged save of one game never loads another's. The shared folder
+  stays as it was: an older build of any game still reads it. A `.cia` could use the
+  title's own save archive (`ARCHIVE_SAVEDATA`) instead: a separate item.
+- **Versioned games (#121).** castle64 (new: its progress and achievements, version 1),
+  Solid Eleven (version 0 = its `SE11` career image, migrated by `Career::load`) and the
+  starter (version 0 = its bare achievements pack) save through `write_versioned` and
+  `load_game`, never overwrite a newer version's save, and say what the read found
+  (Solid Eleven's amber/red toast, the starter's `save_notice` screen). castle64's save
+  is opt-in per host so no test reads the player's progress.
+- **Power cuts.** `cargo xtask save soak` runs a build that only saves a counter
+  (`castle64::soak`); in Azahar the harness kills the emulator (SIGKILL) mid-run and
+  checks every boot read the last finished save or a later one. On hardware the same
+  build runs through `--device`; a person cuts the power (`docs/HARDWARE.md`). Not yet
+  done on a real SC64 or 3DS. ares can't stand in for the N64 (it writes the EEPROM file
+  at exit only).
+- **Tools.** `save inspect` reads a 3DS SD folder (the same migration rule), and the
+  editor's Saves tab has the PC, ares's `.eeprom` and Azahar's SD folders.

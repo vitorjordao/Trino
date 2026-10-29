@@ -354,14 +354,16 @@ pub struct WaterDraw {
 /// its TLUT takes TMEM's upper half, so it can't share TMEM with a second
 /// layer) or an unknown one.
 pub fn tmem_bytes(width: u32, height: u32, format: &str) -> Option<u32> {
-    let bits = match format {
-        "RGBA32" => 32,
-        "RGBA16" | "RGBA5551" | "IA16" => 16,
-        "I8" | "IA8" => 8,
-        "I4" | "IA4" => 4,
-        _ => return None,
+    // The core's TMEM rule (GitHub #125): an odd 4-bit row rounds its last
+    // half byte up. IA formats take their intensity twin's bits.
+    let format = match format {
+        "IA16" => trino_core::TexelFormat::Rgba16,
+        "IA8" => trino_core::TexelFormat::I8,
+        "IA4" => trino_core::TexelFormat::I4,
+        f => trino_core::TexelFormat::parse(f).filter(|f| !f.paletted())?,
     };
-    Some((width * bits / 8).next_multiple_of(8) * height)
+    let (used, _) = trino_core::Caps::N64.texture_texels(format, width, height);
+    Some(used as u32)
 }
 
 /// The HUD's and the CLI's water lines, two per surface: its triangles and

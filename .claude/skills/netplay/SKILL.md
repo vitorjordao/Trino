@@ -126,8 +126,13 @@ Players, recordings and netplay.
   same reason a hang guard is wall-clock time without progress (20 s), never a loop
   count: lockstep under loss passed locally and timed out on CI's Linux and Windows
   runners with a tick budget.
-- **Re-simulated frames are silent** (`session::run_requests` mutes every advance but a
-  batch's last). A game that triggers effects from `update` gets them once.
+- **Re-simulated frames are silent.** `session::run_requests` follows ggrs's frame
+  numbers (`SaveGameState`/`LoadGameState` carry them; `FrameClock`) and plays audio
+  only for a frame past the newest one already played. A game that triggers effects
+  from `update` gets them once. Never key "new frame" on a batch's last advance: ggrs
+  sends rollbacks with no new frame (`Load 1498, Advance, Save 1499, Advance, Save 1500`),
+  and that rule played frame 1500's sound twice (`three_players_stay_in_step` failed
+  about 1 run in 10 on `main`, PR #127).
 
 ## Editor
 

@@ -17,6 +17,8 @@
 
 pub mod core_targets;
 #[cfg(feature = "host")]
+pub mod gpu_targets;
+#[cfg(feature = "host")]
 pub mod host_targets;
 pub mod mutate;
 pub mod seedgen;
@@ -92,7 +94,7 @@ pub const TARGETS: &[Target] = &[
     },
     Target {
         name: "tsn2",
-        formats: &["TSN2"],
+        formats: &["TSN2", "Vorbis setup header"],
         run: c::tsn2,
         max_len: 1 << 16,
         seeds: Seeds::Magic(&[b"TSN2"]),
@@ -231,6 +233,13 @@ pub const TARGETS: &[Target] = &[
         seeds: Seeds::Files(&["quality", "access", "txt"]),
     },
     Target {
+        name: "asset_index",
+        formats: &["index.tsv"],
+        run: c::asset_index,
+        max_len: 8192,
+        seeds: Seeds::Committed,
+    },
+    Target {
         name: "access_pack",
         formats: &["access save"],
         run: c::access_pack,
@@ -295,15 +304,16 @@ pub const TARGETS: &[Target] = &[
     },
     #[cfg(feature = "host")]
     Target {
+        name: "t3au_shim",
+        formats: &["T3AU (3DS shim)"],
+        run: host_targets::t3au_shim,
+        max_len: 1 << 16,
+        seeds: Seeds::Committed,
+    },
+    #[cfg(feature = "host")]
+    Target {
         name: "ron",
-        formats: &[
-            "scene RON",
-            "prefab RON",
-            "material RON",
-            "ui RON",
-            "i18n RON",
-            "achievements RON",
-        ],
+        formats: &["material RON", "ui RON", "i18n RON", "achievements RON"],
         run: host_targets::ron,
         max_len: 1 << 15,
         seeds: Seeds::Files(&[
@@ -314,6 +324,14 @@ pub const TARGETS: &[Target] = &[
             "ron",
             "lock",
         ]),
+    },
+    #[cfg(feature = "host")]
+    Target {
+        name: "ron_scene",
+        formats: &["scene RON", "prefab RON"],
+        run: host_targets::ron_scene,
+        max_len: 1 << 15,
+        seeds: Seeds::Files(&["scene.ron", "prefab.ron"]),
     },
     #[cfg(feature = "host")]
     Target {
@@ -333,6 +351,14 @@ pub const TARGETS: &[Target] = &[
     },
     #[cfg(feature = "host")]
     Target {
+        name: "pc_renderer",
+        formats: &["PC renderer uploads", "KTX2"],
+        run: gpu_targets::pc_renderer,
+        max_len: 1 << 16,
+        seeds: Seeds::Committed,
+    },
+    #[cfg(feature = "host")]
+    Target {
         name: "net",
         formats: &["lobby line", "ggrs message", "net config"],
         run: host_targets::net,
@@ -340,6 +366,20 @@ pub const TARGETS: &[Target] = &[
         seeds: Seeds::Committed,
     },
 ];
+
+/// Targets whose every input costs a GPU frame: the stable mutation run
+/// (`crates/fuzz/tests/targets.rs`, `fuzz smoke`) gives them fewer
+/// iterations.
+pub const SLOW_TARGETS: &[&str] = &["pc_renderer"];
+
+/// How many of `iters` mutations the stable runs give target `name`.
+pub fn iters_for(name: &str, iters: usize) -> usize {
+    if SLOW_TARGETS.contains(&name) {
+        iters.min(48)
+    } else {
+        iters
+    }
+}
 
 /// A target by name.
 pub fn find(name: &str) -> Option<&'static Target> {

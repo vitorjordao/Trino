@@ -21,6 +21,12 @@
 //! list. The state also goes into the save (`save_begin`), which is where
 //! the N64 and the 3DS keep it; the PC and the Web keep their own copy too
 //! (Steam's, on a Steam build). About shows the stamped version.
+//!
+//! The save is versioned ([`SAVE_VERSION`], `save::write_versioned`): add a
+//! field, bump the version and bring older saves forward in
+//! `migrate_save`. What the read found shows once at start
+//! (`ui/save_notice.ui.ron`): a save restored from its backup, one that was
+//! lost, or one from a newer version, which this build never overwrites.
 
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
@@ -75,7 +81,13 @@ pub enum Mode {
     /// "Send the crash report?", once, before the title (PC packages with
     /// an endpoint).
     CrashAsk,
+    /// What the save read found, once at start (`ui/save_notice.ui.ron`).
+    SaveNotice,
 }
+
+/// The save's version (`save::write_versioned`). Version 0 is the bare
+/// achievements pack the template wrote before; `migrate_save` keeps it.
+pub const SAVE_VERSION: u16 = 1;
 
 /// What a menu asks of the platform; `update_with` (which has it) applies it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,6 +125,7 @@ pub struct {{name_camel}}Game {
     access: ScreenBlob,
     about: ScreenBlob,
     crash: ScreenBlob,
+    save_notice: ScreenBlob,
     strings: StringsBlob,
     /// The player's accessibility settings: read from the platform, changed
     /// by the Accessibility screen, sent back (`dirty`) after the frame.
@@ -144,6 +157,10 @@ pub struct {{name_camel}}Game {
     steps: i32,
     /// The save was read (once, at the first update).
     loaded: bool,
+    /// The save is from a newer version: never write it.
+    save_blocked: bool,
+    /// Ask about crash reports after the save notice.
+    crash_after: bool,
     /// A save is being written (`save_step` each frame).
     saving: bool,
     /// What presence says (title or playing).
@@ -165,6 +182,7 @@ impl {{name_camel}}Game {
             access: ScreenBlob::new("accessibility"),
             about: ScreenBlob::new("about"),
             crash: ScreenBlob::new("crash"),
+            save_notice: ScreenBlob::new("save_notice"),
             strings: StringsBlob::new("en-US"),
             settings: AccessSettings::DEFAULT,
             dirty: false,
@@ -184,6 +202,8 @@ impl {{name_camel}}Game {
             steps: 0,
             loaded: false,
             saving: false,
+            save_blocked: false,
+            crash_after: false,
             presence: None,
         }
     }
@@ -207,6 +227,11 @@ impl {{name_camel}}Game {
             (Mode::Title, "about") => Some(Mode::About),
             (Mode::About, "back") => Some(Mode::Title),
             (Mode::CrashAsk, "yes" | "no") => Some(Mode::Title),
+            (Mode::SaveNotice, "ok") => Some(if self.crash_after {
+                Mode::CrashAsk
+            } else {
+                Mode::Title
+            }),
             (Mode::Options { from_pause }, "controls") => Some(Mode::Controls { from_pause }),
             (Mode::Options { from_pause }, "accessibility") => Some(Mode::Access { from_pause }),
             (Mode::Controls { from_pause } | Mode::Access { from_pause }, "back") => {
@@ -228,6 +253,7 @@ impl {{name_camel}}Game {
             Mode::Access { .. } => &self.access,
             Mode::About => &self.about,
             Mode::CrashAsk => &self.crash,
+            Mode::SaveNotice => &self.save_notice,
             Mode::Play | Mode::Achievements { .. } => return,
         };
         if self.waiting {
@@ -336,10 +362,25 @@ impl {{name_camel}}Game {
                 self.go(Mode::CrashAsk);
             }
             let mut buf = [0u8; 128];
-            if let Ok(n) = platform.save_read(&mut buf)
-                && let Ok((saved, _)) = AchievementState::unpack(&buf[..n])
-            {
-                platform.restore_achievements(&saved);
+            if let Ok(l) = trino_core::save::load_game(self, platform, &mut buf, SAVE_VERSION) {
+                if l.from > SAVE_VERSION {
+                    self.save_blocked = true;
+                } else if let Ok((saved, _)) = AchievementState::unpack(&buf[..l.len]) {
+                    platform.restore_achievements(&saved);
+                }
+                let notice = match l.status {
+                    _ if self.save_blocked => Some("newer"),
+                    trino_core::SaveStatus::RecoveredFromBackup => Some("recovered"),
+                    trino_core::SaveStatus::Corrupted => Some("corrupted"),
+                    _ => None,
+                };
+                if let Some(which) = notice {
+                    self.crash_after = self.mode == Mode::CrashAsk;
+                    self.go(Mode::SaveNotice);
+                    for flag in ["recovered", "corrupted", "newer"] {
+                        self.ui.set_bool(flag, flag == which);
+                    }
+                }
             }
             let mut version = trino_core::TextBuf::<32>::new();
             let _ = core::fmt::Write::write_str(&mut version, BUILD.version);
@@ -387,14 +428,24 @@ impl {{name_camel}}Game {
         if platform.achievements().unlocked_count() != unlocked
             && let Some(t) = AchievementTable::from_platform(platform)
         {
+            let mut pack = [0u8; 124];
+            let n = platform.achievements().pack_for(&t, &mut pack);
             let mut buf = [0u8; 128];
-            let n = platform.achievements().pack_for(&t, &mut buf);
-            self.saving = n > 0 && platform.save_begin(&buf[..n]).is_ok();
+            self.saving = !self.save_blocked
+                && n > 0
+                && trino_core::save::write_versioned(SAVE_VERSION, &pack[..n], &mut buf)
+                    .is_some_and(|k| platform.save_begin(&buf[..k]).is_ok());
         }
     }
 }
 
 impl Game for {{name_camel}}Game {
+    /// Version 0, the bare achievements pack from before [`SAVE_VERSION`],
+    /// is version 1's data as it is.
+    fn migrate_save(&mut self, from: u16, data: &mut [u8], len: usize) -> Option<usize> {
+        (from == 0 && AchievementState::unpack(data.get(..len)?).is_ok()).then_some(len)
+    }
+
     fn update_with(
         &mut self,
         platform: &mut dyn Platform,
@@ -411,6 +462,7 @@ impl Game for {{name_camel}}Game {
         self.access.get(platform);
         self.about.get(platform);
         self.crash.get(platform);
+        self.save_notice.get(platform);
         self.services(platform);
         self.strings.get(platform);
         // The host's settings, unless the screen just changed them.
@@ -526,6 +578,7 @@ impl Game for {{name_camel}}Game {
             Mode::Access { .. } => Some(&self.access),
             Mode::About => Some(&self.about),
             Mode::CrashAsk => Some(&self.crash),
+            Mode::SaveNotice => Some(&self.save_notice),
             Mode::Achievements { .. } => None,
         };
         if self.mode != Mode::Title {
@@ -702,6 +755,7 @@ mod tests {
         services: trino_core::HostedServices,
         save: Vec<u8>,
         crash: Option<trino_core::CrashReports>,
+        status: trino_core::SaveStatus,
     }
 
     impl Platform for Console {
@@ -728,6 +782,9 @@ mod tests {
         fn save_write(&mut self, data: &[u8]) -> Result<(), trino_core::SaveError> {
             self.save = data.to_vec();
             Ok(())
+        }
+        fn save_status(&self) -> trino_core::SaveStatus {
+            self.status
         }
         fn crash_reports(&self) -> Option<trino_core::CrashReports> {
             self.crash
@@ -767,7 +824,67 @@ mod tests {
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
             save,
             crash: None,
+            status: trino_core::SaveStatus::Ok,
         }
+    }
+
+    /// The save is versioned, and the bare pack an older build wrote
+    /// (version 0) still restores the achievements.
+    #[test]
+    fn the_save_is_versioned_and_an_old_one_migrates() {
+        let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        let mut host = console(Vec::new());
+        game.mode = Mode::Play;
+        let mut input = InputState::default();
+        input.set(Button::DpadRight, true);
+        game.update_with(&mut host, &input, &mut NullAudio, 0.1);
+        let (version, pack) = trino_core::save::split_version(&host.save);
+        assert_eq!(version, SAVE_VERSION);
+        // The same pack, untagged: what the template saved before.
+        let mut old = console(pack.to_vec());
+        let mut again = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        again.update_with(&mut old, &InputState::default(), &mut NullAudio, 0.1);
+        assert!(old.is_unlocked(FIRST_STEPS));
+        assert_eq!(again.mode, Mode::Title, "a migration is not news");
+    }
+
+    /// What the save read found shows once, then OK goes on (to the crash
+    /// question when one waits); a newer version's save is never written.
+    #[test]
+    fn the_save_notice_says_what_the_read_found() {
+        use trino_core::SaveStatus;
+        for (status, flag) in [
+            (SaveStatus::RecoveredFromBackup, "recovered"),
+            (SaveStatus::Corrupted, "corrupted"),
+        ] {
+            let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+            let mut host = console(Vec::new());
+            host.status = status;
+            game.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+            assert_eq!(game.mode, Mode::SaveNotice, "{status:?}");
+            assert!(game.ui.get_bool(flag), "{status:?}");
+            assert_eq!(game.action("ok"), Some(Mode::Title));
+        }
+        // Newer: the notice, then the crash question that was waiting.
+        let mut newer = [0u8; 16];
+        let k = trino_core::save::write_versioned(SAVE_VERSION + 1, b"future", &mut newer).unwrap();
+        let mut host = console(newer[..k].to_vec());
+        host.crash = Some(trino_core::CrashReports {
+            pending: 1,
+            consent: trino_core::CrashConsent::Ask,
+            upload: true,
+        });
+        let mut game = {{name_camel}}Game::new(Vec2::new(320.0, 240.0));
+        game.update_with(&mut host, &InputState::default(), &mut NullAudio, 0.1);
+        assert_eq!(game.mode, Mode::SaveNotice);
+        assert!(game.ui.get_bool("newer"));
+        assert_eq!(game.action("ok"), Some(Mode::CrashAsk));
+        game.mode = Mode::Play;
+        let mut input = InputState::default();
+        input.set(Button::DpadRight, true);
+        game.update_with(&mut host, &input, &mut NullAudio, 0.1);
+        assert!(host.is_unlocked(FIRST_STEPS));
+        assert_eq!(host.save, newer[..k], "never overwritten");
     }
 
     /// Moving unlocks FIRST_STEPS (a popup) and saves the achievements; a

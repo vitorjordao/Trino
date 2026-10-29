@@ -43,7 +43,7 @@ fn every_target_survives_its_seeds_regressions_and_mutations() {
         inputs.push(Vec::new());
         let mut rng = mutate::Rng::new(trino_core::asset_id(t.name) as u64);
         let mut all = inputs.clone();
-        for k in 0..iters() {
+        for k in 0..trino_fuzz::iters_for(t.name, iters()) {
             let a = &inputs[k % inputs.len()];
             let b = &inputs[rng.below(inputs.len())];
             all.push(mutate::mutate(&mut rng, a, b, t.max_len));

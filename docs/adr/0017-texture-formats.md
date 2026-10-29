@@ -189,3 +189,13 @@ page transcodes it, once at load, to what its GPU samples.
 - Two traps cost time and are in AGENTS.md › Pitfalls: `C3D_Tex::fmt` is a signed
   4-bit bitfield (GPU_A8 reads back as -8), and the engine's citro2d tint mode is
   multiply, so a black texel stays black under any tint.
+
+## Addendum (2026-10-29): strict mode checks TMEM by the N64 format (GitHub #125)
+
+The PC bake records each sprite's N64 format (`n64_format` in `index.toml`, chosen by
+`texture::choose` for `Platform::N64` from the N64's own master) and the hosts hand it to
+`PcRenderer::set_texture_format`. Strict mode on the N64 profile then checks a texture as
+the console holds it: `Caps::texture_texels` (rows of `ceil(w · bits / 8)` bytes padded to
+8, the lower 2 KB beside a CI palette), the one rule `N64Format::tmem_texels` and
+`trino_scene::budget::tmem_bytes` also call. Without a format the check stays the old
+16-bit one. A detail layer over a CI base fails strict mode (the console drops it).

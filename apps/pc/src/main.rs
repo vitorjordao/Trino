@@ -279,6 +279,13 @@ impl App {
             Ok("full") => Some(castle64::bot::Bot::new(castle64::bot::FULL_RUN)),
             _ => None,
         };
+        // The player's progress (issue #121), in `target/save/castle64.sav`:
+        // never in a smoke run, a bot run, a replay or a recording.
+        let live = self.smoke_frames.is_none()
+            && bot.is_none()
+            && !session.is_replay()
+            && !session.is_recording();
+        let game = if live { game.with_saves() } else { game };
         let access_persist = trino_runner_pc::load_access_settings(
             &mut platform,
             &access_file(),

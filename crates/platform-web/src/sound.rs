@@ -97,8 +97,13 @@ impl StreamDecoder {
     fn source(codec: SoundCodec, bytes: &Rc<[u8]>) -> Result<Source, String> {
         Ok(match codec {
             SoundCodec::Vorbis => Source::Vorbis(Box::new(
-                OggStreamReader::new(Cursor::new(bytes.clone()))
-                    .map_err(|e| format!("Vorbis: {e}"))?,
+                // lewton reserves what a codebook's header says first (#121).
+                trino_core::vorbis::check(bytes)
+                    .map_err(|e| format!("Vorbis: {e:?}"))
+                    .and_then(|()| {
+                        OggStreamReader::new(Cursor::new(bytes.clone()))
+                            .map_err(|e| format!("Vorbis: {e}"))
+                    })?,
             )),
             SoundCodec::Pcm16 => Source::Pcm(0),
         })

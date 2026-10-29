@@ -280,3 +280,31 @@ path = "fuzz_targets/pc_bundle.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "asset_index"
+path = "fuzz_targets/asset_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "t3au_shim"
+path = "fuzz_targets/t3au_shim.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pc_renderer"
+path = "fuzz_targets/pc_renderer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ron_scene"
+path = "fuzz_targets/ron_scene.rs"
+test = false
+doc = false
+bench = false

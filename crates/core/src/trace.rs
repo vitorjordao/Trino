@@ -972,6 +972,52 @@ pub fn record_zone(name: &'static str, track: u8, depth: u8, start: u32, dur: u3
     global::with(|g| g.ring_mut().zone_at(name, track, depth, start, dur));
 }
 
+/// A zone opens on `track` of the global ring as another copy of this
+/// crate saw it begin (a hot-reloaded game's, through [`Hooks::begin`]:
+/// [`TraceAttach`]). A no-op when off.
+#[allow(unused_variables)]
+pub fn forward_begin(track: u8) {
+    #[cfg(feature = "trace")]
+    global::with(|g| g.ring_mut().open(track));
+}
+
+/// The zone [`forward_begin`] opened ends: recorded at its depth. `name`
+/// must outlive the ring (a host copies a dylib's names before calling).
+#[allow(unused_variables)]
+pub fn forward_end(name: &'static str, track: u8, start: u32, end: u32) {
+    #[cfg(feature = "trace")]
+    global::with(|g| {
+        let r = g.ring_mut();
+        r.close(track);
+        r.zone(name, track, start, end);
+    });
+}
+
+/// What a host hands a game that links its own copy of this crate (a
+/// hot-reloaded dylib, `Platform::trace_hooks`): hooks that record into
+/// the host's ring, and the host's clock (issue #79, #105 item 4).
+#[derive(Clone, Copy)]
+pub struct TraceAttach {
+    pub hooks: Hooks,
+    pub clock: fn() -> u32,
+}
+
+/// In a game's copy of this crate: record through `attach` (the host's
+/// ring) unless this copy already records (it is the host's own, a static
+/// build) or is already attached. Called by `export_game!` every update;
+/// a no-op without the `trace` feature.
+#[allow(unused_variables)]
+pub fn adopt(attach: Option<TraceAttach>) {
+    #[cfg(feature = "trace")]
+    if let Some(a) = attach
+        && !global::is_on()
+        && !global::hooked()
+    {
+        global::set_clock(a.clock);
+        global::set_hooks(Some(a.hooks));
+    }
+}
+
 /// Events the global ring holds (sized for a few seconds of a busy frame:
 /// ~40 events a frame at 60 fps). 48 KB, in the host's `static`.
 pub const GLOBAL_EVENTS: usize = 4096;
@@ -1535,6 +1581,23 @@ mod tests {
         frame_mark(3);
         set_hooks(None);
         assert_eq!(HOOKED.load(Ordering::Relaxed), 12_101);
+        // A hot-reloaded game's zones arrive through the host's forwarders
+        // (issue #79), nested like its own.
+        forward_begin(track::CPU);
+        forward_begin(track::CPU);
+        forward_end("game ai", track::CPU, 2000, 2010);
+        forward_end("game update", track::CPU, 1990, 2020);
+        // A copy that records itself adopts nothing.
+        adopt(Some(TraceAttach {
+            hooks: Hooks {
+                begin: |_, _| {},
+                end: |_, _, _, _| {},
+                counter: |_, _| {},
+                frame: |_| {},
+            },
+            clock,
+        }));
+        assert!(!hooked());
         let mut text = String::new();
         with_ring(|r, p| r.write_lines(p, "global", &mut 0, &mut text).unwrap()).unwrap();
         let ring = uninstall().unwrap();
@@ -1558,6 +1621,8 @@ mod tests {
                 ("mix", 0, 3, 0),
                 ("hooked", 1, 0, 0),
                 ("frame", 2, 0, 0),
+                ("game ai", 0, 0, 1),
+                ("game update", 0, 0, 0),
             ]
         );
         // The inner zone lies inside the outer one.

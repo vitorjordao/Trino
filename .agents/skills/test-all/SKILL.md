@@ -97,6 +97,12 @@ be half-written: a link failing with `undefined hidden symbol: anon.…` is that
   cargo +nightly check -Zbuild-std=core,alloc -Zjson-target-spec --target platforms/n64/mips-nintendo64-none.json -p trino-app-n64 --release
   cargo +nightly check -Zbuild-std=core,alloc --target armv6k-nintendo-3ds -p trino-platform-3ds -p castle64 -p showcase --release
   ```
+- The N64's instrumented modes (issue #79): no CI job compiles `prof-rsp`/`prof-sample`
+  (the gamepad-feature pattern). After touching `trino_platform_n64::prof`, the shim's
+  `TRINO_PROF_*` or the renderer's timed submit: `cargo +nightly check
+  -Zbuild-std=core,alloc -Zjson-target-spec --target platforms/n64/mips-nintendo64-none.json
+  -p trino-app-n64 --release --features trino-platform-n64/prof-rsp` (and `prof-sample`),
+  or a `cargo xtask test n64 --prof rsp|sample` run.
 - The timeline trace's features (issue #62; no default gate compiles them; CI's lint job
   does): `cargo clippy --workspace --all-targets --features trino-core/trace -- -D
   warnings`, `cargo test -p trino-core --features trace --lib trace`,

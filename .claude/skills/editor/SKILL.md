@@ -74,6 +74,9 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_REPLAY=<file.trec>` | Play here replays it in the Game view (`TRINO_EDITOR_REPLAY_FRAME=N`: seeks there, paused); `TRINO_EDITOR_PLAY=record` starts recording; `TRINO_EDITOR_PLAYERS=1..4` simulated local seats (issue #67) |
 | `TRINO_EDITOR_TRACE=<file>[@session]` | the Profiler tab opens that trace (relative to the project, e.g. `target/traces/n64-trace.json@n64-hub`) as trace A on that session, and comes to front |
 | `TRINO_EDITOR_TRACE_B=<file>[@session]` | …and that one as trace B (compare); without `@session` B pairs with A's session (`pair_sessions`) |
+| `TRINO_EDITOR_PROFILER=timeline\|reports\|ab` | the Profiler's view (issue #79): the trace timeline, console perf reports with the live PC frame, or an A/B over layouts |
+| `TRINO_EDITOR_PERF=<file>` / `TRINO_EDITOR_PERF_B=<file>` | the Reports view's report A / B (relative to the project, e.g. `target/perf/n64-hub.json`); without it A is the first file of `target/perf/` |
+| `TRINO_EDITOR_AB=<file>` | the A/B view's report (default the first of `target/perf-ab/` and `target/perf/`) |
 | `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements); `=physics` on the collision layers and their matrix (issue #66) |
 | `TRINO_EDITOR_PHYSICS=sim` | Play here walks the `player` on the engine's `CharacterController` (Play ▸ Simulate controller) and the Game view draws its debug overlay: body, ground normal, step probe, status line |
 | `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
@@ -196,7 +199,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `panels/audio.rs` | Assets › Audio inspector: waveform + codec noise, Play per platform, bake settings, the Platforms grid; the budget lines; `name_slider` |
 | `panels/mixer.rs` | the Mixer tab: bus volumes and preview mutes, duck rules; writes `assets/audio.toml` |
 | `ui_screens.rs`, `panels/ui_screens.rs` | the UI tab (issue #58): edits `ui/*.ui.ron` live — tree (add/duplicate/delete/drag), inspector, preview through the real renderer profile per target (3DS: both screens) and language, focus-order/selection/overflow overlays, issues from `validate` + `audit`; saves when the pointer and keyboard are idle, keeping the leading comments; outside edits reload. Tests: `ui_tests.rs::ui_tab_edits_screens_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
-| `profiler.rs`, `panels/profiler.rs` | the Profiler tab (issue #62): traces A/B from `target/traces/` through `trino-trace`, timeline, frame flame graph, zone and diff tables, live reload, the budget's measured N64 line (see "Profiler tab") |
+| `profiler.rs`, `panels/profiler.rs`, `panels/profiler_reports.rs` | the Profiler tab (issues #62, #79): traces A/B from `target/traces/` through `trino-trace`, timeline, frame flame graph, zone and diff tables, live reload, the budget's measured N64 line; the Reports view (live PC frame, `target/perf/` reports) and the A/B view (see "Profiler tab") |
 | `localization.rs`, `panels/localization.rs` | the Localization tab (issue #59): keys × languages from `assets/i18n/*.ron` (default first, pseudo-locales last), cells marked own / fallback (amber) / missing (red), edits written through `write_echo` (comments are not kept), add or remove keys and languages, a pseudo-locale, CSV at `assets/i18n/strings.csv`, `check()` issues with click-to-select, glyph coverage and N64 TMEM per checked font and language measured on a worker; the preview language is editor-wide (UI tab, Play's `TRINO_LANG`). Wide tables page sideways (‹ ›) so the layout audit stays clean. Tests: `ui_tests.rs::localization_tab_edits_the_tables_and_follows_their_files` (GPU, `--ignored --test-threads=1`) |
 
 ## Water (ADR 0015)
@@ -457,6 +460,36 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   TRINO_EDITOR_SCREENSHOT=p.png cargo xtask editor .`
 - `section_title` upper-cases its text: query "DIFF (B", not "Diff (B". `query_by_label`
   panics on two matches (a zone name is in both tables): use `query_all_by_label`.
+
+### Reports and A/B views (issue #79, ADR 0038)
+
+- The tab's mode row (`profiler::Mode`: Timeline, Reports, A/B) above everything; the two
+  new views live in `panels/profiler_reports.rs`, their state in `profiler::Reports`
+  (files, A, B, the A/B report; polled with the traces, reloaded when a file changes).
+- **Reports**: the Game view's PC frame first (`LiveFrames`, the last 120 of
+  `viewport::Stats` — ms, `FrameStats`, `PcFrameTimes` — pushed only while the tab draws,
+  a bar strip with the 16.7 ms line), then a `target/perf/*.json` report
+  (`trino_trace::perf::PerfReport`, what every `cargo xtask test n64` writes): a stage bar,
+  stages, T&L work, backend counters, zones, the RSP fit, the CPU samples; report B adds
+  "B − A" columns. Combos "Report A", "Report B". "Run on N64 (ares)" / "Run on 3DS
+  (Azahar)" start `cargo xtask test n64|3ds --trace` through `App::run_xtask_job` (one job
+  at a time, the Project tab's); the files reload when the run writes them.
+- **A/B**: `ab.json` (`perf ab`): scene buttons, a line per stage with each arm's mean
+  (min–max) and its delta to the base, and a strip per stage with a dot per padding and
+  the mean as a tick (base grey, head accent, control amber). The "work is identical"
+  line says whether a shift can be layout.
+- **Attach to Play**: Play (`toggle_play`) started while the tab drew in the last 2 s
+  (`is_shown`) runs the game with `--features trino-core/trace` and
+  `TRINO_TRACE=target/traces/pc.log`, and `profiler.follow` opens that file as trace A
+  (Timeline) once it appears.
+- Deltas use U+2212 (`−17`, `−0.90 ms`), as `fmt_delta_us` does: tests query that
+  character, not `-`.
+- Tests: `ui_tests::profiler_reports_ab_and_play_attach` (fixtures from log lines through
+  `trino_trace::perf::Collector`), the layout audit's "Profiler reports A vs B" and
+  "Profiler A/B" steps.
+- Screenshots: `TRINO_EDITOR_TAB=profiler TRINO_EDITOR_PROFILER=reports
+  TRINO_EDITOR_PERF=target/perf/n64-hub.json TRINO_EDITOR_SCREENSHOT=p.png cargo xtask
+  editor .`
 
 ## Stereo 3D (issue #63, ADR 0032)
 

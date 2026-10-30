@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use trino_trace::perf::{AbReport, PerfReport};
 use trino_trace::stats::{Diff, SessionStats, pair_sessions};
 use trino_trace::{Session, Trace, Zone};
 
@@ -295,6 +296,196 @@ pub struct ProfilerState {
     cache: Cache,
     measured: Option<MeasuredCache>,
     measured_poll: Option<Instant>,
+    /// What the tab shows (issue #79): the trace timeline, console perf
+    /// reports with the editor's live PC frame, or an A/B over layouts.
+    pub mode: Mode,
+    pub reports: Reports,
+    /// A trace that doesn't exist yet, opened as A once it appears (Play
+    /// started with the Profiler open writes `target/traces/pc.log`).
+    pub follow: Option<PathBuf>,
+    /// When the tab last drew (Play attaches only while it shows).
+    pub shown: Option<Instant>,
+    /// The Game view's last frames (the live PC row).
+    pub live: LiveFrames,
+}
+
+/// The Profiler's views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Timeline,
+    Reports,
+    Ab,
+}
+
+impl Mode {
+    pub fn parse(s: &str) -> Option<Mode> {
+        match s {
+            "timeline" | "trace" => Some(Mode::Timeline),
+            "reports" | "report" => Some(Mode::Reports),
+            "ab" => Some(Mode::Ab),
+            _ => None,
+        }
+    }
+}
+
+/// Console perf reports (`target/perf/*.json`, written by every `cargo
+/// xtask test n64`) and A/B reports (`target/perf-ab/ab.json`, `perf ab`):
+/// the same files `cargo xtask perf report` prints (issue #79).
+#[derive(Default)]
+pub struct Reports {
+    pub dir: PathBuf,
+    pub ab_dir: PathBuf,
+    /// Report files and A/B files, by name.
+    pub files: Vec<PathBuf>,
+    pub ab_files: Vec<PathBuf>,
+    pub a: Option<(PathBuf, PerfReport)>,
+    pub b: Option<(PathBuf, PerfReport)>,
+    pub ab: Option<(PathBuf, AbReport)>,
+    pub ab_scene: usize,
+    pub error: Option<String>,
+    stamps: Vec<Option<(SystemTime, u64)>>,
+}
+
+/// `*.json` files of `dir` that `parse` accepts.
+fn json_files<T>(dir: &Path, parse: impl Fn(&str) -> Result<T, String>) -> Vec<PathBuf> {
+    list_traces(dir)
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .filter(|p| std::fs::read_to_string(p).is_ok_and(|t| parse(&t).is_ok()))
+        .collect()
+}
+
+impl Reports {
+    pub fn new(root: &Path) -> Reports {
+        let mut r = Reports {
+            dir: root.join("target/perf"),
+            ab_dir: root.join("target/perf-ab"),
+            ..Reports::default()
+        };
+        r.refresh();
+        if let Ok(v) = std::env::var("TRINO_EDITOR_PERF") {
+            r.open(&root.join(v), false);
+        } else if let Some(f) = r.files.first().cloned() {
+            r.open(&f, false);
+        }
+        if let Ok(v) = std::env::var("TRINO_EDITOR_PERF_B") {
+            r.open(&root.join(v), true);
+        }
+        if let Ok(v) = std::env::var("TRINO_EDITOR_AB") {
+            r.open_ab(&root.join(v));
+        } else if let Some(f) = r.ab_files.first().cloned() {
+            r.open_ab(&f);
+        }
+        r
+    }
+
+    /// List the folders again.
+    pub fn refresh(&mut self) {
+        self.files = json_files(&self.dir, PerfReport::from_json);
+        let mut ab = json_files(&self.ab_dir, AbReport::from_json);
+        ab.extend(json_files(&self.dir, AbReport::from_json));
+        self.ab_files = ab;
+    }
+
+    /// Open a report as A (or B, to compare).
+    pub fn open(&mut self, path: &Path, b: bool) {
+        match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| PerfReport::from_json(&t))
+        {
+            Ok(r) => {
+                let slot = if b { &mut self.b } else { &mut self.a };
+                *slot = Some((path.to_path_buf(), r));
+                self.error = None;
+            }
+            Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+        }
+    }
+
+    pub fn close_b(&mut self) {
+        self.b = None;
+    }
+
+    pub fn open_ab(&mut self, path: &Path) {
+        match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| AbReport::from_json(&t))
+        {
+            Ok(r) => {
+                self.ab_scene = self.ab_scene.min(r.scenes.len().saturating_sub(1));
+                self.ab = Some((path.to_path_buf(), r));
+                self.error = None;
+            }
+            Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Reload what is open when its file changed (a `test n64` or `perf
+    /// ab` finished while the tab is open).
+    pub fn poll(&mut self) -> bool {
+        let paths: Vec<PathBuf> = [&self.a, &self.b]
+            .iter()
+            .filter_map(|s| s.as_ref().map(|(p, _)| p.clone()))
+            .chain(self.ab.as_ref().map(|(p, _)| p.clone()))
+            .collect();
+        let now: Vec<_> = paths.iter().map(|p| stamp(p)).collect();
+        if now == self.stamps {
+            return false;
+        }
+        let first = self.stamps.is_empty();
+        self.stamps = now;
+        if first {
+            return false;
+        }
+        self.refresh();
+        if let Some((p, _)) = self.a.clone() {
+            self.open(&p, false);
+        }
+        if let Some((p, _)) = self.b.clone() {
+            self.open(&p, true);
+        }
+        if let Some((p, _)) = self.ab.clone() {
+            self.open_ab(&p);
+        }
+        true
+    }
+}
+
+/// One editor frame the live row shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LiveFrame {
+    pub ms: f32,
+    pub stats: trino_core::FrameStats,
+    pub times: trino_platform_pc::renderer::PcFrameTimes,
+}
+
+/// The Game view's last [`LIVE_FRAMES`] frames.
+#[derive(Default)]
+pub struct LiveFrames {
+    pub frames: std::collections::VecDeque<LiveFrame>,
+}
+
+pub const LIVE_FRAMES: usize = 120;
+
+impl LiveFrames {
+    pub fn push(&mut self, f: LiveFrame) {
+        if self.frames.len() == LIVE_FRAMES {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(f);
+    }
+
+    pub fn last(&self) -> Option<&LiveFrame> {
+        self.frames.back()
+    }
+
+    /// Mean and max frame time over the window, ms.
+    pub fn ms(&self) -> (f32, f32) {
+        let n = self.frames.len().max(1) as f32;
+        let sum: f32 = self.frames.iter().map(|f| f.ms).sum();
+        let max = self.frames.iter().map(|f| f.ms).fold(0.0, f32::max);
+        (sum / n, max)
+    }
 }
 
 /// How often files are checked for changes.
@@ -328,7 +519,19 @@ impl ProfilerState {
             cache: Cache::default(),
             measured: None,
             measured_poll: None,
+            mode: Mode::Timeline,
+            reports: Reports::new(root),
+            follow: None,
+            shown: None,
+            live: LiveFrames::default(),
         };
+        if let Some(m) = std::env::var("TRINO_EDITOR_PROFILER")
+            .ok()
+            .as_deref()
+            .and_then(Mode::parse)
+        {
+            s.mode = m;
+        }
         // Hooks: TRINO_EDITOR_TRACE=<path>[@session], TRINO_EDITOR_TRACE_B.
         if let Ok(v) = std::env::var("TRINO_EDITOR_TRACE") {
             let (p, session) = parse_hook(&v);
@@ -343,6 +546,21 @@ impl ProfilerState {
 
     pub fn refresh_files(&mut self) {
         self.files = list_traces(&self.dir);
+    }
+
+    /// Whether the tab drew within the last couple of seconds.
+    pub fn is_shown(&self) -> bool {
+        self.shown
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+    }
+
+    /// Play started tracing into `path`: open it as A once it exists.
+    pub fn follow(&mut self, path: PathBuf) {
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+        self.a = None;
+        self.follow = Some(path);
     }
 
     /// Open `path` as trace A on `session` (by name; else the first).
@@ -456,7 +674,16 @@ impl ProfilerState {
         }
         self.last_poll = Some(now);
         self.refresh_files();
-        let mut changed = false;
+        let mut changed = self.reports.poll();
+        // A followed trace showed up (Play with the Profiler open).
+        if let Some(f) = self.follow.clone()
+            && f.exists()
+        {
+            self.follow = None;
+            self.open_a(&f, None);
+            self.mode = Mode::Timeline;
+            changed = true;
+        }
         let keep = self.session().map(|s| s.name.clone());
         if let Some(a) = &mut self.a
             && a.poll()

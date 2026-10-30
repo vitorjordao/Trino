@@ -30,6 +30,7 @@ mod net;
 mod package;
 mod particles;
 mod perf;
+mod perf_cmd;
 mod physics;
 mod post;
 mod post_assets;
@@ -37,6 +38,7 @@ mod project;
 mod quality;
 mod replay;
 mod river_assets;
+mod rsp_count;
 mod save_cmd;
 mod save_soak;
 mod scene;
@@ -291,6 +293,20 @@ commands:
                        an instrumented build (the engine's zones compiled
                        in); its run lands in target/traces/<platform>.json
                        (consoles: perf numbers reported, never gated)
+  build|run|test n64 --prof scopes|rsp|sample   (or TRINO_PROF=...)
+                       --trace plus, for rsp, every RSP command timed alone
+                       and, for sample, the CPU's PC sampled (issue #79)
+  perf report <file.json..> [--json]
+                       a target/perf/<target>-<scene>.json report (stages,
+                       work, counters, zones, RSP fit, CPU samples) or an A/B
+  perf ab --base <rev> [--head <rev>] [--paddings N|--pads a,b] [--control]
+          [--scenes a,b] [--out dir] [--reuse] [--json]
+                       N64 A/B over code layouts: each arm in its own
+                       worktree, mean (min-max) per scene and stage, work
+                       compared; --control adds base + a no-op patch
+  rsp count [--json] [--blocks] [--bless]
+                       static instructions per RSP overlay path + IMEM/DMEM,
+                       against tests/perf/rsp_counts.toml
   agents <sync|check>  mirror .agents/skills/ into tool-specific folders
                        (.claude/skills/) / verify the mirrors are in sync
 ";
@@ -307,8 +323,20 @@ fn main() -> ExitCode {
     args.retain(|a| a != "--no-build");
     // `--trace` (issue #62): an instrumented build whose run is collected
     // into target/traces/ (build|run|test on a platform).
-    let trace_flag = args.iter().any(|a| a == "--trace");
+    let mut trace_flag = args.iter().any(|a| a == "--trace");
     args.retain(|a| a != "--trace");
+    // `--prof rsp|sample` (or TRINO_PROF; issue #79): an N64 build that also
+    // times each RSP command or samples the CPU's PC. Implies `--trace`.
+    let prof = match project::ProfMode::take(&mut args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if prof.is_some() {
+        trace_flag = true;
+    }
     // Azahar's "Simulate 3DS GPU timings" for this session (or
     // TRINO_AZAHAR_GPU_TIMING=1).
     let accurate_flag = args.iter().any(|a| a == "--accurate-timing");
@@ -365,6 +393,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         project.trace = true;
+        project.prof = prof;
     }
     let project = project;
     // The build's thread budget (issue #101): bakes, console shader
@@ -560,7 +589,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        (Some("watch"), Some("pc")) => watch_pc(&game),
+        (Some("watch"), Some("pc")) => watch_pc(&game, project.trace),
         (Some("editor"), _) => editor(&project, args.get(1).map(String::as_str)),
         (Some("gen-assets"), _) => gen_assets(),
         (Some("agents"), sub) => agents::run(&repo_root(), sub),
@@ -679,6 +708,19 @@ fn main() -> ExitCode {
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
             services::run(&project, &rest)
         }
+        (Some("rsp"), _) => {
+            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            rsp_count::run(&project, &rest, bless)
+        }
+        (Some("perf"), _) => {
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above.
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            perf_cmd::run(&project.root, &rest)
+        }
         (Some("trace"), _) => {
             let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
             // `--out` was taken with the Web's options above.
@@ -793,10 +835,10 @@ fn repo_root() -> PathBuf {
 /// `build|run|test` on `pc` (run only), `n64`, `3ds` or `web`.
 fn trace_invocation(cmd: Option<&str>, platform: Option<&str>) -> Result<(), String> {
     match (cmd, platform) {
-        (Some("run"), Some("pc"))
+        (Some("run" | "watch"), Some("pc"))
         | (Some("build" | "run" | "test"), Some("n64" | "3ds" | "n3ds" | "web")) => Ok(()),
         _ => Err(
-            "xtask: --trace goes with `run pc` or `build|run|test n64|3ds|web` \
+            "xtask: --trace goes with `run|watch pc` or `build|run|test n64|3ds|web` \
                   (an instrumented build; `trace collect` reads any log)"
                 .into(),
         ),
@@ -953,7 +995,10 @@ fn assets(root: &Path, platform: Platform) -> ExitCode {
 /// Only `examples/` is watched on purpose: changes to `crates/core` or other
 /// host-linked crates can change type layouts, and swapping a dylib across a
 /// layout change is undefined behavior. Those changes require a restart.
-fn watch_pc(game: &str) -> ExitCode {
+/// `trace`: `watch pc --trace` (issue #79): the app and every rebuilt
+/// dylib carry the zones, the app records into `target/traces/pc.log`, and
+/// the dylib's zones reach that ring through `Platform::trace_hooks`.
+fn watch_pc(game: &str, trace: bool) -> ExitCode {
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -962,11 +1007,20 @@ fn watch_pc(game: &str) -> ExitCode {
 
     let root = repo_root();
 
-    let mut app = match Command::new(cargo_bin())
-        .args(["run", "-p", "trino-app-pc", "--features", "reload"])
-        .current_dir(&root)
-        .spawn()
-    {
+    let features = if trace {
+        "reload,trino-core/trace"
+    } else {
+        "reload"
+    };
+    let log = root.join("target/traces/pc.log");
+    let mut app_cmd = Command::new(cargo_bin());
+    app_cmd
+        .args(["run", "-p", "trino-app-pc", "--features", features])
+        .current_dir(&root);
+    if trace {
+        app_cmd.env("TRINO_TRACE", &log);
+    }
+    let mut app = match app_cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
             eprintln!("xtask: failed to launch app: {e}");
@@ -1005,6 +1059,9 @@ fn watch_pc(game: &str) -> ExitCode {
     loop {
         // Stop when the app window is closed.
         if let Ok(Some(status)) = app.try_wait() {
+            if trace {
+                trace::collect_run(&log, &root.join("target/traces/pc-trace.json"));
+            }
             return if status.success() {
                 ExitCode::SUCCESS
             } else {
@@ -1015,10 +1072,12 @@ fn watch_pc(game: &str) -> ExitCode {
             // Drain queued events, then rebuild once.
             while rx.try_recv().is_ok() {}
             println!("xtask watch: game source changed, rebuilding dylib...");
-            let status = Command::new(cargo_bin())
-                .args(["build", "-p", game])
-                .current_dir(&root)
-                .status();
+            let mut build = Command::new(cargo_bin());
+            build.args(["build", "-p", game]).current_dir(&root);
+            if trace {
+                build.args(["--features", "trino-core/trace"]);
+            }
+            let status = build.status();
             match status {
                 Ok(s) if s.success() => println!("xtask watch: dylib rebuilt, hot reload incoming"),
                 Ok(_) => eprintln!("xtask watch: build failed (fix and save again)"),

@@ -23,6 +23,16 @@ mod n64 {
     use trino_core::{Button, Game, InputState, Vec2};
     use trino_platform_n64::{N64Assets, N64Audio, N64Input, N64Platform, N64Renderer, runtime};
 
+    /// Print the trace ring as `session` and log what printing it cost
+    /// (`TRINO_TRACE_FLUSH:` lines, ISViewer's cost per line; issue #79).
+    fn trace_flush_logged(session: &str) {
+        let (lines, us) = runtime::trace_flush_timed(session, &mut 0);
+        runtime::log(&format!(
+            "TRINO_TRACE_FLUSH:{session} lines={lines} us={us} us_per_line={}\n",
+            us.checked_div(lines).unwrap_or(0)
+        ));
+    }
+
     /// See `trino_rust_main`.
     const RSP_ARENA_BYTES: u32 = 64 * 1024;
 
@@ -363,11 +373,11 @@ mod n64 {
         times.vblanks = runtime::vblanks().wrapping_sub(v0);
         if let Some(p) = renderer.take_profile() {
             let mut report = alloc::string::String::new();
-            let _ = p.write_report(showcase::perf::MICRO_RIVER, &times, &mut report);
+            renderer.write_report(&p, showcase::perf::MICRO_RIVER, &times, &mut report);
             runtime::log(&report);
         }
         if trino_core::trace::is_on() {
-            runtime::trace_flush(&format!("n64-{}", showcase::perf::MICRO_RIVER), &mut 0);
+            trace_flush_logged(&format!("n64-{}", showcase::perf::MICRO_RIVER));
         }
         showcase::perf::river_scene(&mut g, Vec2::new(320.0, 240.0), audio);
         for _ in 0..showcase::perf::WARM_FRAMES {
@@ -391,11 +401,11 @@ mod n64 {
         times.vblanks = runtime::vblanks().wrapping_sub(v0);
         if let Some(p) = renderer.take_profile() {
             let mut report = alloc::string::String::new();
-            let _ = p.write_report(showcase::perf::NAME, &times, &mut report);
+            renderer.write_report(&p, showcase::perf::NAME, &times, &mut report);
             runtime::log(&report);
         }
         if trino_core::trace::is_on() {
-            runtime::trace_flush(&format!("n64-{}", showcase::perf::NAME), &mut 0);
+            trace_flush_logged(&format!("n64-{}", showcase::perf::NAME));
         }
         // The third emulator golden: the river under the scene camera
         // (`tests/golden/n64/showcase_river.png`).
@@ -885,12 +895,12 @@ mod n64 {
                             times.vblanks = runtime::vblanks().wrapping_sub(v0);
                             if tracing {
                                 let session = format!("n64-{prefix}{}", scene.name);
-                                runtime::trace_flush(&session, &mut 0);
+                                trace_flush_logged(&session);
                             }
                             if let Some(p) = renderer.take_profile() {
                                 let mut report = alloc::string::String::new();
                                 let name = format!("{prefix}{}", scene.name);
-                                let _ = p.write_report(&name, &times, &mut report);
+                                renderer.write_report(&p, &name, &times, &mut report);
                                 runtime::log(&report);
                             }
                             if scene.name == "hub" {

@@ -45,15 +45,23 @@ shipping a 3D game first**, then by cost:
 
 ### P1 — the next quality and reach jump
 
-- **Profiler follow-ups (#62, ADR 0030; #79)** (S–M each).
+- **Profiler follow-ups (#62, ADR 0030; #79, ADR 0038)** (S–M each).
   - A trace from a real N64 (SummerCart64) and a real 3DS (3dslink), and the hardware's
-    ISViewer/USB print cost per flush.
+    ISViewer/USB print cost per line (#123; ares: ~310 µs a line).
   - Zones on other threads (the PC's T&L workers, the audio stream, the 3DS worker core)
-    with a track per thread instead of the shared ring's try-lock.
-  - The rest of #79: named scopes inside the N64 renderer's hot paths with an A/B over
-    layouts (`perf ab`), backend counters (memo hits, rspq words), the RSP cost report.
-  - The trace flush on the N64 costs ~115 ms per 60 frames over ISViewer: a binary
-    channel (USB on a flashcart) or a smaller flush per frame.
+    with a track per thread instead of the shared ring's try-lock (#130).
+  - ~~The rest of #79: named scopes inside the N64 renderer's hot paths with an A/B over
+    layouts (`perf ab`), backend counters (memo hits, rspq words), the RSP cost report~~:
+    **done** (#79, ADR 0038: `--prof scopes|rsp|sample`, `perf report|ab`, `rsp count`,
+    the Profiler's Reports and A/B views).
+  - ~~The trace flush on the N64 costs ~115 ms per 60 frames over ISViewer~~: **done**
+    (#79): the play loop prints a 60-frame ring over the next 60 frames; a binary channel
+    stays an option for hardware (#123).
+  - `memo_evict` counts a store over any other key, stale or live: a memo that thrashes
+    and one that overwrites dead entries look alike. A live/stale split (a frame stamp
+    per slot, traced builds only) would tell them apart.
+  - The 3DS `--trace` ring overflows on the timed scenes (`events lost`, a second
+    `<scene>#2` session); a ring sized per scene, or a flush per frame like the N64's.
 
 - **Shipping follow-ups (#61, ADR 0029)** (S–M each).
   - Minidumps behind a feature (`minidumper` + `crash-handler`: an out-of-process
@@ -300,6 +308,18 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — performance instrumentation: N64 counters and hot-path zones, the RSP cost per command, a CPU sampler, A/B over layouts (2026-10-30, branch `feat/79-perf-instrumentation`, GitHub #79 and #105, ADR 0038)
+
+| Item | Evidence |
+|---|---|
+| Zones in the N64 renderer's hot paths and backend counters (`--trace` = `--prof scopes`): memo, water memo, RSP rejects, rspq words, commands, overlay switches, flushes, uploads, CPU triangles, on `TRINO_PERF_SCENE` and `TRINO_FRAME` | `test n64 --trace` in ares; a plain ROM links none of it (`check_hot_symbols`, `shim.o`'s functions identical) |
+| `--prof rsp` (per-command RSP µs, a fit per overlay) and `--prof sample` (PC samples, symbolized, the sampler's cost printed) | ares runs: colored 27.2 + 1.28·v + 2.51·t µs; sampler 5.6 µs a sample (5.5 %) |
+| `target/perf/*.json`, `perf report`, `perf ab` (worktrees, paddings, control, `same_work`), `rsp count` pinned by `test n64` | `perf_cli`, `perf_cmd`, `rsp_count` tests; the first `perf ab --control` run (8 paddings × 3 arms) |
+| The Profiler's Reports (live PC frame, Run on N64/3DS) and A/B views; Play attaches a trace | `profiler_reports_ab_and_play_attach`, the layout audit |
+| #105: the N64 play loop's flush spread over 60 frames; hot-reloaded game zones (`Platform::trace_hooks`, `watch pc --trace`) | `TRINO_TRACE_FLUSH` lines (~310 µs a line); the ring's forwarder test. Not run on a console or under a real `watch pc` session |
+
+Deviation: `perf ab` showed this branch's plain ROM 3–5 % faster on the gated scenes (up to 8 % slower on some micro scenes) than `main` with identical work. The hot functions' code, order and sizes are the same; how far apart they land in the 16 KB I-cache moved (the renderer 58.6 KB, the T&L −2.3 KB). It is reported as layout, not as a speed-up.
 
 ## Done — palette draws on the N64 RSP, and the local WebGL2 crash (2026-10-29, branch `feat/107-122-palette-rsp`, GitHub #122 and #107, ADR 0018 §9)
 

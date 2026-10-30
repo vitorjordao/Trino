@@ -29,9 +29,9 @@ use trino_core::{
     Vec3, WaterState,
 };
 
-use crate::ffi;
 use crate::rsp::{self, RspMesh};
 use crate::runtime::now_us;
+use crate::{ffi, prof};
 
 /// Internal resolution the T&L projects to.
 const SCREEN: Vec2 = Vec2::new(320.0, 240.0);
@@ -373,10 +373,35 @@ impl N64Renderer {
 
     pub fn start_profile(&mut self) {
         self.profile = Some(RenderProfile::default());
+        prof::start_window();
+    }
+
+    /// Print `p` (from [`Self::take_profile`]) as `scene`'s
+    /// `TRINO_PERF_SCENE:` / `TRINO_PERF_MODEL:` lines; an instrumented
+    /// build adds its counters to the scene line and its `--prof` mode's
+    /// lines after them (issue #79). A plain build's text is exactly
+    /// [`RenderProfile::write_report`]'s.
+    pub fn write_report(
+        &self,
+        p: &RenderProfile,
+        scene: &str,
+        times: &trino_core::perf::FrameTimes,
+        out: &mut alloc::string::String,
+    ) {
+        if !trino_core::trace::ENABLED {
+            let _ = p.write_report(scene, times, out);
+            return;
+        }
+        let extra = prof::fields(&prof::window(), p.frames);
+        let _ = p.write_report_with(scene, times, &extra, out);
+        out.push_str(&prof::window_report(scene, p.frames));
     }
 
     /// Stop profiling and hand back what was measured.
     pub fn take_profile(&mut self) -> Option<RenderProfile> {
+        if self.profile.is_some() {
+            prof::end_window();
+        }
         self.profile.take()
     }
 
@@ -603,7 +628,16 @@ impl N64Renderer {
             self.trim.note(5, self.pending_water_rsp.len());
             self.trim.note(6, self.pending_ring_rsp.len());
             let t0 = self.tick();
+            trino_core::zone!("water submit");
             for [w, e] in self.pending_water_rsp.iter().chain(&self.pending_ring_rsp) {
+                #[cfg(feature = "prof-rsp")]
+                if self.profile.is_some() {
+                    let bound = &mut self.water_bound;
+                    let s = &self.sprites;
+                    let work = prof::rsp::work(w);
+                    prof::rsp::time(prof::rsp::Ovl::Water, work, || submit_water(s, w, e, bound));
+                    continue;
+                }
                 submit_water(&self.sprites, w, e, &mut self.water_bound);
             }
             self.pending_water_rsp.clear();
@@ -716,7 +750,12 @@ impl N64Renderer {
 
     /// Hand every pending RSP command to the overlay, in order.
     fn submit_rsp(&mut self) {
+        trino_core::zone!("rsp submit");
         self.trim.note(1, self.pending_rsp.len());
+        #[cfg(feature = "prof-rsp")]
+        if self.profile.is_some() {
+            return self.submit_rsp_timed();
+        }
         let mut i = 0;
         while i < self.pending_rsp.len() {
             let w = &self.pending_rsp[i];
@@ -734,6 +773,44 @@ impl N64Renderer {
                 unsafe { ffi::trino_rsp_draw(w.as_ptr()) };
                 i += 1;
             }
+        }
+        self.pending_rsp.clear();
+    }
+
+    /// [`Self::submit_rsp`] under `--prof rsp` (issue #79): each command
+    /// alone on the RSP, timed from its write to the drain after it.
+    #[cfg(feature = "prof-rsp")]
+    #[inline(never)]
+    fn submit_rsp_timed(&mut self) {
+        use prof::rsp::{Ovl, time, work};
+        let mut i = 0;
+        while i < self.pending_rsp.len() {
+            let w = &self.pending_rsp[i];
+            let p = &self.pending_rsp;
+            let ovl = Ovl::of(w[0]);
+            let n = match ovl {
+                Ovl::Palette => {
+                    time(ovl, work(w), || {
+                        submit_palette(&self.sprites, w, &p[i + 1], &p[i + 2])
+                    });
+                    3
+                }
+                Ovl::Tex => {
+                    time(ovl, work(w), || {
+                        submit_textured(&self.sprites, w, &p[i + 1])
+                    });
+                    2
+                }
+                Ovl::Color => {
+                    time(ovl, work(w), || submit_colored(w, &p[i + 1]));
+                    2
+                }
+                _ => {
+                    time(ovl, work(w), || unsafe { ffi::trino_rsp_draw(w.as_ptr()) });
+                    1
+                }
+            };
+            i += n;
         }
         self.pending_rsp.clear();
     }
@@ -1549,6 +1626,7 @@ impl Renderer for N64Renderer {
         } else {
             None
         };
+        let memo_zone = trino_core::trace::Zone::begin("memo");
         if let Some(k) = &key
             && let Some(hit) = memo::find_mut(&mut self.memo, k)
         {
@@ -1567,6 +1645,7 @@ impl Renderer for N64Renderer {
                 if let Some(p) = &mut self.profile {
                     p.record_model(model, 0, &culled);
                 }
+                prof::bump(prof::Counter::MemoCulled);
                 return;
             }
             let f = |w: &[u32; MEMO_WORDS], i: usize| f32::from_bits(w[rsp::DRAW_WORDS + i]);
@@ -1623,8 +1702,13 @@ impl Renderer for N64Renderer {
                 self.frame_stats.models += 1;
                 self.stream_rsp();
                 self.count_rsp(model, t0, tris);
+                prof::bump(prof::Counter::MemoHit);
                 return;
             }
+        }
+        memo_zone.end();
+        if trino_core::trace::ENABLED && key.is_some() {
+            prof::bump(prof::Counter::MemoMiss);
         }
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             // Unknown or unloaded (its group is not ready): counted.
@@ -1634,13 +1718,19 @@ impl Renderer for N64Renderer {
         let mesh = Mesh::from_layout(tmdl, layout);
         self.frame_stats.models += 1;
         // `view · model` once: the eligibility test and the command share it.
+        let eligible_zone = trino_core::trace::Zone::begin("eligible");
         let rsp = match self.rsp_meshes.get(&model.0) {
             Some(rm) if self.rsp_on => {
                 let mv = self.tnl_ctx.projection().0.mul(matrix);
-                rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params).map(|d| (rm, d, mv))
+                let d = rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params);
+                if trino_core::trace::ENABLED && d.is_none() {
+                    prof::bump(prof::Counter::RspReject);
+                }
+                d.map(|d| (rm, d, mv))
             }
             _ => None,
         };
+        eligible_zone.end();
         // A flat draw goes out with the mesh's flat copy (face normals).
         let rsp = match rsp {
             Some((_, d, mv)) if params.shading == Shading::Flat => {
@@ -1663,6 +1753,7 @@ impl Renderer for N64Renderer {
         if let Some((rm, d, mv)) = rsp {
             // The overlay transforms, lights and rasterizes the whole draw;
             // the command goes out with the batch (flush_model_batch).
+            trino_core::zone!("rsp cmd");
             let t0 = self.tick();
             let cull = if d.cull_back { self.rsp_cull } else { 2 };
             let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
@@ -1765,6 +1856,7 @@ impl Renderer for N64Renderer {
         let before = self.pending_tris.len();
         let t0 = self.tick();
         let pending = &mut self.pending_tris;
+        let tnl_zone = trino_core::trace::Zone::begin("cpu tnl");
         let tnl = trino_core::render3d::tessellate_with(
             &self.tnl_ctx,
             &mut self.tnl_scratch,
@@ -1773,6 +1865,7 @@ impl Renderer for N64Renderer {
             params,
             &mut |tri| pending.push(tri),
         );
+        tnl_zone.end();
         self.frame_stats.tnl.add(&tnl);
         if let Some(p) = &mut self.profile {
             p.record_model(model, now_us().wrapping_sub(t0), &tnl);
@@ -1792,6 +1885,7 @@ impl Renderer for N64Renderer {
             entry[MEMO_T] = v[0][3].to_bits();
             entry[MEMO_T + 1] = v[1][3].to_bits();
             entry[MEMO_T + 2] = v[2][3].to_bits();
+            prof::note_store(&self.memo, &k);
             memo::store(&mut self.memo, k, entry, 0);
         }
         let added = self.pending_tris.len() - before;
@@ -1832,6 +1926,7 @@ impl Renderer for N64Renderer {
         self.frame_stats.shadows = self.shadows.stats;
         self.last_stats = self.frame_stats;
         trace_counters(&self.frame_stats);
+        prof::end_frame();
         let t0 = self.tick();
         trino_core::zone!("end");
         unsafe { ffi::trino_frame_end() }
@@ -2496,9 +2591,11 @@ impl N64Renderer {
         {
             Some(i) if self.water_memo[i].margin == margin => {
                 self.water_memo[i].seen = self.water_frame_no;
+                prof::bump(prof::Counter::WaterHit);
                 i
             }
             found => {
+                prof::bump(prof::Counter::WaterMiss);
                 let cmd = self.water_build(model, matrix, params, 0);
                 let memo = WaterMemo {
                     key,
@@ -2521,6 +2618,7 @@ impl N64Renderer {
                     }
                     None => {
                         if self.water_memo.len() == WATER_MEMOS {
+                            let before = self.water_memo.len();
                             // Full: drop what the last two frames didn't draw
                             // (an earlier scene's, a camera's old pans), all
                             // of it if that frees nothing.
@@ -2536,6 +2634,8 @@ impl N64Renderer {
                             if self.water_memo.len() == WATER_MEMOS {
                                 self.water_memo.retain_mut(|m| keep(m, true));
                             }
+                            let dropped = before - self.water_memo.len();
+                            prof::add(prof::Counter::WaterEvict, dropped as u32);
                         }
                         self.water_memo.push(memo);
                         self.water_memo.len() - 1
@@ -2576,6 +2676,7 @@ impl N64Renderer {
         at: usize,
         t0: u32,
     ) -> bool {
+        trino_core::zone!("water frame");
         let ctx = &self.tnl_ctx;
         let key = WaterNow::key(params);
         let frame = self.water_frame_no;
@@ -2625,6 +2726,7 @@ impl N64Renderer {
         }
         // The rings: which ripples fall on this surface, remembered per
         // ripple position (a walk over its triangles otherwise).
+        trino_core::zone!("water rings");
         let ctx = &self.tnl_ctx;
         let owners = &mut self.water_memo[at].owners;
         let meshes = &self.meshes;
@@ -2920,6 +3022,7 @@ fn remember(
     for (i, a) in aux.iter().enumerate() {
         entry[rsp::DRAW_WORDS + i] = a.to_bits();
     }
+    prof::note_store(memo, &k);
     memo::store(memo, k, entry, tris);
 }
 

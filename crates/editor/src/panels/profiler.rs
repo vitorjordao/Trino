@@ -12,7 +12,7 @@ use trino_core::trace::track;
 use trino_trace::Session;
 
 use crate::app::App;
-use crate::profiler::{TimeView, fmt_delta_us, fmt_us, visible};
+use crate::profiler::{Mode, TimeView, fmt_delta_us, fmt_us, visible};
 use crate::theme::{self, c, icon};
 
 /// Track label gutter, ruler height, row height, gap between tracks.
@@ -23,9 +23,42 @@ const TRACK_GAP: f32 = 3.0;
 
 pub fn ui(app: &mut App, ui: &mut egui::Ui) {
     let p = &mut app.profiler;
+    p.shown = Some(std::time::Instant::now());
     p.poll(std::time::Instant::now());
     // Polling needs frames: the file may change while nobody moves.
     ui.ctx().request_repaint_after(crate::profiler::POLL);
+    modes(app, ui);
+    match app.profiler.mode {
+        Mode::Timeline => {}
+        Mode::Reports => {
+            egui::ScrollArea::vertical()
+                .id_salt("profiler-reports")
+                .auto_shrink([false, false])
+                .show(ui, |ui| crate::panels::profiler_reports::reports(app, ui));
+            return;
+        }
+        Mode::Ab => {
+            egui::ScrollArea::vertical()
+                .id_salt("profiler-ab")
+                .auto_shrink([false, false])
+                .show(ui, |ui| crate::panels::profiler_reports::ab(app, ui));
+            return;
+        }
+    }
+    if let Some(f) = &app.profiler.follow {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{} waiting for the game's trace ({})",
+                    icon::HOURGLASS,
+                    file_label(f)
+                ))
+                .size(11.5)
+                .color(c::TEXT_WEAK),
+            )
+            .truncate(),
+        );
+    }
     pickers(app, ui);
     let p = &mut app.profiler;
     if let Some(e) = &p.error {
@@ -77,6 +110,25 @@ pub fn ui(app: &mut App, ui: &mut egui::Ui) {
                 zone_table(app, ui);
             }
         });
+}
+
+/// Timeline, console reports or an A/B (issue #79).
+fn modes(app: &mut App, ui: &mut egui::Ui) {
+    let p = &mut app.profiler;
+    ui.horizontal(|ui| {
+        for (m, glyph, text) in [
+            (Mode::Timeline, icon::PULSE, "Timeline"),
+            (Mode::Reports, icon::GAUGE, "Reports"),
+            (Mode::Ab, icon::COLUMNS, "A/B"),
+        ] {
+            if ui
+                .selectable_label(p.mode == m, format!("{glyph} {text}"))
+                .clicked()
+            {
+                p.mode = m;
+            }
+        }
+    });
 }
 
 fn file_label(path: &std::path::Path) -> String {

@@ -234,6 +234,15 @@ pub trait Platform {
         Ok(true)
     }
 
+    /// Hooks that record a game's zones into the host's trace ring when the
+    /// game links its own copy of `trino-core` (a hot-reloaded dylib under
+    /// `cargo xtask watch pc --trace`; issue #79, #105 item 4).
+    /// `export_game!` adopts them ([`crate::trace::adopt`]). `None` by
+    /// default: one binary, one ring.
+    fn trace_hooks(&self) -> Option<crate::trace::TraceAttach> {
+        None
+    }
+
     /// The second screen's size (3DS touch screen, or the PC's 3DS profile),
     /// known at update time (the renderer's
     /// [`second_screen`](crate::Renderer::second_screen) is the same).

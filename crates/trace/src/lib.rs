@@ -9,6 +9,7 @@
 //! layers over it, so an agent and a human read the same numbers.
 
 pub mod chrome;
+pub mod perf;
 pub mod stats;
 
 use std::collections::BTreeMap;

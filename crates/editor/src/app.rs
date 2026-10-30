@@ -3158,6 +3158,14 @@ impl App {
         if let Some(lang) = &self.localization.preview {
             cmd.env("TRINO_LANG", lang);
         }
+        // With the Profiler showing, the run is traced and the tab follows
+        // it (issue #79, #105 item 5): one click to attach.
+        if self.profiler.is_shown() {
+            let log = self.project.root.join("target/traces/pc.log");
+            cmd.args(["--features", "trino-core/trace"])
+                .env("TRINO_TRACE", &log);
+            self.profiler.follow(log);
+        }
         match cmd.spawn() {
             Ok(child) => {
                 self.play = Some(child);

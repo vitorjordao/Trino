@@ -169,7 +169,9 @@ pub fn write_trace_reports(
         .sessions
         .iter()
         .filter_map(|s| {
-            let scene = s.name.strip_prefix(&prefix)?;
+            // `hub#2`: a second session under one name (a ring flushed
+            // twice); the first is the report.
+            let scene = s.name.strip_prefix(&prefix).filter(|n| !n.contains('#'))?;
             let st = trino_trace::SessionStats::of(s);
             let mut r = PerfReport::new(target, scene, "trace", 0);
             r.fields.insert("frames".into(), st.frames.count);
@@ -435,7 +437,7 @@ mod tests {
     fn a_trace_alone_makes_a_report_per_timed_scene() {
         use trino_core::trace::{TracePlatform, TraceRing, track};
         let mut text = String::new();
-        for (session, frame) in [("3ds-hub", 900u32), ("selftest", 10)] {
+        for (session, frame) in [("3ds-hub", 900u32), ("3ds-hub#2", 800), ("selftest", 10)] {
             let mut r = TraceRing::<64>::new();
             for f in 0..3u32 {
                 let t = f * 1000;

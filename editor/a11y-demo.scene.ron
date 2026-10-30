@@ -1,0 +1,30 @@
+(
+    version: 8,
+    name: "a11y-demo",
+    environment: (
+        clear: (40, 44, 60),
+        camera: (eye: (0.0, 1.2, -3.2), target: (0.0, 0.6, 0.0), fov: 50.0),
+    ),
+    entities: [
+        (
+            name: "floor",
+            model: Some((path: "models/crate", material: Some("materials/stone"))),
+            transform: (pos: (0.0, -1.0, 0.0), rot: (0.0, 0.0, 0.0), scale: (6.0, 1.0, 6.0)),
+        ),
+        (
+            name: "card",
+            transform: (pos: (-0.7, 0.6, 0.0), rot: (0.0, 20.0, 0.0), scale: (1.0, 1.0, 1.0)),
+            model: Some((path: "models/selftest_slots", palette: [
+                (slot: 1, color: Semantic("castle64.door.red")),
+                (slot: 4, color: Semantic("castle64.door.green")),
+            ])),
+            outline: Some(()),
+        ),
+        (
+            name: "crate",
+            transform: (pos: (0.8, 0.0, 0.3), rot: (0.0, 30.0, 0.0), scale: (1.0, 1.0, 1.0)),
+            model: Some((path: "models/crate", material: Some("materials/wood"))),
+            outline: Some((color: (255, 255, 255), pixels: 3.0)),
+        ),
+    ],
+)

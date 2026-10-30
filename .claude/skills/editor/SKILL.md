@@ -471,7 +471,9 @@ the modes too: a kittest click on "Deuteranopia" must pick the first match.
   a bar strip with the 16.7 ms line), then a `target/perf/*.json` report
   (`trino_trace::perf::PerfReport`, what every `cargo xtask test n64` writes): a stage bar,
   stages, T&L work, backend counters, zones, the RSP fit, the CPU samples; report B adds
-  "B − A" columns. Combos "Report A", "Report B".
+  "B − A" columns. Combos "Report A", "Report B". "Run on N64 (ares)" / "Run on 3DS
+  (Azahar)" start `cargo xtask test n64|3ds --trace` through `App::run_xtask_job` (one job
+  at a time, the Project tab's); the files reload when the run writes them.
 - **A/B**: `ab.json` (`perf ab`): scene buttons, a line per stage with each arm's mean
   (min–max) and its delta to the base, and a strip per stage with a dot per padding and
   the mean as a tick (base grey, head accent, control amber). The "work is identical"

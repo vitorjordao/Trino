@@ -61,7 +61,9 @@ Every `cargo xtask test n64` writes `target/perf/n64-<scene>.json`
 the models, the counters, the scene's trace session (`SessionStats::to_json`), the RSP fit
 and the samples when the build has them. An instrumented run prints each report's table;
 `cargo xtask perf report <file..> [--json]` prints any of them later. The editor reads the
-same files.
+same files. The 3DS prints no scene table: `cargo xtask test 3ds --trace` writes
+`target/perf/3ds-<scene>.json` from each timed scene's trace session (its frame time and
+zones; `perf_cmd::write_trace_reports`).
 
 ### 5. The RSP cost per command (`--prof rsp`)
 
@@ -94,7 +96,7 @@ not followed): ares charges ~4–5 cycles per RSP instruction (#69), so they are
 A continuous libdragon timer reads COP0 EPC (the interrupted PC: the handler runs with
 interrupts off) into a 32 K-sample buffer over the profile window, every 100 µs. The first
 start calibrates the handler: the same busy loop with and without sampling, divided by the
-samples (5.3 µs in ares, so 5 % of the sampled time at 100 µs; 10.6 % at 50). The ROM prints
+samples (5.3–5.6 µs in ares: 5.5 % of the sampled time at 100 µs, 10.6 % at 50). The ROM prints
 `TRINO_PROF_SAMPLE:` lines (counts per PC); xtask symbolizes them with the ELF's `nm -S -C`
 (`target/n64/<name>.syms`) and prints the top functions. A sampled build records no zones
 (`trace_start` refuses): the recorder would be in its samples. Time spent with interrupts
@@ -113,13 +115,24 @@ padding (`--reuse` reads them again), and `trino_trace::perf::AbReport` (`ab.jso
 whether every arm did identical T&L work (`same_work`). Identical work plus a shift the
 control matches = layout.
 
+Its first run was this change against `main` (2026-10-30, 8 paddings × 3 arms, ~70 min of
+ares). The work was identical in all 30 scenes. The control (192 bytes of dead code)
+moved every scene by at most 3 %. The head moved the gated scenes 3–5 % faster and some
+micro scenes up to 8 % slower. Its hot code is the plain build's: `tessellate_joints`
+16 252 bytes in every arm, `shim.o`'s `.text` identical, `draw_model_matrix` one
+instruction longer. What changed is the link order of the Rust functions
+(`draw_model_matrix` moved 58 KB), a layout move the padding knob doesn't sample. That is
+#69's lesson reproduced end to end: the tool tells such a shift from a speed-up.
+
 ### 9. The editor
 
 The Profiler tab has three views (`TRINO_EDITOR_PROFILER=timeline|reports|ab`):
 **Timeline** (#62's), **Reports** (the Game view's PC frame live — its ms over the last 120
 frames, draws, triangles, GPU T&L draws, the renderer's CPU split — then a report from
 `target/perf/` with its stage bar and tables, compared with a report B;
-`TRINO_EDITOR_PERF`, `TRINO_EDITOR_PERF_B`) and **A/B** (`ab.json`: per scene and stage,
+`TRINO_EDITOR_PERF`, `TRINO_EDITOR_PERF_B`; **Run on N64 (ares)** / **Run on 3DS
+(Azahar)** run `cargo xtask test n64|3ds --trace` as a job and the reports reload when it
+writes them) and **A/B** (`ab.json`: per scene and stage,
 each arm's spread as a strip with a dot per padding; `TRINO_EDITOR_AB`). Files reload when
 they change. Play started while the tab shows builds the game with `trino-core/trace`, sets
 `TRINO_TRACE=target/traces/pc.log` and follows that file into the Timeline (#105 item 5).

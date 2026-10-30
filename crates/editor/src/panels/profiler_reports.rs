@@ -92,6 +92,41 @@ fn live(app: &mut App, ui: &mut egui::Ui) {
     painter.hline(rect.x_range(), y60, Stroke::new(1.0, c::TEXT_FAINT));
 }
 
+/// Run the perf scenes in an emulator and load what they wrote: `cargo
+/// xtask test n64|3ds --trace` as a job (the Project tab's runner); the
+/// reports reload when their files change.
+fn run_row(app: &mut App, ui: &mut egui::Ui) {
+    let running = app.shipping.job.as_ref().map(|(_, what)| *what);
+    let mut run: Option<(&'static str, &'static str)> = None;
+    ui.horizontal(|ui| {
+        for (target, label, what) in [
+            ("n64", "Run on N64 (ares)", "N64 perf run"),
+            ("3ds", "Run on 3DS (Azahar)", "3DS perf run"),
+        ] {
+            if ui
+                .add_enabled(
+                    running.is_none(),
+                    egui::Button::new(format!("{} {label}", icon::PLAY)),
+                )
+                .on_hover_text(format!(
+                    "cargo xtask test {target} --trace: the self-test's perf scenes with zones \
+                     and counters, written to target/perf/"
+                ))
+                .clicked()
+            {
+                run = Some((target, what));
+            }
+        }
+        if let Some(what) = running {
+            ui.spinner();
+            label(ui, format!("{what} running…"), c::TEXT_WEAK, 11.5);
+        }
+    });
+    if let Some((target, what)) = run {
+        app.run_xtask_job(&["test", target, "--trace"], what);
+    }
+}
+
 fn report_picker(app: &mut App, ui: &mut egui::Ui) {
     let r = &mut app.profiler.reports;
     let files = r.files.clone();
@@ -411,6 +446,7 @@ pub fn reports(app: &mut App, ui: &mut egui::Ui) {
     live(app, ui);
     ui.add_space(6.0);
     theme::section_title(ui, icon::FILE_TEXT, "Console report");
+    run_row(app, ui);
     report_picker(app, ui);
     let r = &app.profiler.reports;
     if let Some(e) = &r.error {

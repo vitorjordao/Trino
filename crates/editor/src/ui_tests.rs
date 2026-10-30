@@ -4398,7 +4398,7 @@ fn profiler_reports_ab_and_play_attach() {
     h.run_steps(4);
     assert_eq!(h.state().profiler.mode, crate::profiler::Mode::Reports);
     assert!(
-        h.query_by_label_contains("PC frame (Game view, live)")
+        h.query_by_label_contains("PC FRAME (GAME VIEW, LIVE)")
             .is_some()
     );
     wait_for(&mut h, "a live frame", |a| a.profiler.live.last().is_some());
@@ -4408,13 +4408,19 @@ fn profiler_reports_ab_and_play_attach() {
             .is_some()
     );
     for text in ["memo_hit", "rspq_words", "white", "tessellate_joints"] {
-        assert!(h.query_by_label_contains(text).is_some(), "{text}");
+        assert!(
+            h.query_all_by_label_contains(text).next().is_some(),
+            "{text}"
+        );
     }
     // B: the throne room, compared stage by stage.
     pick(&mut h, "Report B", "n64-throne.json");
     assert!(h.state().profiler.reports.b.is_some());
-    assert!(h.query_by_label("B − A").is_some());
-    assert!(h.query_by_label("−17").is_some(), "memo_hit 37 -> 20");
+    assert!(h.query_all_by_label("B − A").next().is_some());
+    assert!(
+        h.query_all_by_label("−17").next().is_some(),
+        "memo_hit 37 -> 20"
+    );
     // The A/B view: three arms, their spreads, identical work.
     click(&mut h, "A/B");
     h.run_steps(4);
@@ -4426,7 +4432,7 @@ fn profiler_reports_ab_and_play_attach() {
         h.query_by_label_contains("work is identical in every arm")
             .is_some()
     );
-    assert!(h.query_by_label_contains("head−base −0.90 ms").is_some());
+    assert!(h.query_by_label_contains("head−base −900 µs").is_some());
     // A report rewritten on disk reloads.
     let root = std::env::current_dir().unwrap();
     let f = root.join("target/perf/n64-hub.json");

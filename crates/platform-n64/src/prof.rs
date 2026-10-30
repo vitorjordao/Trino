@@ -363,7 +363,7 @@ pub mod sample {
 
     /// One sample every this many µs (~400 over a 40 ms frame). What the
     /// interrupt costs is measured at the first start and reported with
-    /// the samples (`handler_us`, `overhead_pct`): ~5.3 µs in ares, so 5 %
+    /// the samples (`handler_us`, `overhead_pct`): ~5.6 µs in ares, so 5.5 %
     /// at 100 µs (10.6 % at 50). #69's sampler at 4–8 µs inflated the frame
     /// ~4× and skewed the histogram toward loops. Time spent with
     /// interrupts off is charged to the instruction that turns them back

@@ -108,7 +108,7 @@ csvexport/build/tracy-csvexport run.tracy                    # zone names, count
 - `--prof rsp` drains around every command of a profile window: its frame times are not
   the scene's. The empty drain (30–33 µs in ares) is subtracted. Streamed water commands
   submitted inside `water_frame` are not timed.
-- `--prof sample`: 100 µs period; the handler costs ~5.3 µs in ares (≈ 5 %, printed as
+- `--prof sample`: 100 µs period; the handler costs ~5.6 µs in ares (5.5 %, printed as
   `handler_us`/`overhead_pct`). The sampled build records no zones (`trace_start`
   refuses). `enable_interrupts` collects the time spent with interrupts off;
   `__rsp_check_assert` and `rspq_*sync*` are waits on the RSP.

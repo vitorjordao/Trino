@@ -155,6 +155,42 @@ pub fn write_reports(
     ))
 }
 
+/// Reports from a run's trace alone (`cargo xtask test 3ds --trace`: the
+/// 3DS prints no scene table): one per `<target>-<scene>` session, its
+/// frame time as `render` (the gated frame of a scene line counts the same
+/// way) and its zones. Written like [`write_reports`].
+pub fn write_trace_reports(
+    root: &Path,
+    target: &str,
+    trace: &trino_trace::Trace,
+) -> Result<String, String> {
+    let prefix = format!("{target}-");
+    let reports: Vec<PerfReport> = trace
+        .sessions
+        .iter()
+        .filter_map(|s| {
+            let scene = s.name.strip_prefix(&prefix)?;
+            let st = trino_trace::SessionStats::of(s);
+            let mut r = PerfReport::new(target, scene, "trace", 0);
+            r.fields.insert("frames".into(), st.frames.count);
+            r.fields
+                .insert("render".into(), st.frames.mean_us.round() as u64);
+            r.zones = Some(st.to_json());
+            Some(r)
+        })
+        .collect();
+    if reports.is_empty() {
+        return Ok("no timed scenes in the trace".into());
+    }
+    let dir = root.join("target/perf");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for r in &reports {
+        let f = dir.join(format!("{target}-{}.json", r.scene));
+        std::fs::write(&f, r.to_json()).map_err(|e| format!("{}: {e}", f.display()))?;
+    }
+    Ok(format!("{} reports -> {}", reports.len(), dir.display()))
+}
+
 #[derive(Debug)]
 struct AbOpts {
     base: String,
@@ -394,6 +430,36 @@ fn ab_cmd(root: &Path, args: &[&str]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trace_alone_makes_a_report_per_timed_scene() {
+        use trino_core::trace::{TracePlatform, TraceRing, track};
+        let mut text = String::new();
+        for (session, frame) in [("3ds-hub", 900u32), ("selftest", 10)] {
+            let mut r = TraceRing::<64>::new();
+            for f in 0..3u32 {
+                let t = f * 1000;
+                r.frame(t, f);
+                r.zone("render", track::CPU, t, t + frame);
+            }
+            r.frame(3000, 3);
+            r.write_lines(TracePlatform::N3ds, session, &mut 0, &mut text)
+                .unwrap();
+        }
+        let trace = trino_trace::collect(&text).unwrap();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-projects/perf-trace-reports");
+        let _ = std::fs::remove_dir_all(&dir);
+        let msg = write_trace_reports(&dir, "3ds", &trace).unwrap();
+        assert!(msg.starts_with("1 reports"), "{msg}");
+        let r = PerfReport::from_json(
+            &std::fs::read_to_string(dir.join("target/perf/3ds-hub.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!((r.target.as_str(), r.scene.as_str()), ("3ds", "hub"));
+        assert_eq!(r.frame_us(), 1000, "mark to mark");
+        assert!(r.zones.unwrap()["zones"][0]["name"] == "render");
+    }
 
     #[test]
     fn ab_options_parse_and_validate() {

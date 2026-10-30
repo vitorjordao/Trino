@@ -71,6 +71,11 @@ unsafe extern "C" {
     /// texture and blend: the 27 words of `trino_rsp_draw` and the 19 of
     /// `rsp::water_entry`.
     pub fn trino_rsp_draw_water(words: *const u32, color: *const u32);
+    /// A palette draw (GitHub #122) through the colored or the textured
+    /// overlay's `TrinoCmd_DrawPal` (`words[0] & rsp::TEXTURED` picks): the
+    /// 27 words of `trino_rsp_draw`, the 13 colored (or 17 textured) words
+    /// and the 10 of `rsp::palette_entry`.
+    pub fn trino_rsp_draw_palette(words: *const u32, color: *const u32, palette: *const u32);
     /// Uncached, 16-byte aligned RDRAM (the RSP reads it by DMA).
     pub fn trino_alloc_uncached(size: u32) -> *mut c_void;
     /// Physical address of a pointer (what the RSP's DMA takes).

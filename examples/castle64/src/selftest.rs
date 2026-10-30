@@ -2250,10 +2250,10 @@ pub const SLOTS_CARD: ModelId = ModelId::from_path("models/selftest_slots");
 
 /// Color slots and a per-draw palette: the slotted card drawn face-on with
 /// a palette shows white (slot 0), the first entry (slot 1) and the fourth
-/// (slot 4); drawn again without one it is white everywhere. On the N64 the
-/// palette draw must stay off the RSP overlay (which draws baked colors),
-/// and the plain one may take it. `Ok(false)` where `read_pixel` is
-/// unsupported.
+/// (slot 4); drawn again without one it is white everywhere. On the N64
+/// both take the RSP (the palette through the colored overlay's palette
+/// command, GitHub #122; the ROM's `micro` checks hold it to the CPU path).
+/// `Ok(false)` where `read_pixel` is unsupported.
 pub fn palette(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
     let caps = *renderer.caps();
     let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
@@ -2444,7 +2444,9 @@ pub fn instancing(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         }
     }
     let [separate, one_call] = stats;
-    if separate.models != INSTANCES as u32 || separate.tris == 0 {
+    // The N64 counts its RSP triangles apart (`tnl.rsp_tris`): the cards'
+    // palette draws take the overlay there (GitHub #122).
+    if separate.models != INSTANCES as u32 || separate.tris + separate.tnl.rsp_tris == 0 {
         return Err("instancing: the separate draws drew nothing");
     }
     let mut tnl = one_call.tnl;

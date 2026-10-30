@@ -98,7 +98,7 @@ collision = "visual"        # optional: its triangles as a mesh collider (or "au
   character model then gives a whole crowd. Paint slot regions white, and keep slot
   borders on split vertices (Blender: `paint_slots`, FACE domain). Without `_SLOT`,
   the bake output is byte-identical to before. `model inspect` reports the vertices
-  per slot. On the N64 a palette draw runs on the CPU T&L, not the RSP.
+  per slot. On the N64 a palette draw stays on the RSP (GitHub #122), never memoized.
 - **Ambient occlusion (baked):** `ao = true` or `ao = { strength = 0.8, distance = 0.5,
   rays = 64, ground = true }` darkens the vertex colors where the model hides the sky
   from itself (ADR 0014). This is how the N64 and 3DS get AO: free at run time and the

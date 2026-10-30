@@ -1383,3 +1383,33 @@ void trino_cache_create(void* p, uint32_t len)
     for (char* a = (char*)p; a < (char*)p + len; a += 16)
         __asm__ volatile("cache 0x0D, 0(%0)" :: "r"(a));
 }
+
+// A palette draw (GitHub #122) through rsp_trino_color's or rsp_trino_tex's
+// TrinoCmd_DrawPal: `w` as trino_rsp_draw's (its word 0 says textured,
+// rsp::TEXTURED, and its word 3 is the overlay's palette flag), then the 13
+// color words (or 17 color and texture words) of `c`, then the 10 words of
+// the palette table `p` (rsp::palette_entry). Three arguments: the o32/o64
+// seam above, so the work is in `*_body`. Last in this file, like the
+// overlays' other entries, so no other shim symbol moves.
+#define TRINO_RSP_PAL_WORDS 10
+static __attribute__((noinline)) void trino_rsp_draw_palette_body(const uint32_t* w, const uint32_t* c, const uint32_t* p)
+{
+    int tex = (w[0] & 0x200) != 0;
+    int n = tex ? TRINO_RSP_TEX_WORDS : TRINO_RSP_COLOR_WORDS;
+    if (!tex && !trino_mode_3d) trino_3d_begin();
+    rspq_write_t q = rspq_write_begin(tex ? trino_rsp_tex_id : trino_rsp_color_id, 0x2,
+                                      TRINO_RSP_DRAW_WORDS + n + TRINO_RSP_PAL_WORDS);
+    rspq_write_arg(&q, w[0] & 0xFF);
+    for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
+    for (int i = 0; i < n; i++) rspq_write_arg(&q, c[i]);
+    for (int i = 0; i < TRINO_RSP_PAL_WORDS; i++) rspq_write_arg(&q, p[i]);
+    rspq_write_end(&q);
+    trino_rsp_pending = 1;
+    if (tex) trino_rsp_tex_pending = 1;
+}
+
+void trino_rsp_draw_palette(const uint32_t* w, const uint32_t* c, const uint32_t* p)
+{
+    trino_rsp_draw_palette_body(w, c, p);
+    TRINO_NOT_A_TAIL_CALL();
+}

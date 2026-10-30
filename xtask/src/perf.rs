@@ -329,7 +329,7 @@ const MHZ: f64 = 93.75;
 /// from another T&L path (clipping, splits, back faces, a missing mesh).
 /// `(name, verts, tris_in, emitted, culled, draws)`; clipped, splits and
 /// backfaced must be 0.
-const MICRO_WORK: [(&str, u64, u64, u64, u64, u64); 8] = [
+const MICRO_WORK: [(&str, u64, u64, u64, u64, u64); 9] = [
     ("micro-draws", 192, 64, 64, 0, 64),
     ("micro-culled", 0, 0, 0, 64, 64),
     ("micro-trs", 192, 64, 64, 0, 64),
@@ -338,7 +338,13 @@ const MICRO_WORK: [(&str, u64, u64, u64, u64, u64); 8] = [
     ("micro-unlit", 256, 450, 450, 0, 1),
     ("micro-flat", 256, 450, 450, 0, 1),
     ("micro-tris", 256, 900, 900, 0, 1),
+    ("micro-palette", 576, 800, 800, 0, 16),
 ];
+
+/// RSP commands the `-rsp` micro scenes must show per frame (GitHub #122:
+/// every recolored figure of `micro-palette` on the overlay's palette
+/// command, none left on the CPU T&L).
+const MICRO_RSP: [(&str, u64); 1] = [("micro-palette-rsp", 16)];
 
 /// Check the micro scenes' work and derive the fixed costs (µs and VR4300
 /// cycles): per draw (culled floor, visible, `draw_model` matrix), per
@@ -370,6 +376,19 @@ pub fn micro_report(scenes: &[SceneLine]) -> Result<String, String> {
             }
         }
         by_name.insert(name, s);
+    }
+    for (name, rsp) in MICRO_RSP {
+        // Only where the ROM ran its RSP pass.
+        if let Some(s) = scenes.iter().find(|s| s.name == name)
+            && (s.get("rsp_draws") != rsp || s.get("verts") != 0)
+        {
+            let _ = writeln!(
+                errors,
+                "  {name}: rsp_draws {} verts {} (expected {rsp} and 0)",
+                s.get("rsp_draws"),
+                s.get("verts")
+            );
+        }
     }
     if !errors.is_empty() {
         return Err(errors);
@@ -526,6 +545,24 @@ mod tests {
             .collect();
         let table = micro_report(&lines).unwrap();
         assert!(table.contains("culled draw, tnl (B/64)"), "{table}");
+        // The palette crowd's RSP pass: every figure a command, no CPU T&L
+        // (GitHub #122); a figure left on the CPU fails.
+        let rsp = |draws: u32, verts: u32| {
+            line(
+                "micro-palette-rsp",
+                &format!("verts={verts} draws=16 rsp_draws={draws}"),
+            )
+        };
+        lines.push(rsp(16, 0));
+        let table = micro_report(&lines).unwrap();
+        assert!(table.contains("micro-palette"), "{table}");
+        *lines.last_mut().unwrap() = rsp(15, 36);
+        let err = micro_report(&lines).unwrap_err();
+        assert!(
+            err.contains("micro-palette-rsp: rsp_draws 15 verts 36"),
+            "{err}"
+        );
+        lines.pop();
         // A micro scene on the wrong T&L path is an error, not a number.
         lines[0].fields.insert("splits".into(), 3);
         let err = micro_report(&lines).unwrap_err();

@@ -3,8 +3,9 @@
 //! color is its baked color times `palette[slot - 1]`, rounded
 //! `(a * b + 127) / 255`, before tint and lighting — on the static, flat,
 //! rigid and smooth-skinned paths. Without a palette (or without slots)
-//! every draw is bit-identical to an unslotted one. The N64 RSP path and
-//! the draw memo refuse palette draws.
+//! every draw is bit-identical to an unslotted one. The N64 RSP path takes
+//! palette draws (its colored overlay's palette command, GitHub #122) but
+//! not on water; the draw memo refuses them.
 
 mod common;
 
@@ -315,7 +316,7 @@ fn slot_sections_parse_validate_and_survive_the_layout() {
 }
 
 #[test]
-fn palette_draws_stay_off_the_rsp_and_out_of_the_memo() {
+fn palette_draws_take_the_rsp_and_stay_out_of_the_memo() {
     let ctx = TnlContext::new(&Camera3::default(), &DEFAULT_LIGHT, SCREEN);
     let bounded = bounded_cube();
     let slotted_blob = with_slots(&bounded, &slots_for(&bounded));
@@ -328,13 +329,51 @@ fn palette_draws_stay_off_the_rsp_and_out_of_the_memo() {
     let m = Mat34::IDENTITY;
     // Slots alone don't change what the overlay can hold or draw.
     assert!(render3d::rsp_mesh_supported(&slotted));
-    assert!(render3d::rsp_eligible(&ctx, &slotted, &m, &ModelParams::DEFAULT).is_some());
-    // A palette that would recolor it: CPU path (the overlay draws baked
-    // colors); on a mesh without slots it changes nothing.
-    assert!(render3d::rsp_eligible(&ctx, &slotted, &m, &pal).is_none());
-    assert!(render3d::rsp_eligible(&ctx, &plain, &m, &pal).is_some());
+    let plain_draw = render3d::rsp_eligible(&ctx, &slotted, &m, &ModelParams::DEFAULT);
+    assert!(plain_draw.is_some());
+    // A palette that recolors it takes the overlay's palette command
+    // (GitHub #122): the same draw, and the table the N64 sends.
+    assert_eq!(render3d::rsp_eligible(&ctx, &slotted, &m, &pal), plain_draw);
     let mv = ctx.projection().0.mul(&m);
-    assert!(render3d::rsp_eligible_mv(&ctx, &slotted, &m, &mv, &pal).is_none());
+    assert_eq!(
+        render3d::rsp_eligible_mv(&ctx, &slotted, &m, &mv, &pal),
+        plain_draw
+    );
+    assert_eq!(render3d::rsp_palette(&slotted, &pal), Some(PALETTE));
+    assert_eq!(
+        render3d::rsp_plan(&ctx, &slotted, &m, &pal),
+        render3d::rsp_plan(&ctx, &slotted, &m, &ModelParams::DEFAULT)
+    );
+    // On a mesh without slots, or without a palette, there is nothing to
+    // recolor: the plain command.
+    assert!(render3d::rsp_eligible(&ctx, &plain, &m, &pal).is_some());
+    assert_eq!(render3d::rsp_palette(&plain, &pal), None);
+    assert_eq!(render3d::rsp_palette(&slotted, &ModelParams::DEFAULT), None);
+    // Water keeps the CPU path for a palette: the water overlay has no
+    // IMEM left for it.
+    let water_blob = textured_cube(trino_core::SpriteId::from_path("sprites/water"));
+    let water_blob = with_slots(&water_blob, &slots_for(&water_blob));
+    let water = Mesh::from_tmdl(&water_blob).unwrap();
+    let wet = ModelParams {
+        water: Some(trino_core::water::Water::DEFAULT),
+        ..ModelParams::DEFAULT
+    };
+    assert_ne!(
+        render3d::rsp_check(&ctx, &water, &m, &wet),
+        Err(render3d::RspReject::Palette)
+    );
+    assert_eq!(
+        render3d::rsp_check(
+            &ctx,
+            &water,
+            &m,
+            &ModelParams {
+                palette: Some(PALETTE),
+                ..wet
+            }
+        ),
+        Err(render3d::RspReject::Palette)
+    );
     // The memo key has no room for a palette.
     assert!(MemoKey::new(1, 0, &m, &pal).is_none());
     assert!(MemoKey::new(1, 0, &m, &ModelParams::DEFAULT).is_some());

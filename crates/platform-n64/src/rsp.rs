@@ -35,6 +35,18 @@ pub const COLOR_WORDS: usize = 13;
 /// the draw goes out through the colored overlay, with its
 /// [`color_words`] in the next queue entry. The shim drops it.
 pub const COLORED: u32 = 0x100;
+/// Bit in a queued command's word 0 (GitHub #122): a palette draw. Its
+/// colored or textured entry is followed by one more, the
+/// [`palette_entry`], and the shim sends the overlay's `TrinoCmd_DrawPal`
+/// (`trino_rsp_draw_palette`). The shim drops it.
+pub const PALETTE: u32 = 0x400;
+/// Words the palette command adds after the colored or textured words
+/// (overlay `PAL_SIZE` / 4): five entries of four halves, slot 0's white
+/// first.
+pub const PALETTE_WORDS: usize = 10;
+/// The draw command's word the overlay reads as "recolor the slots" (its
+/// `DRAW` +0x0C, zero in every other command).
+const PALETTE_FLAG: usize = 3;
 
 /// The RSP copies' own region of uncached RDRAM (GitHub #110): one block
 /// taken at boot ([`reserve_arena`]), handed out by a free list, so the
@@ -302,6 +314,11 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
         for (vi, (&g, &nrm)) in s.verts.iter().zip(&s.normals).enumerate() {
             let g = g as usize;
             let (p, c) = (mesh.position(g), mesh.color(g));
+            // The normal row's fourth half: the vertex's color slot as an
+            // offset into the palette command's table (8 bytes an entry,
+            // slot 0 white). The light's fourth lane is zero, so `n · l`
+            // never reads it; zero without slots, as before.
+            let slot = (mesh.slot(g) as u16) * 8;
             let (xi, xf) = fixed(p.x);
             let (yi, yf) = fixed(p.y);
             let (zi, zf) = fixed(p.z);
@@ -317,7 +334,7 @@ fn bake(mesh: &Mesh, segs: &[Segment]) -> Option<RspMesh> {
                 s015(nrm.x) as u16,
                 s015(nrm.y) as u16,
                 s015(nrm.z) as u16,
-                0,
+                slot,
             ];
             for (k, v) in halves.iter().enumerate() {
                 blob[at + k * 2..at + k * 2 + 2].copy_from_slice(&v.to_be_bytes());
@@ -502,6 +519,36 @@ pub fn color_words(c: &RspColor, _mv: &Mat34) -> [u32; COLOR_WORDS] {
         pair(byte(fog[0]), byte(fog[1])),
         pair(byte(fog[2]), 0),
     ]
+}
+
+/// Turn a colored or textured command (`w`, its entry made) into a
+/// palette command: the overlay's flag word, the queue bit.
+pub fn mark_palette(w: &mut [u32; DRAW_WORDS]) {
+    w[0] |= PALETTE;
+    w[PALETTE_FLAG] = 1;
+}
+
+/// The palette command's table (overlay `PAL`, after the colored or
+/// textured words) in a queue entry: entry `s` multiplies a vertex in slot
+/// `s` (entry 0 white, then `p[0..4]` for slots 1..=4). Each channel is
+/// `255 · 257` scaled (`c · 257`, a u16 the overlay multiplies a `u8 << 7`
+/// color by with `vmudl`, then rounds to a whole u8): the CPU's
+/// `(c · p + 127) / 255` within one unit (exact for 65 512 of the 65 536
+/// pairs). Alpha keeps 65 535, which leaves it unchanged.
+#[cold]
+#[inline(never)]
+pub fn palette_entry(p: &[Color; 4]) -> [u32; DRAW_WORDS] {
+    // Slot 0's white, then two words for each of the four entries.
+    const _: () = assert!(2 + 2 * 4 == PALETTE_WORDS);
+    let half = |v: u8| v as u32 * 257;
+    let mut e = [0u32; DRAW_WORDS];
+    e[0] = 0xFFFF_FFFF;
+    e[1] = 0xFFFF_FFFF;
+    for (k, c) in p.iter().enumerate() {
+        e[2 + 2 * k] = (half(c.r) << 16) | half(c.g);
+        e[3 + 2 * k] = (half(c.b) << 16) | 0xFFFF;
+    }
+    e
 }
 
 /// Words the textured overlay's command adds after the color words (its

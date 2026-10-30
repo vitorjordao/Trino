@@ -2,7 +2,8 @@
 
 - Status: **accepted**, implemented (GitHub #69: phases 0–3 in #77; the ripples and rings
   on the overlay, the issue's two budgets and phase 4's cost model in its second part, §7;
-  a measurement on a real N64 is open, §8).
+  a measurement on a real N64 is open, §8; palettes on the colored and textured overlays,
+  GitHub #122, §9).
 - Date: 2026-10-18
 - Context: after #49 (ADR 0015) the showcase river ran at **286.6 ms** per frame in ares
   with **0 of 46** draws on the RSP. The overlay of ADR 0007 took only static, opaque,
@@ -236,3 +237,77 @@ ares doesn't time the RDP. The river is translucent, 2-cycle and covers much of 
 screen, and 2-cycle fills run at half rate on hardware. `run n64 --device sc64|everdrive`
 (`docs/HARDWARE.md`) prints the same `TRINO_PERF_SCENE` lines; nobody has run it on a
 cart yet, so the 1.2 ms and 33.3 ms are emulator numbers (BACKLOG P0 #1a).
+
+## 9. Palettes on the RSP (GitHub #122, 2026-10-29)
+
+A draw with `ModelParams::palette` on a mesh with color slots ran the CPU T&L
+(`RspReject::Palette`): a crowd of recolored characters, the accessibility palette swap
+of a game's characters, kits per team.
+
+- **The slot in the RSP copy.** `rsp::bake` writes each vertex's slot, as its entry's
+  offset (`slot * 8`), into the normal row's fourth half (+22). That half was zero, and
+  `n · l` never reads it: the light's fourth lane is zero in every overlay. The copy is
+  the same for draws with and without a palette; a mesh without slots writes zero.
+- **A second command, not a bigger one.** `rsp_trino_color` and `rsp_trino_tex` define
+  `TrinoCmd_DrawPal` (ID 2): the draw's own words, then a 40-byte table (slot 0 white,
+  then the four entries, each channel `c · 257` as a u16). It shares `TrinoCmd_Draw`'s
+  copy loop with a longer length and copies into `DRAW`, `PAL` right after. Word 3 of the
+  command (`DRAW` +0x0C, zero in every other command) is the flag the vertex loop reads
+  once per segment. Commands without a palette keep their size, and `rsp_trino` (white)
+  and `rsp_trino_water` are byte-identical to before. IMEM: colored 2604 → 2668 bytes,
+  textured 2740 → 2796 (of 4096). Water keeps `RspReject::Palette`: 4028 bytes.
+- **The multiply.** Per pass of the paired loop: the flag's branch with the color `luv` in
+  its delay slot, then two `lhu` of the slots, two `ldv` of the entries (A in lanes 0..3,
+  B in 4..7), `vmudl` (`(c << 7) · 257p >> 16`), `+ 64`, `>> 7`, `<< 7`. The result is
+  the CPU's `(c · p + 127) / 255` for 65 512 of the 65 536 pairs and one unit off for the
+  rest; alpha's entry is 65 535, which keeps it. Then the light, as before.
+- **The CPU side.** `render3d::rsp_palette` (the palette when the mesh has slots);
+  `rsp_check` and `rsp_rigid_draws` no longer refuse one, so `rsp_plan`, `scene budget`
+  and the PC's strict N64 estimate follow. A palette draw always takes the colored
+  overlay (`rsp_color_terms`), even under a white light. In the queue it is three
+  entries: the command with `rsp::PALETTE` in word 0, its colored or textured carrier, and
+  `rsp::palette_entry`. `trino_rsp_draw_palette` sends it (three arguments: the o32/o64
+  `*_body` seam of ADR 0002). Static, flat, rigid-part and textured draws all take it.
+  Palette draws stay out of the memo (`MemoKey` has no room for four colors).
+- **Gates in the ROM** (`apps/n64/src/n64/micro.rs`, `palette_checks`): the oracle under
+  the white light, under the warm light with a glow, on a flat copy and on a slotted
+  copy of the textured card (color 1/255 each); CPU-vs-RSP pixel checks of a slotted
+  grid, its flat and rigid twins and the card (0.00–0.25/255 mean), each also failing if
+  the draw stayed on the CPU; `micro-palette`, whose work `xtask` checks on both passes.
+  They run last, with their five meshes registered after the other scenes grew the
+  batch buffers and unregistered after: registered at boot, the meshes took the base
+  N64's 79 KB batch block; right before the scenes, they split the free block so the
+  water step's 43 KB didn't fit (`top=` 81 → 38 KB). Now `top=` is the same before and
+  after them, and CI's base-tier boot passes.
+
+### Measurements (ares, mean (min–max) over the 8 paddings)
+
+`micro-palette`: 16 figures of 6×6 vertices (50 triangles), each with its own palette,
+white light. The CPU and RSP passes run in the same ROM.
+
+| `micro-palette` | CPU T&L | RSP |
+|---|---|---|
+| frame | 51.19 (46.91–58.79) ms | **7.18 (6.92–7.38) ms** |
+| `tnl` stage (the draws' CPU) | 27.20 ms | **1.45 ms** (~90 µs per draw, no memo) |
+| triangles on the CPU | 800 | 0 (16 commands, 800 RSP triangles) |
+
+| Scene | `main` | this change |
+|---|---|---|
+| hub | 13.16 (12.41–13.85) | 12.68 (11.96–13.10) |
+| green-hills | 7.81 | 7.63 |
+| lava-land | 8.43 | 8.21 |
+| sky-tower | 7.63 | 7.44 |
+| throne | 18.98 (18.07–19.62) | 18.94 (18.47–19.38) |
+| micro-river | 1.86 | 1.84 |
+| showcase-river | 26.02 (25.59–26.29) | 25.34 (24.81–26.22) |
+
+- castle64 draws no palette and its white-light commands go through the byte-identical
+  white overlay. The hub golden is unchanged.
+- `showcase-river` takes the colored and textured overlays, so it runs the new branch.
+  An earlier build of this change measured it at 26.54 (26.02–27.25). Its RSP drain and
+  T&L stage didn't move then either: the difference sat in the CPU time outside the timed
+  stages. The final build moved only self-test code (`micro.rs`) and measures 25.34.
+  So the earlier +0.5 ms was code layout. Neither did removing an RSP instruction per
+  vertex pair from the colored loop move it (26.51 vs 26.54).
+- Open: palette draws aren't memoized (each pays ~90 µs of CPU setup), a palette under
+  a white light switches to the colored overlay, and water keeps palettes on the CPU.

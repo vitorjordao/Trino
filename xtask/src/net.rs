@@ -379,8 +379,7 @@ fn web(project: &Project, args: &[&str]) -> Result<bool, String> {
     let port = crate::web::serve(web, 0)?;
     let out = project.root.join("target/web-net");
     let _ = std::fs::remove_dir_all(&out);
-    let ok = Command::new("node")
-        .arg(harness.join("net.mjs"))
+    let ok = crate::web::harness_command(&project.root, &harness.join("net.mjs"))
         .arg("--url")
         .arg(format!("http://127.0.0.1:{port}/"))
         .arg("--lobby")

@@ -252,8 +252,10 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     `draw_nodes_in`/`draw_in`.
   - **Color slots + per-draw palette** (2026-10-15): glTF `_SLOT` → TMDL `SLOT`,
     `ModelParams::palette` recolors slots 1..=4 of one model per draw (a crowd from
-    one character). CPU T&L on every target; never on the N64 RSP. Its self-test
-    step passes on PC, in ares and in Azahar.
+    one character). CPU T&L on the PC's console profiles and the 3DS; on the N64 the
+    colored and textured RSP overlays multiply each vertex by its slot's entry
+    (`TrinoCmd_DrawPal`, GitHub #122). Its self-test step passes on PC, in ares and in
+    Azahar.
 
   Each one has a step in `castle64::selftest`, run on PC, in ares and in Azahar.
 - **Editor additions**:
@@ -381,8 +383,9 @@ new skill when none fits. Then run `cargo xtask agents sync`. The steps are in
     `set_rsp_stream`.
 
 Ranked next steps: `docs/BACKLOG.md`. N64 throughput is no longer the top risk for
-castle64. Next for the RSP path: clipping on the RSP, palettes and smooth skins on the
-overlay, and a measurement on real hardware (ares doesn't time the RDP).
+castle64. Next for the RSP path: clipping on the RSP, smooth skins on the overlay, and a
+measurement on real hardware (ares doesn't time the RDP). Palettes are on the overlay
+since #122.
 
 - **Real hardware (2026-10-15, `docs/HARDWARE.md`):** `run n64 --device sc64|everdrive`
   (sc64deployer / UNFLoader over USB) and `run 3ds --device network [--ip <IP>]`
@@ -694,7 +697,7 @@ overlay, and a measurement on real hardware (ares doesn't time the RDP).
     sounds and `cvd_icon` on sprites + `ui/themes/high_contrast.ron` → the `access/data`
     (`TACC`) blob, baked with the UI blobs (`asset_pipeline::access`, no manifest entry);
     `AccessBlob`/`AccessData::{color, palette, caption, icon, contrast_theme}`. The
-    palette swap is the draw the game already makes (a tint stays on the N64's RSP).
+    palette swap is the draw the game already makes (on the N64's RSP, tint or palette).
   - **UI:** `UiEnv::with_access` (text scale in whole glyph pixels, `Theme::HIGH_CONTRAST`
     or the project's, `cvd_icon` per node: TUIL v2, v1 still loads); defaults take the old
     path (goldens unchanged).
@@ -1515,9 +1518,11 @@ cargo test --workspace
 - **The UI rounds scaled text to whole glyph pixels** (`UiAccess::text_mul`): at ×1 (the
   consoles) 125 % draws at 100 % and 150 % at 200 %. That keeps bitmap fonts crisp and
   the N64 on its integer-scale text path; don't "fix" it with a fractional scale.
-- **A palette draw leaves the N64's RSP; a tint doesn't.** Semantic colors on a slotted
-  mesh cost the CPU T&L there (`RspReject::Palette`); castle64's doors and Solid Eleven's
-  kits change a tint or pick between existing kits to stay on the RSP.
+- **A palette draw takes the N64's colored overlay** (GitHub #122, ADR 0018 §9), even
+  under a white light: interleaved with white-light draws it costs an overlay switch
+  each way (rspq reloads the code), so draw a recolored crowd together. It is never
+  memoized (`MemoKey` has no room for a palette): ~90 µs of CPU per draw, measured by
+  `micro-palette`. Water keeps palettes on the CPU (`RspReject::Palette`: no IMEM left).
 - **Captions on the 3DS touch screen switch screens:** `CaptionPlace::SecondScreen` calls
   `on_screen(Bottom)`, so draw captions after everything else on the top screen.
 - **A string table at the engine root changes `ui check`'s counts:** `assets/i18n/en-US.ron`
@@ -2030,6 +2035,17 @@ cargo test --workspace
   - The editor measures memory plans on a worker keyed on the manifest's text and the
     bake generation (`groups::Groups::plans`); a UI test waits on `measured()` after the
     Memory tab drew once.
+- **On the N64, `FrameStats::tris` leaves out RSP triangles** (the 3DS and PC count their
+  hardware paths; GitHub #129). A self-test that proves "something was drawn" sums
+  `tris + tnl.rsp_tris`; a CPU-vs-RSP pixel check also asserts `tnl.rsp_draws > 0`, or a
+  draw that fell back to the CPU passes it trivially.
+- **Self-test meshes on the base N64 split its last free block** unless registered after
+  the batch buffers grew and unregistered with a few frames to spare (`build-n64` ›
+  heap levers, #122).
+- **Playwright's Chromium keeps its shared memory in `TMPDIR`** (`--disable-dev-shm-usage`):
+  with a tmpfs `/tmp` under ~2 GB free, the WebGL2 self-test's tab crashed at `asset
+  groups` ("Target crashed", GitHub #107). Launch harness scripts through
+  `web::harness_command`, which points `TMPDIR` at `target/web-tmp`.
 - **`/tmp` may be a RAM disk (tmpfs).** A second `target/` there (a git worktree's build)
   filled RAM and killed rustc. Put extra worktrees and their targets on a real disk.
 

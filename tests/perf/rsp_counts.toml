@@ -1,0 +1,45 @@
+# Static RSP instruction counts per overlay path and IMEM/DMEM use
+# (`cargo xtask rsp count`, issue #79). `cargo xtask test n64` fails when
+# one moves; `cargo xtask rsp count --bless` rewrites this file — review
+# the diff: ares charges ~4-5 cycles per RSP instruction.
+
+[rsp_trino]
+imem_bytes = 2380
+dmem_bytes = 2968
+"command" = 11
+"rdpq triangle" = 282
+"segment" = 31
+"triangle" = 22
+"vertex pass" = 51
+
+[rsp_trino_color]
+imem_bytes = 2668
+dmem_bytes = 3128
+"command" = 12
+"palette entry" = 2
+"rdpq triangle" = 282
+"segment" = 49
+"triangle" = 22
+"vertex pass" = 101
+
+[rsp_trino_tex]
+imem_bytes = 2796
+dmem_bytes = 3400
+"command" = 12
+"palette entry" = 2
+"rdpq triangle" = 282
+"segment" = 49
+"triangle" = 22
+"vertex pass" = 132
+
+[rsp_trino_water]
+imem_bytes = 4028
+dmem_bytes = 3984
+"command" = 19
+"rdpq triangle" = 282
+"segment" = 40
+"triangle" = 22
+"vertex pass" = 430
+"water ring pass" = 217
+"water ripples" = 117
+"water surface pass" = 313

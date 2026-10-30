@@ -168,3 +168,19 @@ fn a_full_memo_replaces_and_an_empty_one_never_hits() {
     let zero = MemoKey::new(0, 0, &Mat34 { m: [[0.0; 4]; 3] }, &ModelParams::DEFAULT).unwrap();
     assert!(memo::find(&fresh, &zero).is_none());
 }
+
+#[test]
+fn evicts_says_whether_a_store_replaces_another_draw() {
+    let mut slots = vec![MemoSlot::<4>::EMPTY; 1];
+    let plain = ModelParams::DEFAULT;
+    let a = MemoKey::new(7, 0, &at(1.0), &plain).unwrap();
+    let b = MemoKey::new(8, 0, &at(1.0), &plain).unwrap();
+    assert!(!memo::evicts(&slots, &a), "an empty slot evicts nothing");
+    memo::store(&mut slots, a, [1; 4], 0);
+    assert!(
+        !memo::evicts(&slots, &a),
+        "the same draw again replaces itself"
+    );
+    assert!(memo::evicts(&slots, &b), "one slot: another draw evicts it");
+    assert!(!memo::evicts(&Vec::<MemoSlot<4>>::new(), &a), "no memo");
+}

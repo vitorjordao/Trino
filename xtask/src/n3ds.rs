@@ -1466,6 +1466,16 @@ fn boot_test(
         let name = format!("3ds{}", if p.trace { "-trace" } else { "" });
         let msg = traces.finish(&p.engine, &name, p.is_engine)?;
         println!("[3ds] trace: {msg}");
+        // Each timed scene as a perf report (issue #79): the editor's
+        // Profiler and `cargo xtask perf report` read them.
+        if p.trace
+            && let Some(t) = traces.trace()
+        {
+            match crate::perf_cmd::write_trace_reports(root, "3ds", &t) {
+                Ok(m) => println!("[3ds] perf reports: {m}"),
+                Err(e) => eprintln!("[3ds] perf reports: {e}"),
+            }
+        }
         Ok(())
     });
     // An Azahar that ignored the override would time the frames without it.

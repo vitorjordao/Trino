@@ -87,6 +87,14 @@ unsafe extern "C" {
     /// until then, so commands streamed during a frame would wait for its
     /// end.
     pub fn trino_rsp_flush();
+    /// Instrumented builds (issue #79): copy the shim's counters (its
+    /// `TP_*` order) into `out[..n]` and zero them; zeros without
+    /// `-DTRINO_PROF`.
+    pub fn trino_prof_read(out: *mut u32, n: u32);
+    /// Sample the interrupted PC into `buf[..cap]` every `period_us`.
+    pub fn trino_prof_sample_start(buf: *mut u32, cap: u32, period_us: u32);
+    /// Stop sampling: the samples taken; `*lost` = those past `cap`.
+    pub fn trino_prof_sample_stop(lost: *mut u32) -> u32;
     /// Claim the cache lines at cached `p` (16-aligned, `len` a multiple of
     /// 16) for writing, without reading RDRAM (every byte read later must be
     /// written first).

@@ -14,6 +14,7 @@ pub mod net;
 pub mod particles;
 pub mod platforms;
 pub mod profiler;
+pub mod profiler_reports;
 pub mod quality;
 pub mod saves;
 pub mod shipping;

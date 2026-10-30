@@ -555,6 +555,7 @@ transform_vertex:
     lhu t0, 0x230(wptr)
     beqz t0, water_ripples_done
     lqv $v01, 0x1A0, wptr           # px - x, 32 bits (-dx)
+water_ripple_pass:                  # (a label only: `xtask rsp count`'s paths)
     lqv $v04, 0x1B0, wptr
     vsubc $v04, $v04, wo_f.h0
     vsub $v01, $v01, wo_i.h0
@@ -815,6 +816,7 @@ water_ripples_done:
     lhu t0, 0x11C(wptr)
     bnez t0, water_fog
     luv wcol.e0, 24, src
+water_lit:                          # (a label only, as water_ripple_pass)
 
     # The view direction v = (a, b, 1) zq, zq = 1 / sqrt(1 + a² + b²):
     # q = a² + b², (1 + q) / 4 and three Newton steps from 1 - q / 2 (the

@@ -1156,6 +1156,19 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
         h.run_steps(4);
         assert!(h.query_by_label_contains("DIFF (B").is_some());
         crate::layout_audit::assert_clean(&mut h, size, true, &what("Profiler A vs B"));
+        // Its Reports and A/B views (issue #79).
+        perf_fixtures(&root);
+        let p = &mut h.state_mut().profiler;
+        p.reports = crate::profiler::Reports::new(&root);
+        p.mode = crate::profiler::Mode::Reports;
+        let b = root.join("target/perf/n64-throne.json");
+        p.reports.open(&b, true);
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Profiler reports A vs B"));
+        h.state_mut().profiler.mode = crate::profiler::Mode::Ab;
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("Profiler A/B"));
+        h.state_mut().profiler.mode = crate::profiler::Mode::Timeline;
         // The Net tab and Play here's bar with a replay (issue #67).
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Net));
         h.run_steps(4);
@@ -4330,6 +4343,158 @@ fn profiler_tab_reads_compares_and_follows_traces() {
             .path
             .ends_with("target/traces/n64-test.json")
     );
+    leave_temp_project(&repo);
+}
+
+/// The perf reports the Profiler's Reports and A/B views read (issue #79):
+/// two N64 scene reports (`target/perf/`, as `cargo xtask test n64 --prof
+/// rsp|sample` writes them) and an A/B over four paddings with a control
+/// (`target/perf-ab/ab.json`, as `cargo xtask perf ab` writes it), built
+/// from log lines through the same collector.
+fn perf_fixtures(project: &std::path::Path) {
+    use std::collections::BTreeMap;
+    use trino_trace::perf::{AbReport, Collector, Symbols};
+    let dir = project.join("target/perf");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut c = Collector::default();
+    for line in [
+        "TRINO_PERF_SCENE:hub frames=4 update=300 render=13000 begin=1000 tnl=5200 sort=400 \
+         submit=2100 sprites=600 end=900 verts=820 tris_in=900 emitted=300 rsp_draws=41 \
+         rsp_tris=1200 memo_hit=37 memo_miss=4 rspq_words=1900 ovl_switch=6 tex_upload=3",
+        "TRINO_PERF_SCENE:throne frames=4 update=280 render=9000 begin=800 tnl=3000 verts=500 \
+         memo_hit=20 memo_miss=2",
+        "TRINO_PROF_RSP:hub empty_drain_us=45",
+        "TRINO_PROF_RSP:hub ovl=white verts=10 tris=10 n=2 us=40",
+        "TRINO_PROF_RSP:hub ovl=white verts=20 tris=10 n=1 us=30",
+        "TRINO_PROF_RSP:hub ovl=white verts=20 tris=30 n=1 us=50",
+        "TRINO_PROF_SAMPLE:hub samples=4 lost=0 period_us=50 frames=4 pcs=1 handler_us=0.8 \
+         overhead_pct=1.6",
+        "TRINO_PROF_SAMPLE:hub 80001004=4",
+    ] {
+        c.feed("n64", "prof-rsp", 0, line);
+    }
+    let syms = Symbols::parse("80001000 00000010 T trino_core::render3d::tessellate_joints\n");
+    for r in c.finish(Some(&syms), |_| None) {
+        std::fs::write(dir.join(format!("n64-{}.json", r.scene)), r.to_json()).unwrap();
+    }
+    let scene = |frame: u64| {
+        let mut f = BTreeMap::new();
+        f.insert("render".to_string(), frame);
+        f.insert("verts".to_string(), 820);
+        BTreeMap::from([("hub".to_string(), f)])
+    };
+    let runs = vec![
+        (
+            "base".to_string(),
+            [13_000, 13_400, 12_900, 13_200].map(scene).to_vec(),
+        ),
+        (
+            "head".to_string(),
+            [12_100, 12_500, 12_000, 12_300].map(scene).to_vec(),
+        ),
+        (
+            "control".to_string(),
+            [13_300, 12_800, 13_500, 13_000].map(scene).to_vec(),
+        ),
+    ];
+    let ab = AbReport::build("n64", "main", "HEAD", &[0, 352, 1024, 2048], &runs);
+    let ab_dir = project.join("target/perf-ab");
+    std::fs::create_dir_all(&ab_dir).unwrap();
+    std::fs::write(ab_dir.join("ab.json"), ab.to_json()).unwrap();
+}
+
+/// The Profiler's Reports and A/B views (issue #79): the editor's own PC
+/// frame shows live; report A (the hub) shows its stages, counters, the
+/// RSP fit and the CPU samples; picking B compares them; the A/B view
+/// shows each arm's spread over the paddings with the work identical; a
+/// report rewritten on disk reloads; Play with the Profiler showing
+/// follows the game's trace.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn profiler_reports_ab_and_play_attach() {
+    use crate::app::{Cmd, Tab};
+    let Some((mut h, _tmp, repo)) =
+        temp_project_app_with(egui::vec2(1600.0, 1000.0), |_, p| perf_fixtures(p))
+    else {
+        return;
+    };
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Profiler));
+    h.run_steps(4);
+    click(&mut h, "Reports");
+    h.run_steps(4);
+    assert_eq!(h.state().profiler.mode, crate::profiler::Mode::Reports);
+    assert!(
+        h.query_by_label_contains("PC FRAME (GAME VIEW, LIVE)")
+            .is_some()
+    );
+    wait_for(&mut h, "a live frame", |a| a.profiler.live.last().is_some());
+    // Report A opened on its own: the first file (n64-hub.json).
+    assert!(
+        h.query_by_label_contains("n64 hub · prof-rsp build")
+            .is_some()
+    );
+    for text in ["memo_hit", "rspq_words", "white", "tessellate_joints"] {
+        assert!(
+            h.query_all_by_label_contains(text).next().is_some(),
+            "{text}"
+        );
+    }
+    // B: the throne room, compared stage by stage.
+    pick(&mut h, "Report B", "n64-throne.json");
+    assert!(h.state().profiler.reports.b.is_some());
+    assert!(h.query_all_by_label("B − A").next().is_some());
+    assert!(
+        h.query_all_by_label("−17").next().is_some(),
+        "memo_hit 37 -> 20"
+    );
+    // The A/B view: three arms, their spreads, identical work.
+    click(&mut h, "A/B");
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("control: base + a no-op patch")
+            .is_some()
+    );
+    assert!(
+        h.query_by_label_contains("work is identical in every arm")
+            .is_some()
+    );
+    assert!(h.query_by_label_contains("head−base −900 µs").is_some());
+    // A report rewritten on disk reloads.
+    let root = std::env::current_dir().unwrap();
+    let f = root.join("target/perf/n64-hub.json");
+    let text = std::fs::read_to_string(&f)
+        .unwrap()
+        .replace("\"memo_hit\": 37", "\"memo_hit\": 99");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&f, text).unwrap();
+    wait_for(&mut h, "report A to reload", |a| {
+        a.profiler
+            .reports
+            .a
+            .as_ref()
+            .is_some_and(|(_, r)| r.counters["memo_hit"] == 99)
+    });
+    // Play with the tab showing: traced, and the tab follows the log.
+    let p = &mut h.state_mut().profiler;
+    assert!(p.is_shown());
+    let log = root.join("target/traces/pc.log");
+    p.follow(log.clone());
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let mut text = String::new();
+    let mut ring = trino_core::trace::TraceRing::<16>::new();
+    ring.zone("frame", 0, 0, 900);
+    ring.write_lines(
+        trino_core::trace::TracePlatform::Pc,
+        "pc",
+        &mut 0,
+        &mut text,
+    )
+    .unwrap();
+    std::fs::write(&log, text).unwrap();
+    wait_for(&mut h, "the followed trace", |a| {
+        a.profiler.follow.is_none() && a.profiler.session().is_some()
+    });
+    assert_eq!(h.state().profiler.mode, crate::profiler::Mode::Timeline);
     leave_temp_project(&repo);
 }
 

@@ -130,6 +130,17 @@ pub fn find_mut<'a, const W: usize>(
     words_eq(&s.key.0, &key.0).then_some(s)
 }
 
+/// Whether storing `key` would replace another draw's entry (its slot
+/// holds a different, real key). Instrumentation (issue #79) asks before
+/// [`store`].
+pub fn evicts<const W: usize>(slots: &[MemoSlot<W>], key: &MemoKey) -> bool {
+    if slots.is_empty() {
+        return false;
+    }
+    let s = &slots[key.slot(slots.len())];
+    !words_eq(&s.key.0, &key.0) && !words_eq(&s.key.0, &MemoSlot::<W>::EMPTY.key.0)
+}
+
 /// Remember `words` (and `extra`) for `key`, replacing whatever shared its
 /// slot.
 pub fn store<const W: usize>(slots: &mut [MemoSlot<W>], key: MemoKey, words: [u32; W], extra: u32) {

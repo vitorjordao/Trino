@@ -259,6 +259,14 @@ impl Capture {
         true
     }
 
+    /// The captured lines decoded (`None` without any).
+    pub fn trace(&self) -> Option<Trace> {
+        if self.lines == 0 {
+            return None;
+        }
+        trino_trace::collect(&self.text).ok()
+    }
+
     /// Decode what was captured, check the self-test's session (`engine`:
     /// castle64's step must be there with its names), and write
     /// `target/traces/<name>.json`. Returns a summary to print.

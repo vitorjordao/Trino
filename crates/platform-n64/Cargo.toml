@@ -11,3 +11,9 @@ repository.workspace = true
 # everything native comes from the C shim at link time.
 [dependencies]
 trino-core = { workspace = true }
+
+# Instrumented N64 builds (issue #79, ADR 0038; `cargo xtask test n64 --prof
+# rsp|sample`): each implies trino-core's trace feature.
+[features]
+prof-rsp = ["trino-core/trace"]
+prof-sample = ["trino-core/trace"]

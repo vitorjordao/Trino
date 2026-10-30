@@ -64,6 +64,9 @@ pub struct FrameReport {
     /// The costliest models over the run: (model handle, calls per frame, µs per
     /// frame of T&L, RSP draws per frame), most expensive first.
     pub top: [(u32, u32, u32, u32); 8],
+    /// An instrumented build's backend counters over the run (issue #79,
+    /// `crate::prof::NAMES` order); zeros in a plain build.
+    pub counters: [u32; crate::prof::COUNTERS],
 }
 
 impl N64Host {
@@ -150,6 +153,7 @@ impl N64Host {
         let v0 = runtime::vblanks();
         let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
         let mut n_models = 0usize;
+        let mut counters = [0u32; crate::prof::COUNTERS];
         for i in 0..frames {
             let state = input(i);
             self.renderer.start_profile();
@@ -162,6 +166,11 @@ impl N64Host {
             sums[10] += crate::renderer::take_drain_us() as u64;
             sums[9] += trino_core::Renderer::stats(&self.renderer).sprites as u64;
             let p = self.renderer.take_profile();
+            if trino_core::trace::ENABLED {
+                for (c, v) in counters.iter_mut().zip(crate::prof::window()) {
+                    *c = c.wrapping_add(v);
+                }
+            }
             let wait = p.as_ref().map_or(0, |p| p.stages.begin);
             let us = spent.saturating_sub(wait);
             total += us as u64;
@@ -226,6 +235,7 @@ impl N64Host {
             draws: (sums[7] / n) as u32,
             culled: (sums[8] / n) as u32,
             draws2d: (sums[9] / n) as u32,
+            counters,
         }
     }
 
@@ -235,7 +245,7 @@ impl N64Host {
         runtime::log(&format!(
             "TRINO_FRAME:{scene} avg_us={} max_us={} frames={} update={} tnl={} sort={} \
              submit={} sprites={} end={} drain={} draws={} rsp={} culled={} draws2d={} vblanks={} \
-             fps={} {}\n",
+             fps={} {}{}\n",
             r.avg_us,
             r.max_us,
             r.frames,
@@ -252,7 +262,8 @@ impl N64Host {
             r.draws2d,
             r.vblanks,
             (r.frames * 60).checked_div(r.vblanks).unwrap_or(0),
-            trino_core::Platform::memory(&self.platform).heap_field()
+            trino_core::Platform::memory(&self.platform).heap_field(),
+            crate::prof::fields(&r.counters, r.frames)
         ));
         for (id, calls, us, rsp) in r.top.iter().filter(|t| t.1 > 0) {
             runtime::log(&format!(

@@ -413,6 +413,20 @@ impl RenderProfile {
         times: &FrameTimes,
         out: &mut dyn core::fmt::Write,
     ) -> core::fmt::Result {
+        self.write_report_with(scene, times, "", out)
+    }
+
+    /// [`Self::write_report`] with `extra` (` key=value` pairs, each with
+    /// its leading space) at the end of the scene line: an instrumented
+    /// build's backend counters (issue #79). Parsers ignore keys they
+    /// don't know.
+    pub fn write_report_with(
+        &self,
+        scene: &str,
+        times: &FrameTimes,
+        extra: &str,
+        out: &mut dyn core::fmt::Write,
+    ) -> core::fmt::Result {
         let n = self.frames.max(1);
         let s = &self.stages;
         let t = &self.tnl;
@@ -420,7 +434,7 @@ impl RenderProfile {
             out,
             "TRINO_PERF_SCENE:{scene} frames={} update={} render={} begin={} tnl={} sort={} \
              submit={} sprites={} end={} game={} vblanks={} verts={} tris_in={} clipped={} \
-             splits={} backfaced={} emitted={} culled={} draws={} rsp_draws={} rsp_tris={}",
+             splits={} backfaced={} emitted={} culled={} draws={} rsp_draws={} rsp_tris={}{extra}",
             self.frames,
             times.update / n,
             times.render / n,

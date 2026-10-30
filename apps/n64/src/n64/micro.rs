@@ -741,7 +741,7 @@ fn measure(r: &mut N64Renderer, name: &str, suffix: &str, set: Set, frames: u32)
         times.vblanks = runtime::vblanks().wrapping_sub(v0);
         if let Some(p) = r.take_profile() {
             let mut report = String::new();
-            let _ = p.write_report(&alloc::format!("{name}{suffix}"), &times, &mut report);
+            r.write_report(&p, &alloc::format!("{name}{suffix}"), &times, &mut report);
             runtime::log(&report);
         }
     }

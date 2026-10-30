@@ -38,6 +38,8 @@ fn platform_defaults_report_no_services() {
         p.trace_platform(),
         trino_core::trace::TracePlatform::Unknown
     );
+    // One binary, one ring: nothing to hand a game (issue #79).
+    assert!(p.trace_hooks().is_none());
     assert_eq!(p.display(), None);
     p.set_display(DisplaySettings {
         fullscreen: false,

@@ -42,6 +42,8 @@ mod input;
 #[cfg(any(target_os = "none", test))]
 mod pad;
 #[cfg(target_os = "none")]
+pub mod prof;
+#[cfg(target_os = "none")]
 mod renderer;
 #[cfg(target_os = "none")]
 mod rsp;

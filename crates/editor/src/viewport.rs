@@ -207,6 +207,8 @@ pub struct Stats {
     /// The tier the last frame's shadows drew at (`frame.shadows` counts
     /// them).
     pub shadow_tier: trino_core::ShadowTier,
+    /// Where the renderer's CPU time went (the Profiler's live row).
+    pub times: trino_platform_pc::renderer::PcFrameTimes,
 }
 
 pub struct Viewport {
@@ -373,6 +375,7 @@ impl Viewport {
                 ao: false,
                 post: false,
                 shadow_tier: trino_core::ShadowTier::None,
+                times: Default::default(),
             },
             hover: None,
             box_start: None,
@@ -789,6 +792,7 @@ impl Viewport {
             ao: r.frame_times().ao_passes > 0,
             post: r.frame_times().post_passes > 0,
             shadow_tier: r.shadow_tier(),
+            times: r.frame_times(),
         };
     }
 
@@ -903,6 +907,7 @@ impl Viewport {
                 ao: self.renderer.frame_times().ao_passes > 0,
                 post: self.renderer.frame_times().post_passes > 0,
                 shadow_tier: self.renderer.shadow_tier(),
+                times: self.renderer.frame_times(),
             };
             if dynres_live {
                 self.renderer.report_frame_time((dt * 1e6) as u32);

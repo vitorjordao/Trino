@@ -149,6 +149,9 @@ pub struct Project {
     /// (`trino-core/trace`) and the test runs collect them; a separate build
     /// from the gated one, whose perf numbers are reported, never gated.
     pub trace: bool,
+    /// `--prof rsp|sample` (issue #79): an instrumented N64 build that also
+    /// times every RSP command or samples the CPU. Implies [`Self::trace`].
+    pub prof: Option<ProfMode>,
     /// The Web host crate (`[web] package`, default `<name>-web`), the
     /// page's canvas id and title (`[web] canvas_id`, `page_title`).
     pub web_package: String,
@@ -518,11 +521,15 @@ impl Project {
     /// The cargo arguments of a `--trace` build: the engine's zones compiled
     /// in through `trino-core`'s feature (every game and host links it).
     pub fn trace_features(&self) -> Vec<String> {
-        if self.trace {
-            vec!["--features".into(), "trino-core/trace".into()]
-        } else {
-            Vec::new()
+        if !self.trace {
+            return Vec::new();
         }
+        let mut f = String::from("trino-core/trace");
+        if let Some(feature) = self.prof.and_then(ProfMode::feature) {
+            f.push_str(",trino-platform-n64/");
+            f.push_str(feature);
+        }
+        vec!["--features".into(), f]
     }
 
     /// The engine's own demo: castle64 through `apps/n64` and `apps/3ds`.
@@ -548,6 +555,7 @@ impl Project {
             n3ds_speedup: true,
             n3ds_save_name: "castle64".into(),
             trace: false,
+            prof: None,
             web_package: "trino-app-web".into(),
             web_canvas_id: DEFAULT_CANVAS_ID.into(),
             web_title: "Trino".into(),
@@ -755,6 +763,7 @@ impl Project {
             n3ds_speedup: n3ds.speedup,
             n3ds_save_name,
             trace: false,
+            prof: None,
             web_package,
             web_canvas_id,
             web_title,
@@ -854,6 +863,30 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn prof_modes_parse_and_choose_features() {
+        assert_eq!(ProfMode::parse("rsp"), Ok(ProfMode::Rsp));
+        assert_eq!(ProfMode::parse("counters"), Ok(ProfMode::Scopes));
+        assert!(ProfMode::parse("gpu").is_err());
+        let mut args: Vec<String> = ["test", "n64", "--prof", "sample"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(ProfMode::take(&mut args), Ok(Some(ProfMode::Sample)));
+        assert_eq!(args, ["test", "n64"]);
+        let mut p = Project::engine();
+        assert!(p.trace_features().is_empty(), "a plain build");
+        p.trace = true;
+        assert_eq!(p.trace_features(), ["--features", "trino-core/trace"]);
+        p.prof = Some(ProfMode::Rsp);
+        assert_eq!(
+            p.trace_features(),
+            ["--features", "trino-core/trace,trino-platform-n64/prof-rsp"]
+        );
+        p.prof = Some(ProfMode::Scopes);
+        assert_eq!(p.trace_features(), ["--features", "trino-core/trace"]);
+    }
+
     use super::*;
 
     const SAMPLE: &str = r#"
@@ -1226,5 +1259,64 @@ page_title = \"My Game ' Web\"
         );
         let bad = text.replace("canvas_id", "canvas");
         assert!(Project::parse(&bad, "/g".into(), "/e".into()).is_err());
+    }
+}
+
+/// What an instrumented N64 build measures beyond the trace's zones and the
+/// backend counters (`--prof`, `TRINO_PROF`; issue #79, ADR 0038).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfMode {
+    /// The zones and counters alone: the same build as `--trace`.
+    Scopes,
+    /// Drain after every RSP command and time it (`TRINO_PROF_RSP:` lines).
+    Rsp,
+    /// Sample the CPU's PC from a timer interrupt (`TRINO_PROF_SAMPLE:`).
+    Sample,
+}
+
+impl ProfMode {
+    pub fn parse(s: &str) -> Result<ProfMode, String> {
+        match s {
+            "scopes" | "counters" => Ok(ProfMode::Scopes),
+            "rsp" => Ok(ProfMode::Rsp),
+            "sample" => Ok(ProfMode::Sample),
+            other => Err(format!("--prof {other}: expected scopes, rsp or sample")),
+        }
+    }
+
+    /// `trino-platform-n64`'s feature for this mode, if it has one.
+    pub fn feature(self) -> Option<&'static str> {
+        match self {
+            ProfMode::Scopes => None,
+            ProfMode::Rsp => Some("prof-rsp"),
+            ProfMode::Sample => Some("prof-sample"),
+        }
+    }
+
+    /// Take `--prof <mode>` out of `args`; else `TRINO_PROF` when the
+    /// command is an N64 `build`, `run` or `test` (the variable stays
+    /// harmless for every other command).
+    pub fn take(args: &mut Vec<String>) -> Result<Option<ProfMode>, String> {
+        if let Some(i) = args.iter().position(|a| a == "--prof") {
+            let v = args
+                .get(i + 1)
+                .cloned()
+                .ok_or("--prof needs scopes, rsp or sample")?;
+            args.drain(i..i + 2);
+            return ProfMode::parse(&v).map(Some);
+        }
+        let n64 = matches!(
+            (
+                args.first().map(String::as_str),
+                args.get(1).map(String::as_str)
+            ),
+            (Some("build" | "run" | "test"), Some("n64"))
+        );
+        match std::env::var("TRINO_PROF") {
+            Ok(v) if n64 && !v.trim().is_empty() && v.trim() != "off" => {
+                ProfMode::parse(v.trim()).map(Some)
+            }
+            _ => Ok(None),
+        }
     }
 }

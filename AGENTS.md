@@ -1036,6 +1036,26 @@ since #122.
   - **Editor:** the Profiler tab (timeline per track with zoom, per-frame flame view, zone
     table, compare two traces or sessions, follows a growing file; `TRINO_EDITOR_TAB=profiler`,
     `TRINO_EDITOR_TRACE`, `TRINO_EDITOR_TRACE_B`). Skill: `profiling`.
+- **Performance instrumentation (2026-10-29, ADR 0038, GitHub #79 + #105):** the N64
+  measurements #69 wrote by hand, as tools.
+  - **Instrumented builds:** `--trace` (= `--prof scopes`) adds zones in the N64
+    renderer's hot paths (`memo`, `eligible`, `rsp cmd`, `cpu tnl`, `rsp submit`, `water
+    frame`, `water rings`) and backend counters (`trino_platform_n64::prof`: memo hits,
+    misses, evictions, water memo, RSP rejects, and from `shim_prof.o` rspq words, RSP
+    commands, overlay switches, flushes, texture uploads and resident reuses, CPU
+    triangles) on each `TRINO_PERF_SCENE` line and `TRINO_FRAME`. `--prof rsp` times every
+    RSP command alone (a fit per overlay); `--prof sample` samples the CPU's PC from a
+    timer (symbolized, its own ~5 % cost printed). A plain build links none of it.
+  - **Reports:** every `test n64` writes `target/perf/n64-<scene>.json`
+    (`trino_trace::perf`); `cargo xtask perf report`; `cargo xtask perf ab --base <rev>
+    --control` (worktrees, 8 paddings, a no-op control arm, `same_work`); `cargo xtask rsp
+    count` (static instructions per overlay path, IMEM/DMEM, pinned in
+    `tests/perf/rsp_counts.toml` by `test n64`).
+  - **Editor:** Profiler › Reports (the Game view's PC frame live, a report vs a report)
+    and A/B (spread per padding); Play with the tab showing attaches a trace.
+  - **#105:** the N64 play loop prints its trace over 60 frames (ISViewer ~310 µs a line);
+    hot-reloaded game zones reach the host's ring (`Platform::trace_hooks`, `watch pc
+    --trace`).
 - **Shader precompilation and the thread budget (2026-10-24, ADR 0031, GitHub #101):**
   nothing compiles at run time on the N64 (RSP overlays assembled by the build) or the 3DS
   (picasso). On the PC and the Web, `Renderer::precompile(&PrecompileRequest::EVERYTHING)`
@@ -1325,6 +1345,10 @@ cargo xtask net local [--game solid-eleven] [--sim latency=80,jitter=10,loss=3] 
 cargo xtask net web                                               # two browser pages online over WebRTC
 cargo xtask net config [--json] | net config set players.max=2 net.mode=delay   # trino.toml [players] / [net]
 TRINO_NET=host:7300 | join:<ip>:7300 | lobby:<code>@<ip>:7400  # online play in trino-runner-pc (TRINO_NET_SIM=latency=…)
+cargo xtask test n64 --trace | --prof rsp | --prof sample   # zones + counters / RSP µs per command / CPU samples (target/perf/*.json)
+cargo xtask perf report <file.json..> [--json]   # a perf report or an A/B again
+cargo xtask perf ab --base <rev> [--control] [--paddings N] [--reuse] [--json]   # N64 A/B over code layouts (worktrees)
+cargo xtask rsp count [--blocks] [--json] [--bless]   # RSP instructions per overlay path, IMEM/DMEM (tests/perf/rsp_counts.toml)
 cargo xtask agents sync   # mirror .agents/skills/ into .claude/skills/ (check: agents check)
 cargo xtask fuzz list|smoke [<t>..] [--iters N]|corpus [--commit-seeds]|repro <file>|keep <file> [--json]   # fuzz targets on stable (issue #68)
 cargo xtask fuzz run <target>|all [--time 60]   # libFuzzer + ASan + overflow checks (nightly, cargo install cargo-fuzz)
@@ -1607,6 +1631,15 @@ cargo test --workspace
   memory, so the ripple oracle failed in CI only (PR #92). The draw path parks replaced
   commands in `water_grave` for two frames; anything new that hands the RSP a heap
   address does the same, or keeps the owner alive until `trino_drain`.
+- **A sampled N64 profile charges interrupts-off time to `enable_interrupts`** (the timer
+  fires when they come back on) and RSP waits to `__rsp_check_assert`/`rspq_*sync*`: read
+  those rows as waits, not work (`--prof sample`, ADR 0038 §7).
+- **An instrumented N64 ROM (`--trace`, `--prof`) is another binary:** `--prof rsp`
+  drains around every command and the zones cost time, so its numbers are reported,
+  never gated or blessed. Judge a change on plain ROMs over paddings (`perf ab`).
+- **`rsp_trino.S` labels are `rsp count`'s paths:** renaming or moving one (even the
+  code-free `water_ripple_pass`, `water_lit`) changes `tests/perf/rsp_counts.toml`; `test
+  n64` fails until it is blessed on purpose.
 - **An N64 failure only CI sees can be the data layout:** CI's toolchain path (in the
   ROM's panic strings) differs from yours. Rebuild with `--remap-path-prefix` to CI's
   path (the `ci` skill › Debugging) before calling it flaky.

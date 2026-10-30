@@ -8,4 +8,5 @@ repository.workspace = true
 
 [dependencies]
 trino-core = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }

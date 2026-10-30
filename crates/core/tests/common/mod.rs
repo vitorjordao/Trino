@@ -932,6 +932,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
         // Physics (v7): the default layer, no character.
         b.extend_from_slice(&trino_core::physics::LAYER_DEFAULT.to_le_bytes());
         b.extend_from_slice(&[0; trino_core::scene::TSCN_PHYSICS_BYTES - 2]);
+        // Access (v8): no semantic slot, palette or outline.
+        b.extend_from_slice(&[0; trino_core::scene::TSCN_ACCESS_BYTES]);
         assert_eq!(b.len() - start, TSCN_NODE_BYTES);
     }
     b.extend_from_slice(&data);

@@ -147,6 +147,18 @@ pub struct Inspection {
     pub columns: Vec<Column>,
 }
 
+/// A sound's caption keys as the manifest has them (`None`: unset), read
+/// apart from the codec measurements (a checkbox must not re-measure
+/// every platform).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CaptionKeys {
+    pub key: Option<String>,
+    pub important: Option<bool>,
+    pub priority: Option<u8>,
+    pub direction: Option<bool>,
+    pub seconds: Option<f32>,
+}
+
 impl Inspection {
     /// The settings the PC bakes with (the defaults the fields show).
     pub fn settings(&self) -> Option<&AudioSettings> {
@@ -495,9 +507,41 @@ pub struct AudioView {
     pub quality_edit: Option<f32>,
     /// Errors already written to the Console.
     pub logged: std::collections::HashSet<String>,
+    /// The caption keys of the sound shown, and the key and sound they were
+    /// read at (issue #96).
+    caption: Option<(Key, String, Result<CaptionKeys, String>)>,
+    /// The "New key…" field (`Some`: open).
+    pub new_caption_key: Option<String>,
+    /// Where the Preview button shows the caption.
+    pub caption_place: trino_core::access::CaptionPlace,
 }
 
 impl AudioView {
+    /// The caption keys last read (tests, hooks).
+    #[cfg(test)]
+    pub fn caption_shown(&self) -> Option<&CaptionKeys> {
+        self.caption.as_ref().and_then(|(_, _, c)| c.as_ref().ok())
+    }
+
+    /// `logical`'s caption keys, re-read when the manifest changes.
+    pub fn caption(
+        &mut self,
+        assets: &Path,
+        logical: &str,
+        key: Key,
+    ) -> Result<CaptionKeys, String> {
+        if !self
+            .caption
+            .as_ref()
+            .is_some_and(|(k, l, _)| *k == key && l == logical)
+        {
+            self.caption = Some((key, logical.to_string(), caption_keys(assets, logical)));
+        }
+        self.caption
+            .as_ref()
+            .map_or(Ok(CaptionKeys::default()), |(_, _, c)| c.clone())
+    }
+
     pub fn new(preview: usize) -> Self {
         AudioView {
             preview,
@@ -689,6 +733,27 @@ impl MixState {
             audio.set_bus_muted(b, self.muted[b.index()]);
         }
     }
+}
+
+/// `logical`'s caption keys in the manifest under `assets` (issue #96).
+pub fn caption_keys(assets: &Path, logical: &str) -> Result<CaptionKeys, String> {
+    let manifest = Manifest::load(&assets.join("manifest.toml"))?;
+    let (music, name) = split(logical)?;
+    let table = if music {
+        &manifest.music
+    } else {
+        &manifest.sounds
+    };
+    let decl = table
+        .get(name)
+        .ok_or_else(|| format!("`{logical}` is not in the manifest"))?;
+    Ok(CaptionKeys {
+        key: decl.caption.clone(),
+        important: decl.important,
+        priority: decl.caption_priority,
+        direction: decl.direction,
+        seconds: decl.caption_seconds,
+    })
 }
 
 #[cfg(test)]

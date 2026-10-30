@@ -40,6 +40,7 @@ fn node(glow: Option<Glow>) -> SceneNode {
         vis: None,
         glow,
         character: None,
+        access: None,
     }
 }
 

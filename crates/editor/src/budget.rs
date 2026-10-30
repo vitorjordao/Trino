@@ -277,6 +277,16 @@ pub fn platform_lines_on(
             out.push((format!("{label} {line}"), level));
         }
     }
+    // High-contrast outlines (issue #96): the draws they add per target,
+    // and the advice for a palette on water (off the N64's RSP).
+    for (b, label) in [(n64, n64_label), (n3ds, n3ds_label), (pc, "PC")] {
+        if let Some(line) = trino_scene::budget::outline_line(b) {
+            out.push((format!("{label} {line}"), Level::Ok));
+        }
+    }
+    for line in trino_scene::budget::water_palette_lines(n64) {
+        out.push((format!("{n64_label} {line}"), Level::Near));
+    }
     out
 }
 

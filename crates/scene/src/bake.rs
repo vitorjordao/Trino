@@ -137,6 +137,12 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         if item.character.is_some() {
             flags |= 1 << 16;
         }
+        if item.outline.is_some() {
+            flags |= 1 << 17;
+        }
+        if p.palette.is_some() {
+            flags |= 1 << 18;
+        }
         out.extend_from_slice(&flags.to_le_bytes());
         out.extend_from_slice(&item.model.as_ref().map_or(0, |(id, _)| id.0).to_le_bytes());
         rgba(&mut out, p.tint);
@@ -249,6 +255,25 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         f32s(
             &mut out,
             &[ch.radius, ch.height, ch.max_slope_deg, ch.step_height],
+        );
+        // Accessibility (v8, issue #96): semantic slots, the palette
+        // (their base colors), the high-contrast outline.
+        for id in item.semantic {
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        for c in p.palette.unwrap_or([trino_core::Color::WHITE; 4]) {
+            rgba(&mut out, c);
+        }
+        let o = item.outline.unwrap_or(trino_core::scene::NodeOutline {
+            color: trino_core::Color::BLACK,
+            center: trino_core::Vec3::ZERO,
+            radius: 0.0,
+            pixels: 0.0,
+        });
+        rgba(&mut out, o.color);
+        f32s(
+            &mut out,
+            &[o.center.x, o.center.y, o.center.z, o.radius, o.pixels],
         );
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }

@@ -132,6 +132,43 @@ pub struct ViewInput<'a> {
     /// The scene's file (the consoles' bake grades it when the manifest
     /// says `bake_grading`: the Game view previews that, issue #64).
     pub scene_path: &'a std::path::Path,
+    /// The project's semantic colors and the Accessibility tab's
+    /// simulation (issue #96): slot colors in its color-vision mode,
+    /// outlines while its high contrast is on.
+    pub access: (
+        &'a trino_scene::access::PalettesDef,
+        trino_core::access::AccessSettings,
+    ),
+    /// The audio inspector's caption preview (issue #96): the queue, the
+    /// string tables and the language the editor previews in.
+    pub captions: Option<(
+        &'a crate::access::CaptionPreview,
+        &'a trino_scene::i18n::Langs,
+        Option<&'a str>,
+    )>,
+}
+
+/// `item`'s surface under the views' simulation (issue #96): each semantic
+/// slot in the simulated color-vision mode (the palettes the editor edits,
+/// so a change shows before any bake).
+pub fn view_params(
+    item: &trino_scene::DrawItem,
+    access: &(
+        &trino_scene::access::PalettesDef,
+        trino_core::access::AccessSettings,
+    ),
+) -> ModelParams {
+    let mut params = item.params;
+    if item.semantic_names.iter().any(Option::is_some)
+        && let Some(palette) = &mut params.palette
+    {
+        for (c, n) in palette.iter_mut().zip(&item.semantic_names) {
+            if let Some(v) = n.as_deref().and_then(|n| access.0.color(n, access.1.cvd)) {
+                *c = v;
+            }
+        }
+    }
+    params
 }
 
 pub enum ViewAction {
@@ -268,8 +305,9 @@ pub fn target_of(profile: SimProfile) -> trino_scene::Target {
 }
 
 /// What a rendered frame depended on: (content rev, size, asset generation,
-/// camera, animation time). Same key = skip the render.
-type RenderKey = (u64, (u32, u32), u64, [f32; 7], f32);
+/// camera, animation time, the accessibility simulation's mode and
+/// contrast). Same key = skip the render.
+type RenderKey = (u64, (u32, u32), u64, [f32; 7], f32, (u8, bool));
 
 impl Viewport {
     pub fn new(render_state: RenderState, kind: ViewKind, profile: SimProfile) -> Self {
@@ -665,7 +703,7 @@ impl Viewport {
                 LodPick::None => continue,
             };
             let id = &lod_id;
-            let mut params = item.params;
+            let mut params = view_params(item, &input.access);
             if !input.animate {
                 params.anim = None;
             }
@@ -684,6 +722,13 @@ impl Viewport {
             }
             if let Some(m) = input.project.model_by_id(*id) {
                 tris += m.tris;
+            }
+            // High contrast simulated: the outline's ring first (issue #96).
+            if input.access.1.high_contrast
+                && let Some(o) = &item.outline
+            {
+                let m = place(&item.matrix);
+                o.at(&m).draw(r, &camera, *id, &m, Material::VertexLit);
             }
             r.draw_model_matrix(*id, &place(&item.matrix), Material::VertexLit, &params);
         }
@@ -717,6 +762,24 @@ impl Viewport {
                         },
                     );
                 }
+            }
+            // The audio inspector's caption preview (issue #96), last: on
+            // the 3DS profile `SecondScreen` moves the frame to the bottom.
+            if let Some((preview, langs, lang)) = input.captions
+                && !preview.queue.is_empty()
+            {
+                // The editor's preview language, else the default one.
+                let lang = lang
+                    .map(str::to_string)
+                    .or_else(|| langs.default.clone())
+                    .or_else(|| langs.names().into_iter().next())
+                    .unwrap_or_default();
+                let strings = langs.strings(&lang);
+                let style = trino_core::access::CaptionStyle {
+                    place: preview.place,
+                    ..trino_core::access::CaptionStyle::DEFAULT
+                };
+                preview.queue.draw(r, &strings, &style);
             }
         }
         r.end_frame();
@@ -808,6 +871,9 @@ impl Viewport {
             input.project.generation,
             cam_key,
             anim_time,
+            // The simulation's mode and contrast pick slot colors and
+            // outlines (issue #96).
+            (input.access.1.cvd as u8, input.access.1.high_contrast),
         );
         let size_changed = self.rendered.as_ref().map(|r| r.1) != Some(internal);
         let dynres_live = self

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use trino_core::{
-    Button, Camera3, Color, InputState, Material, Renderer, SpriteId, SpriteParams, Vec2, Vec3,
+    Button, Camera3, Color, InputState, Renderer, SpriteId, SpriteParams, Vec2, Vec3,
 };
 use trino_scene::{Library, Scene, Target, resolve_for};
 
@@ -35,6 +35,11 @@ pub struct ScenePlayer {
     pending: f32,
     /// Graph errors already printed (once each, not every frame).
     reported: Vec<String>,
+    /// The player's accessibility settings and the project's semantic
+    /// colors (issue #96): slot colors per color-vision mode, outlines in
+    /// high contrast.
+    access: trino_core::access::AccessSettings,
+    access_data: trino_core::access::AccessBlob,
 }
 
 /// Sum of modification times of everything a scene depends on.
@@ -108,6 +113,8 @@ impl ScenePlayer {
             graphs: trino_asset_pipeline::anim_graph::GraphPlayback::new(Path::new(".")),
             pending: 0.0,
             reported: Vec::new(),
+            access: trino_core::access::AccessSettings::default(),
+            access_data: trino_core::access::AccessBlob::default(),
         };
         player.report();
         Ok(player)
@@ -171,6 +178,13 @@ impl ScenePlayer {
         }
     }
 
+    /// The player's accessibility settings and the project's `access/data`
+    /// blob, read from `platform` each frame (issue #96).
+    pub fn set_access(&mut self, platform: &dyn trino_core::Platform) {
+        self.access = platform.access();
+        self.access_data.get(platform);
+    }
+
     pub fn render(&mut self, r: &mut dyn Renderer) {
         let env = &self.scene.environment;
         let c = env.clear;
@@ -213,7 +227,13 @@ impl ScenePlayer {
             }
             // The quality preset's LOD bias (#55) moves the LOD starts.
             if let Some(id) = item.lod_from_biased(camera.eye, r.lod_bias()).model() {
-                r.draw_model_matrix(id, &item.matrix, Material::VertexLit, &item.params);
+                let access = trino_core::NodeAccess::new(
+                    self.access_data.data(),
+                    &self.access,
+                    Some(&camera),
+                );
+                let params = item.params_for(&access);
+                item.draw_with(r, id, &item.matrix, &params, &access);
             }
             if let Some(g) = &item.glow {
                 trino_core::draw_glow(r, g, item.matrix.transform_point(Vec3::ZERO));

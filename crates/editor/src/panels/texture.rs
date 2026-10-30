@@ -39,6 +39,28 @@ pub fn section(app: &mut App, ui: &mut egui::Ui, logical: &str) {
         app.log.toast(crate::log::Level::Error, e);
     }
     let measuring = app.textures.measuring();
+    // The color-vision icon (issue #96), for sprites.
+    let icon_row = logical.starts_with("sprites/").then(|| {
+        let icon = app.textures.icon(&assets, logical, key);
+        let sprites: Vec<String> = app
+            .project
+            .sprites
+            .keys()
+            .filter(|k| k.starts_with("sprites/") && k.as_str() != logical)
+            .cloned()
+            .collect();
+        let hint = app.project.sprites.get(logical).and_then(|sp| {
+            let rgb = trino_asset_pipeline::access::mean_opaque(&sp.rgba)?;
+            trino_scene::access::icon_hint(
+                &app.access.palettes,
+                logical,
+                rgb,
+                icon.is_some(),
+                trino_scene::access::ICON_SPRITE_DELTA_E,
+            )
+        });
+        (icon, sprites, hint)
+    });
     let crate::textures::Textures {
         current,
         preview: platform,
@@ -81,6 +103,25 @@ pub fn section(app: &mut App, ui: &mut egui::Ui, logical: &str) {
             reasons(ui, insp);
         },
     );
+    if let Some((icon, sprites, hint)) = &icon_row {
+        theme::component(
+            ui,
+            "texture-cvd-icon",
+            icon::EYE,
+            c::SPRITE,
+            "Color vision",
+            |ui| {
+                cvd_icon(
+                    ui,
+                    logical,
+                    icon.as_deref(),
+                    sprites,
+                    hint.as_ref(),
+                    &mut cmds,
+                )
+            },
+        );
+    }
     theme::component(
         ui,
         "texture-preview",
@@ -536,4 +577,63 @@ fn image(
         egui::Stroke::new(1.0, c::BORDER),
         egui::StrokeKind::Inside,
     );
+}
+
+/// A sprite's color-vision icon (`cvd_icon`, issue #96): the sprite drawn
+/// with it while the player's color-vision mode is on. Written to the
+/// manifest; a hint when its art is a `distinct` group's color and it has
+/// none (`cargo xtask access check`'s check).
+fn cvd_icon(
+    ui: &mut egui::Ui,
+    logical: &str,
+    icon: Option<&str>,
+    sprites: &[String],
+    hint: Option<&trino_scene::access::Finding>,
+    cmds: &mut Vec<Cmd>,
+) {
+    theme::prop(ui, "Icon", |ui| {
+        let mut pick: Option<Option<String>> = None;
+        let w = ui.available_width().min(220.0);
+        let r = egui::ComboBox::from_id_salt("texture-cvd-icon")
+            .selected_text(icon.unwrap_or("none"))
+            .width(w)
+            .truncate()
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(icon.is_none(), "none").clicked() {
+                    pick = Some(None);
+                }
+                for s in sprites {
+                    if ui.selectable_label(icon == Some(s.as_str()), s).clicked() {
+                        pick = Some(Some(s.clone()));
+                    }
+                }
+            });
+        r.response
+            .on_hover_text("Drawn with this sprite while the player's color-vision mode is on")
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::ComboBox,
+                    true,
+                    "Sprite icon (color vision)",
+                )
+            });
+        if icon.is_some() && theme::named_icon_button(ui, icon::X, "Remove the icon").clicked() {
+            pick = Some(None);
+        }
+        if let Some(p) = pick
+            && p.as_deref() != icon
+        {
+            cmds.push(Cmd::SetSpriteIcon(logical.to_string(), p));
+        }
+    });
+    if let Some(f) = hint {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("{} {}", icon::WARNING, f.message))
+                    .size(11.0)
+                    .color(c::WARN),
+            )
+            .wrap(),
+        );
+    }
 }

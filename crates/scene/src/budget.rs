@@ -86,6 +86,64 @@ pub struct FrameBudget {
     /// for it (`environment.stereo`, issue #63): the frame at the full 3D
     /// slider, both eyes.
     pub stereo: Option<StereoBudget>,
+    /// What the high-contrast outlines add while the player has high
+    /// contrast on (issue #96): one unlit draw per outlined part.
+    pub outlines: OutlineBudget,
+    /// Slots colored by a palette on a water surface (issue #96): the one
+    /// case a palette still leaves the N64's RSP (#128). (name, slots the
+    /// mesh uses).
+    pub water_palettes: Vec<(String, u32)>,
+}
+
+/// The high-contrast outlines' cost ([`estimate`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OutlineBudget {
+    /// Extra draws (one per outlined part in view).
+    pub draws: u32,
+    /// N64: of those, the ones the RSP takes (an unlit draw stays there).
+    pub rsp: u32,
+    /// Their source triangles.
+    pub tris: u32,
+}
+
+/// `high contrast: +2 outline draws (2 on the RSP), 160 triangles` (`None`
+/// without outlines).
+pub fn outline_line(b: &FrameBudget) -> Option<String> {
+    let o = b.outlines;
+    if o.draws == 0 {
+        return None;
+    }
+    let mut line = format!(
+        "high contrast: +{} outline draw{}, {} triangles",
+        o.draws,
+        if o.draws == 1 { "" } else { "s" },
+        o.tris
+    );
+    if b.target.base() == Target::N64 {
+        line += &format!(" ({} on the RSP)", o.rsp);
+    }
+    Some(line)
+}
+
+/// Advice for palettes on water (issue #96): "use a tint" where the mesh
+/// has a single slot, so the draw stays on the N64's RSP.
+pub fn water_palette_lines(b: &FrameBudget) -> Vec<String> {
+    b.water_palettes
+        .iter()
+        .map(|(name, slots)| {
+            if *slots == 1 {
+                format!(
+                    "{name}: a palette on water leaves the N64's RSP — its mesh has one color \
+                     slot: use a tint instead"
+                )
+            } else {
+                format!(
+                    "{name}: a palette on water leaves the N64's RSP ({slots} slots: split the \
+                     water or bake its colors)"
+                )
+            }
+        })
+        .collect()
 }
 
 /// A stereo frame's cost ([`stereo_of`]): the top screen drawn once per
@@ -599,6 +657,21 @@ pub fn estimate<'m>(
             &item.params,
             &mut |_| {},
         );
+        // The outline's copy (high contrast on): unlit, solid, both faces.
+        if let Some(o) = &item.outline {
+            let ring = o.at(&item.matrix);
+            if let Some(m) = ring.matrix(camera, screen.y, &item.matrix) {
+                b.outlines.draws += 1;
+                b.outlines.tris += (mesh.index_count / 3) as u32;
+                if console == Target::N64 && rsp_plan(&ctx, &mesh, &m, &ring.params()).is_ok() {
+                    b.outlines.rsp += 1;
+                }
+            }
+        }
+        if item.params.water.is_some() && item.params.palette.is_some() && mesh.has_slots() {
+            b.water_palettes
+                .push((item.name.clone(), mesh.slots_used().count_ones()));
+        }
         b.tnl.add(&stats);
         if stats.culled > 0 {
             b.wasted.push(item.name.clone());

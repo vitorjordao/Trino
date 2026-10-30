@@ -532,6 +532,14 @@ impl Project {
         self.edit_manifest(|t| edit::set_texture_key(t, kind, name, key, value))
     }
 
+    /// Set or remove a sprite's color-vision icon (`cvd_icon`, issue #96).
+    pub fn set_sprite_icon(&self, logical: &str, icon: Option<&str>) -> Result<(), String> {
+        let name = logical
+            .strip_prefix("sprites/")
+            .ok_or_else(|| format!("`{logical}` is not a sprite"))?;
+        self.edit_manifest(|t| edit::set_sprite_icon(t, name, icon))
+    }
+
     /// Set or remove a sound's `quality`, `stream`, `loop` or `bus`
     /// (`sounds/x`, `music/x`). Live: the watcher rebakes.
     pub fn set_audio_key(

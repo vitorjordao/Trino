@@ -95,6 +95,23 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
             .into_iter()
             .filter_map(|(n, p)| Some((n, trino_scene::anim::AnimGraphDef::load(&p).ok()?)))
             .collect();
+    // Semantic colors (issue #96): the palettes the Accessibility tab
+    // edits, and the mode its simulation shows.
+    let semantic: Vec<(String, trino_core::Color)> = app
+        .access
+        .palettes
+        .colors
+        .iter()
+        .map(|(n, c)| (n.clone(), c.get(trino_core::access::CvdMode::Off)))
+        .collect();
+    let sim = app.access.view().1;
+    let sim_colors: std::collections::BTreeMap<String, trino_core::Color> = app
+        .access
+        .palettes
+        .colors
+        .iter()
+        .map(|(n, c)| (n.clone(), c.get(sim.cvd)))
+        .collect();
     let App {
         doc,
         project,
@@ -262,6 +279,12 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
             if let Some(paths) = &render_paths {
                 render_path_row(ui, paths);
             }
+            // Color slots (issue #96): a semantic color or a literal one
+            // per slot the mesh uses.
+            let used = asset
+                .and_then(|a| trino_core::render3d::Mesh::from_tmdl(&a.tmdl).ok())
+                .map_or(0, |mesh| mesh.slots_used());
+            slot_colors(ui, m, used, &semantic, &sim_colors, sim.cvd);
 
             // Material picker + inline editor.
             theme::prop(ui, "Material", |ui| {
@@ -857,6 +880,22 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
         e.anim_graph = None;
     }
 
+    // Outline (issue #96).
+    let mut remove_outline = false;
+    if let Some(o) = &mut e.outline {
+        theme::component(
+            ui,
+            "c-outline",
+            icon::CIRCLE_DASHED,
+            c::WARN,
+            "Outline (high contrast)",
+            |ui| remove_outline = outline_component(ui, o, sim.high_contrast),
+        );
+    }
+    if remove_outline {
+        e.outline = None;
+    }
+
     // Glow (issue #64).
     let mut remove_glow = false;
     if let Some(g) = &mut e.glow {
@@ -1105,6 +1144,17 @@ fn entity(app: &mut App, ui: &mut egui::Ui, path: &[usize]) {
                 }
                 if e.glow.is_none() && ui.button(format!("{}  Glow", icon::SUN)).clicked() {
                     e.glow = Some(trino_scene::GlowComponent::default());
+                }
+                if e.model.is_some()
+                    && e.outline.is_none()
+                    && ui
+                        .button(format!("{}  Outline", icon::CIRCLE_DASHED))
+                        .on_hover_text(
+                            "A ring around the model while the player's high contrast is on",
+                        )
+                        .clicked()
+                {
+                    e.outline = Some(trino_scene::OutlineComponent::default());
                 }
                 // A graph for its model (the first that animates it).
                 let model_path = e.model.as_ref().map(|m| m.path.clone());
@@ -3067,6 +3117,176 @@ fn anim_graph_component(
     }
     ui.checkbox(&mut gc.root_motion, "Root motion moves it")
         .on_hover_text("Play (the scene player) carries it by the graph's root motion");
+    ui.small_button(format!("{} Remove", icon::TRASH)).clicked()
+}
+
+/// A model's color slots (issue #96): for each slot its mesh uses (bits
+/// `used`, `1 << slot`), the baked color, a semantic color of
+/// `assets/palettes.ron` (shown as the simulation's `mode` sees it) or a
+/// literal color. Writes `palette` of the scene's model component.
+fn slot_colors(
+    ui: &mut egui::Ui,
+    m: &mut trino_scene::ModelComponent,
+    used: u8,
+    semantic: &[(String, trino_core::Color)],
+    sim: &std::collections::BTreeMap<String, trino_core::Color>,
+    mode: trino_core::access::CvdMode,
+) {
+    use trino_scene::{SlotColor, SlotColorDef};
+    let slots: Vec<u8> = (1..=4u8).filter(|s| used & (1 << s) != 0).collect();
+    // Slots the scene colors but the mesh doesn't use stay listed (so they
+    // can be removed).
+    let mut rows = slots.clone();
+    for d in &m.palette {
+        if !rows.contains(&d.slot) {
+            rows.push(d.slot);
+        }
+    }
+    rows.sort_unstable();
+    if rows.is_empty() {
+        return;
+    }
+    ui.label(
+        RichText::new(format!("{}  Color slots", icon::PALETTE))
+            .size(12.0)
+            .color(c::TEXT_WEAK),
+    );
+    let swatch = |ui: &mut egui::Ui, col: trino_core::Color| {
+        let (r, _) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(r, 3.0, egui::Color32::from_rgb(col.r, col.g, col.b));
+    };
+    for slot in rows {
+        let at = m.palette.iter().position(|d| d.slot == slot);
+        let current = at.map(|i| m.palette[i].color.clone());
+        let label = match &current {
+            None => "Baked".to_string(),
+            Some(SlotColor::Rgb(_)) => "Color".to_string(),
+            Some(SlotColor::Semantic(n)) => n.clone(),
+        };
+        let mut pick: Option<Option<SlotColor>> = None;
+        theme::prop(ui, &format!("Slot {slot}"), |ui| {
+            let w = (ui.available_width() - 60.0).max(80.0);
+            theme::fixed_width(ui, w, |ui| {
+                egui::ComboBox::from_id_salt(("slot-color", slot))
+                    .selected_text(&label)
+                    .width(w)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(current.is_none(), "Baked").clicked() {
+                            pick = Some(None);
+                        }
+                        if ui
+                            .selectable_label(matches!(current, Some(SlotColor::Rgb(_))), "Color")
+                            .clicked()
+                        {
+                            pick = Some(Some(SlotColor::Rgb([255, 255, 255])));
+                        }
+                        for (n, _) in semantic {
+                            let on = matches!(&current, Some(SlotColor::Semantic(x)) if x == n);
+                            if ui.selectable_label(on, n).clicked() {
+                                pick = Some(Some(SlotColor::Semantic(n.clone())));
+                            }
+                        }
+                    })
+                    .response
+                    .widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::ComboBox,
+                            true,
+                            format!("Slot {slot} color"),
+                        )
+                    });
+            });
+            match current {
+                Some(SlotColor::Semantic(n)) => match sim.get(&n) {
+                    Some(c) => {
+                        swatch(ui, *c);
+                    }
+                    None => {
+                        ui.label(RichText::new(icon::WARNING).color(c::WARN))
+                            .on_hover_text(format!("`{n}` is not in assets/palettes.ron"));
+                    }
+                },
+                Some(SlotColor::Rgb(_)) => {
+                    if let Some(i) = at
+                        && let SlotColor::Rgb(rgb) = &mut m.palette[i].color
+                    {
+                        theme::color_rgb(ui, rgb);
+                    }
+                }
+                None => {}
+            }
+        });
+        if let Some(choice) = pick {
+            match (choice, at) {
+                (None, Some(i)) => {
+                    m.palette.remove(i);
+                }
+                (Some(col), Some(i)) => m.palette[i].color = col,
+                (Some(col), None) => m.palette.push(SlotColorDef { slot, color: col }),
+                (None, None) => {}
+            }
+            m.palette.sort_by_key(|d| d.slot);
+        }
+        if !slots.contains(&slot) {
+            ui.label(
+                RichText::new(format!("{} the mesh has no slot {slot}", icon::WARNING))
+                    .size(11.0)
+                    .color(c::WARN),
+            );
+        }
+    }
+    if mode != trino_core::access::CvdMode::Off {
+        ui.label(
+            RichText::new(format!(
+                "Showing {} (Accessibility › simulation)",
+                mode.label()
+            ))
+            .size(11.0)
+            .color(c::TEXT_FAINT),
+        );
+    }
+}
+
+/// An entity's Outline component (issue #96): a ring around its model
+/// while the player's high contrast is on. Returns true to remove it.
+fn outline_component(
+    ui: &mut egui::Ui,
+    o: &mut trino_scene::OutlineComponent,
+    simulated: bool,
+) -> bool {
+    theme::prop(ui, "Color", |ui| theme::color_rgb(ui, &mut o.color));
+    theme::prop(ui, "Width", |ui| {
+        ui.add(
+            egui::DragValue::new(&mut o.pixels)
+                .speed(0.1)
+                .range(0.5..=8.0)
+                .suffix(" px"),
+        )
+        .on_hover_text("At the model's depth, in a 240-line picture's pixels");
+    });
+    theme::prop(ui, "Radius", |ui| {
+        let mut auto = o.radius == 0.0;
+        if ui.checkbox(&mut auto, "From the model").changed() {
+            o.radius = if auto { 0.0 } else { 1.0 };
+        }
+        if !auto {
+            ui.add(
+                egui::DragValue::new(&mut o.radius)
+                    .speed(0.02)
+                    .range(0.01..=100.0)
+                    .suffix(" m"),
+            );
+        }
+    });
+    if !simulated {
+        ui.label(
+            RichText::new("Shows in the views with Accessibility › high contrast simulated.")
+                .size(11.0)
+                .color(c::TEXT_FAINT),
+        );
+    }
     ui.small_button(format!("{} Remove", icon::TRASH)).clicked()
 }
 

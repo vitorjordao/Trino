@@ -131,7 +131,9 @@ pub use render3d::{
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use replay::{Recorder, Replay, ReplayError, StateHasher};
-pub use scene::{BakedScene, LodLevel, LodPick, Lods, SceneNode, Tags};
+pub use scene::{
+    BakedScene, LodLevel, LodPick, Lods, NodeAccess, NodeOutline, SceneNode, Tags, node_access,
+};
 pub use services::{
     AchievementId, AchievementInfo, AchievementList, AchievementState, AchievementTable,
     AchievementToast, CrashConsent, CrashReports, HostedServices, OverlayStyle, Presence,

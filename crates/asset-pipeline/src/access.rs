@@ -278,6 +278,18 @@ pub fn check_project(
         .values()
         .filter(|d| d.cvd_icon.is_some())
         .count();
+    // Colors a `distinct` group tells apart, shown with no icon (issue
+    // #96): UI nodes set to one, sprites whose art is one.
+    if let Some(p) = load_palettes(root)?.filter(|p| !p.distinct.is_empty()) {
+        let found = icon_hints(root, manifest, &p)?;
+        line(
+            &mut r,
+            "icons",
+            "every node and sprite in a distinct group's color has an icon".into(),
+            found.is_empty(),
+        );
+        r.findings.extend(found);
+    }
 
     // Every screen at 200 % text.
     let access = trino_core::ui::UiAccess {
@@ -374,4 +386,76 @@ pub fn check_project(
         );
     }
     Ok(r)
+}
+
+/// The icon hints of `check_project` (issue #96): every UI node whose
+/// color is a `distinct` group's (`ICON_NODE_DELTA_E`) and every sprite
+/// whose mean opaque color is one (`ICON_SPRITE_DELTA_E`), without a
+/// `cvd_icon`. The editor's UI tab and texture inspector ask the same
+/// functions per node and per sprite.
+pub fn icon_hints(
+    root: &Path,
+    manifest: &Manifest,
+    palettes: &trino_scene::access::PalettesDef,
+) -> Result<Vec<trino_scene::access::Finding>, String> {
+    use trino_scene::access::{ICON_NODE_DELTA_E, ICON_SPRITE_DELTA_E, icon_hint};
+    let mut out = Vec::new();
+    for path in crate::ui::screen_files(root) {
+        let Ok(def) = trino_scene::ui::ScreenDef::load(&path) else {
+            continue;
+        };
+        let screen = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        for (at, n) in def.nodes() {
+            let Some([r, g, b, _]) = n.color else {
+                continue;
+            };
+            let subject = if n.id.is_empty() {
+                format!("{screen} node {at:?}")
+            } else {
+                format!("{screen} #{}", n.id)
+            };
+            out.extend(icon_hint(
+                palettes,
+                &subject,
+                [r, g, b],
+                !n.cvd_icon.is_empty(),
+                ICON_NODE_DELTA_E,
+            ));
+        }
+    }
+    let assets = root.join("assets");
+    for (name, decl) in &manifest.sprites {
+        if decl.cvd_icon.is_some() {
+            continue;
+        }
+        let logical = format!("sprites/{name}");
+        let Ok((_, m)) = crate::texture::master(&assets, manifest, &logical, crate::Platform::Pc)
+        else {
+            continue;
+        };
+        if let Some(rgb) = mean_opaque(&m.rgba) {
+            out.extend(icon_hint(
+                palettes,
+                &logical,
+                rgb,
+                false,
+                ICON_SPRITE_DELTA_E,
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// The mean color of the texels at least half opaque (`None`: none are).
+pub fn mean_opaque(rgba: &[u8]) -> Option<[u8; 3]> {
+    let (mut sum, mut n) = ([0u64; 3], 0u64);
+    for px in rgba.as_chunks::<4>().0.iter().filter(|p| p[3] >= 128) {
+        for c in 0..3 {
+            sum[c] += px[c] as u64;
+        }
+        n += 1;
+    }
+    (n > 0).then(|| sum.map(|s| (s / n) as u8))
 }

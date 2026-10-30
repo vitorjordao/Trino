@@ -719,6 +719,16 @@ since #122.
     `visible_if: "small"` / `"big"` 200 % reflows); `solid_eleven_menus` audits 1,716 menu
     states (27,456 pictures) across 100 % and 200 % text in every language and gamepad
     family. Self-test step `accessibility`; goldens `tests/golden/pc/access_*.png`.
+  - **Authored in the editor (2026-10-30, GitHub #96):** Assets › Audio › Caption (key from
+    the tables or a new one in every language, texts per language, important, priority,
+    direction, seconds, a Preview in the Game view), color-vision icons on UI nodes (UI
+    tab) and sprites (Assets › Texture) with a hint for a `distinct` color without one
+    (`trino_scene::access::icon_hint`, also in `access check`), and in scenes (**v8**,
+    prefabs v6, TSCN v8) a model's semantic slot colors (`palette: [(slot: 1, color:
+    Semantic("team.home"))]`, swapped by mode through `SceneNode::semantic` and
+    `scene::draw_nodes_with`) and an `outline` component drawn in high contrast (one more
+    RSP draw per part, `budget::outline_line`). Inspector › Model › Color slots, Add
+    component › Outline; the views follow the Accessibility tab's simulation.
 - **UI system (2026-10-18, ADR 0024, GitHub #58):** menus, HUDs and dialogs as data.
   - **Core (`trino_core::ui`, `no_std`, no allocation):** `UiScreen` (a static slice or a
     `TUIL` blob view), `Ui<N>` (slots, focus, scroll, 24 values, events), containers
@@ -1633,6 +1643,16 @@ cargo test --workspace
 - **An N64 failure only CI sees can be the data layout:** CI's toolchain path (in the
   ROM's panic strings) differs from yours. Rebuild with `--remap-path-prefix` to CI's
   path (the `ci` skill › Debugging) before calling it flaky.
+- **`SceneNode` bytes are paid per node and per `EntityStore` slot, in console RAM.** Two
+  decoded fields (44 bytes) for #96's slot colors and outline left the 4 MB N64 ~22 KB
+  short. Its 79 200-byte batch reserve then failed after `castle64 golden frame`, which
+  read as a stall. Optional per-node data goes behind a reference (`access:
+  Option<&'static [u8; 56]>`, decoded on use, like `Tags::Packed`). Run `test n64
+  --expansion-pak both`.
+- **The editor's views skip a render when `viewport::RenderKey` is unchanged.** Anything
+  that changes what they draw without a content edit (`rev`) must be in the key: the
+  accessibility simulation's mode and high contrast are (issue #96), or the semantic slot
+  colors and outlines would wait for the next edit.
 - **An `Option` field of a hand-written RON format reads `Some(x)`, not `x`.** A table's
   `locale: (currency: "R$")` failed with "Expected option" until its fields took a bare
   deserializer (`deserialize_with = "bare"`, `trino_scene::i18n::LocaleDef`). Give any

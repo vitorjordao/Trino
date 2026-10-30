@@ -38,6 +38,7 @@ const fn at(name: &'static str, tags: &'static [&'static str], x: f32) -> SceneN
         vis: None,
         glow: None,
         character: None,
+        access: None,
     }
 }
 

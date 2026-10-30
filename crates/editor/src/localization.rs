@@ -342,6 +342,25 @@ impl Localization {
         Ok(())
     }
 
+    /// A new key in every language (issue #96: the audio inspector's
+    /// caption), its text the key itself for each language's translator to
+    /// replace. `Err` says why not.
+    pub fn add_key_everywhere(&mut self, key: &str) -> Result<(), String> {
+        self.add_key(key)?;
+        let key = key.trim();
+        let langs: Vec<String> = self.langs.tables.keys().cloned().collect();
+        for lang in langs {
+            let table = self.langs.tables.get_mut(&lang).unwrap();
+            if !table.entries.contains_key(key) {
+                table
+                    .entries
+                    .insert(key.to_string(), EntryDef::Text(key.to_string()));
+                self.touch(&lang);
+            }
+        }
+        Ok(())
+    }
+
     /// Remove `key` from every language.
     pub fn remove_key(&mut self, key: &str) {
         let langs: Vec<String> = self

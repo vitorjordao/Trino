@@ -21,6 +21,14 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
    - `ui/themes/high_contrast.ron`: a screen theme; left-out fields are the engine's.
    - UI nodes: `cvd_icon: "sprites/x"`; controls with `min:` + `padding:` (not fixed
      `size: (Px, Px)`), long lists in `Scroll(..)` with `max: (0, h)`.
+   - Scenes (v8, issue #96): a model's `palette: [(slot: 1, color: Semantic("team.home")),
+     (slot: 2, color: Rgb((20, 20, 30)))]` and an entity's `outline: Some(())` (or
+     `Some((color: (r, g, b), pixels: 3.0, radius: 0.8))`; radius 0 = the model's bounds).
+   - Or in the editor (same files, outside edits followed): Assets › Audio › **Caption**
+     (key, texts per language, important, priority, direction, seconds, Preview in the
+     Game view), Assets › Texture › **Color vision** and the UI tab's node **icon** row,
+     Inspector › Model › **Color slots** and Add component › **Outline** (shown with the
+     Accessibility tab's simulation: its mode and high contrast).
 2. `cargo xtask access check [dir] --json` — exit 0 means clean (warnings fail too):
    - `they look 11.1 apart (ΔE), under the 20 they must keep: give one of them a
      \`deuteranopia\` alternative` — write that alternative (pick it with the simulation:
@@ -28,6 +36,10 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
    - `contrast 1.56:1, under 4.5:1` — a pair, in the named mode;
    - `[theme] text on panel: contrast …, under 7.0:1`;
    - `an important sound has no caption`, `pt-BR has no "cap.x"`;
+   - `[icons] … shows team.home (a distinct group's color) with no color-vision icon` —
+     a UI node within ΔE 3 of a `distinct` color, or a sprite whose mean opaque color is
+     within ΔE 12, has no `cvd_icon` (the editor shows the same hint on that node or
+     sprite: `trino_scene::access::icon_hint`);
    - `text overflows its box at 200 % [n64, en-US]`, `reaches past the safe area at
      200 %` — the screen fixes above.
    `dir` checks an example with its own assets (`examples/solid-eleven`,
@@ -52,6 +64,9 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
   `captions.draw(renderer, strings, &style)` **last** (`SecondScreen` switches to the 3DS
   touch screen). The wrapper forwards every `Audio` call.
 - UI: `UiEnv::of(r).with_access(&settings).with_contrast_theme(data.contrast_theme())`.
+- Scenes with semantic slots or outlines: `scene::draw_nodes_with(r, NODES, &root, t, eye,
+  visible, &NodeAccess::new(blob.data(), &settings, Some(&camera)))` (exported or baked
+  nodes); `draw_nodes` draws them at their base colors and without outlines.
 - Outlines (high contrast): `access::draw_outlined(r, &camera, model, &transform,
   material, &params, settings.high_contrast.then_some(&ring))` with
   `Outline::new(color, center, radius)` — the object's bounding sphere, shared by every
@@ -74,6 +89,14 @@ frame; the consoles ignore it. Preview: the Accessibility tab's Daltonize (with 
 without "Show as that viewer sees it").
 
 ## Traps (verified)
+
+- The editor's views re-render on a key (`viewport::RenderKey`): anything that changes
+  what they draw without a content edit must be in it. The simulation's mode and high
+  contrast are (issue #96), or the slot colors and outlines would wait for the next edit.
+- A caption, icon or slot edit writes the manifest; the texture and audio inspectors
+  re-measure every platform when the manifest's text changes. Their accessibility rows
+  read the manifest apart (`AudioView::caption`, `Textures::icon`) so a checkbox doesn't
+  wait on the codecs.
 
 - The defaults must draw exactly what they drew before: `UiAccess::NONE` multiplies by
   exactly 1 and keeps the screen's theme (every golden unchanged). A new setting goes in

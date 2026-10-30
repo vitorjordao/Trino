@@ -98,9 +98,16 @@ fn access_check_reports_one_problem_of_each_kind() {
         None,
         "text overflows its box at 200 % [n64, en-US]"
     ));
+    // A node in a distinct group's color with no icon (issue #96): the
+    // check the editor's UI tab shows on that node.
+    assert!(has(
+        "icons",
+        None,
+        "shows team.home (a distinct group's color) with no color-vision icon"
+    ));
     let warnings = findings.iter().filter(|f| f["level"] == "warning").count();
     assert_eq!(r["warnings"], warnings);
-    assert_eq!(warnings, 1, "the fallback language");
+    assert_eq!(warnings, 2, "the fallback language, the icon");
     // One platform only.
     let o = xtask(&[
         "access",

@@ -1,9 +1,11 @@
-// A button whose fixed box fits its text at 100 % but not at 200 %.
+// A button whose fixed box fits its text at 100 % but not at 200 %, and a
+// flag in team.home's red with no color-vision icon (issue #96).
 (
     version: 1,
     root: (
         children: [
             (kind: Button, id: "go", key: "menu.go", text: "GO", on_click: "go", anchor: Center, size: (Px(40), Px(12))),
+            (kind: Rect(), id: "home-flag", anchor: TopLeft, size: (Px(8), Px(8)), color: Some((200, 40, 40, 255))),
         ],
     ),
 )

@@ -95,9 +95,40 @@ pub struct Textures {
     pub min_psnr_edit: Option<f64>,
     /// Errors already written to the Console.
     pub logged: std::collections::HashSet<String>,
+    /// A sprite's `cvd_icon` as the manifest has it, and the key and
+    /// sprite it was read at (issue #96; read apart from the format
+    /// measurements).
+    icon: Option<(Key, String, Option<String>)>,
 }
 
 impl Textures {
+    /// The icon last read, for the sprite it was read for (tests).
+    #[cfg(test)]
+    pub fn icon_shown(&self) -> Option<(&str, Option<&str>)> {
+        self.icon
+            .as_ref()
+            .map(|(_, l, i)| (l.as_str(), i.as_deref()))
+    }
+
+    /// `logical`'s color-vision icon in the manifest under `assets`, re-read
+    /// when the manifest changes.
+    pub fn icon(&mut self, assets: &Path, logical: &str, key: Key) -> Option<String> {
+        if !self
+            .icon
+            .as_ref()
+            .is_some_and(|(k, l, _)| *k == key && l == logical)
+        {
+            let icon = trino_asset_pipeline::Manifest::load(&assets.join("manifest.toml"))
+                .ok()
+                .and_then(|m| {
+                    let name = logical.strip_prefix("sprites/")?;
+                    m.sprites.get(name)?.cvd_icon.clone()
+                });
+            self.icon = Some((key, logical.to_string(), icon));
+        }
+        self.icon.as_ref().and_then(|(_, _, i)| i.clone())
+    }
+
     /// The inspector previewing `Platform::ALL[preview]` at 1×.
     pub fn new(preview: usize) -> Self {
         Textures {

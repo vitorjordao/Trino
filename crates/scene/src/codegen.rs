@@ -72,7 +72,7 @@ pub fn to_rust_graded(
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId, NodeOutline, node_access,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -333,7 +333,7 @@ pub fn to_rust_graded(
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n        character: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: {},\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n        character: {},\n        access: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -344,6 +344,13 @@ pub fn to_rust_graded(
             p.double_sided,
             match p.texture {
                 Some(t) => format!("Some(SpriteId({:#010x}))", t.0),
+                None => "None".into(),
+            },
+            match p.palette {
+                Some(pal) => format!(
+                    "Some([{}])",
+                    pal.iter().map(|c| color(*c)).collect::<Vec<_>>().join(", ")
+                ),
                 None => "None".into(),
             },
             p.gloss,
@@ -415,7 +422,8 @@ pub fn to_rust_graded(
                     f(c.step_height)
                 ),
                 None => "None".into(),
-            }
+            },
+            node_access(item, &v3)
         );
     }
     let _ = writeln!(out, "];");
@@ -444,6 +452,34 @@ fn scene_speed(scene: &Scene, owner: &[usize]) -> Option<f32> {
         .anim
         .as_ref()
         .map(|a| a.speed)
+}
+
+/// A node's `access` field (issue #96): `None`, or its block built by
+/// `node_access` from the semantic ids (named) and the outline.
+fn node_access(item: &crate::DrawItem, v3: &dyn Fn(trino_core::Vec3) -> String) -> String {
+    if item.semantic == [0; 4] && item.outline.is_none() {
+        return "None".into();
+    }
+    let ids: Vec<String> = item
+        .semantic
+        .iter()
+        .zip(&item.semantic_names)
+        .map(|(id, n)| match n {
+            Some(n) => format!("{id:#010x} /* {} */", esc(n)),
+            None => "0".into(),
+        })
+        .collect();
+    let outline = match item.outline {
+        Some(o) => format!(
+            "Some(NodeOutline {{ color: {}, center: {}, radius: {}, pixels: {} }})",
+            color(o.color),
+            v3(o.center),
+            f(o.radius),
+            f(o.pixels)
+        ),
+        None => "None".into(),
+    };
+    format!("Some(&node_access([{}], {outline}))", ids.join(", "))
 }
 
 #[cfg(test)]

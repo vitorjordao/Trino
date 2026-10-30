@@ -46,6 +46,9 @@ pub fn section(app: &mut App, ui: &mut egui::Ui, logical: &str) {
         app.log.toast(crate::log::Level::Error, e);
     }
     let measuring = app.audio.measuring();
+    // The caption (issue #96): read apart from the codecs, drawn first.
+    let keys = app.audio.caption(&assets, logical, key);
+    caption_section(app, ui, logical, keys);
     let playing: Playing = app.audio.player.as_mut().and_then(|p| p.playing().cloned());
     if playing.is_some() {
         // Notice when it ends.
@@ -812,4 +815,310 @@ pub fn budget(
         )
         .on_hover_text(crate::audio::budget_hover(pt, p, t.sounds));
     }
+}
+
+/// The sound's caption (issue #96): its string-table key (a combo of the
+/// tables' keys, or a new one added to every language), the text in each
+/// language, `important`, `caption_priority`, `direction` and
+/// `caption_seconds`, a Preview in the Game view, and the checklist's lines
+/// for this sound (`cargo xtask access check`'s `check_captions`). Every
+/// change writes the manifest.
+fn caption_section(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    logical: &str,
+    keys: Result<crate::audio::CaptionKeys, String>,
+) {
+    let keys = match keys {
+        Ok(k) => k,
+        Err(e) => {
+            ui.label(RichText::new(e).size(11.5).color(c::ERROR));
+            return;
+        }
+    };
+    let l = logical.to_string();
+    let mut cmds: Vec<Cmd> = Vec::new();
+    let mut new_key: Option<String> = None;
+    let mut preview = false;
+    let all_keys: Vec<String> = app
+        .localization
+        .langs
+        .keys()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let langs = app.localization.langs.names();
+    let findings = trino_scene::access::check_captions(
+        &[trino_scene::access::CaptionDecl {
+            logical: l.clone(),
+            caption: keys.key.clone(),
+            important: keys.important.unwrap_or(false),
+        }],
+        &app.localization.langs,
+    );
+    let editing = &mut app.audio.new_caption_key;
+    let place = &mut app.audio.caption_place;
+    theme::component(
+        ui,
+        "audio-caption",
+        icon::SUBTITLES,
+        c::ACCENT_TEXT,
+        "Caption",
+        |ui| {
+            theme::prop(ui, "Key", |ui| {
+                let shown = keys.key.clone().unwrap_or_else(|| "none".into());
+                let mut pick: Option<Option<String>> = None;
+                let w = ui.available_width().min(200.0);
+                theme::fixed_width(ui, w, |ui| {
+                    egui::ComboBox::from_id_salt("audio-caption-key")
+                        .selected_text(shown)
+                        .width(w - 8.0)
+                        .truncate()
+                        .height(300.0)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(keys.key.is_none(), "none").clicked() {
+                                pick = Some(None);
+                            }
+                            if ui.selectable_label(false, "New key…").clicked() {
+                                *editing = Some(format!(
+                                    "cap.{}",
+                                    l.rsplit('/').next().unwrap_or_default()
+                                ));
+                            }
+                            for k in &all_keys {
+                                if ui
+                                    .selectable_label(keys.key.as_deref() == Some(k), k)
+                                    .clicked()
+                                {
+                                    pick = Some(Some(k.clone()));
+                                }
+                            }
+                        })
+                        .response
+                        .widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::ComboBox,
+                                true,
+                                "Caption key",
+                            )
+                        });
+                });
+                if let Some(p) = pick
+                    && p != keys.key
+                {
+                    cmds.push(Cmd::SetAudioKey(l.clone(), "caption", p));
+                }
+            });
+            if let Some(text) = editing {
+                ui.horizontal(|ui| {
+                    ui.add_space(64.0);
+                    let r = ui.add(
+                        egui::TextEdit::singleline(text)
+                            .hint_text("cap.whistle")
+                            .desired_width(150.0),
+                    );
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::TextEdit,
+                            true,
+                            "New caption key",
+                        )
+                    });
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if enter || ui.button("Add").clicked() {
+                        new_key = Some(text.trim().to_string());
+                    }
+                });
+            }
+            // The text in each shipped language (edited in the Localization
+            // tab), and which language lacks it.
+            if let Some(k) = &keys.key {
+                if langs.is_empty() {
+                    ui.label(
+                        RichText::new("No string table: the caption shows its key")
+                            .size(11.5)
+                            .color(c::WARN),
+                    );
+                }
+                for lang in &langs {
+                    let strings = app.localization.langs.strings(lang);
+                    let own = strings.has_own(k);
+                    let text = trino_core::ui::UiStrings::get(&strings, k).map(str::to_string);
+                    ui.horizontal(|ui| {
+                        ui.add_space(64.0);
+                        ui.label(RichText::new(lang).size(11.5).color(c::TEXT_FAINT));
+                        match (own, text) {
+                            (true, Some(t)) => {
+                                ui.add(
+                                    egui::Label::new(RichText::new(t).size(12.0).color(c::TEXT))
+                                        .truncate(),
+                                );
+                            }
+                            (false, t) => {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(format!(
+                                            "{} missing in {lang}{}",
+                                            icon::WARNING,
+                                            t.map_or(String::new(), |t| format!(
+                                                " (shows \"{t}\")"
+                                            ))
+                                        ))
+                                        .size(11.5)
+                                        .color(c::WARN),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                            (true, None) => {}
+                        }
+                    });
+                }
+            }
+            let bool_row = |ui: &mut egui::Ui,
+                            cmds: &mut Vec<Cmd>,
+                            name: &'static str,
+                            key: &'static str,
+                            v: Option<bool>,
+                            hint: &str| {
+                theme::prop(ui, name, |ui| {
+                    let mut on = v.unwrap_or(false);
+                    let r = ui.checkbox(&mut on, "").on_hover_text(hint);
+                    r.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name)
+                    });
+                    if r.changed() {
+                        cmds.push(Cmd::SetAudioKey(l.clone(), key, on.then(|| "true".into())));
+                    }
+                });
+            };
+            bool_row(
+                ui,
+                &mut cmds,
+                "Important",
+                "important",
+                keys.important,
+                "Shown in the \"important\" caption mode too (a whistle, an alarm); needs a caption",
+            );
+            bool_row(
+                ui,
+                &mut cmds,
+                "Direction",
+                "direction",
+                keys.direction,
+                "An arrow toward the sound's pan",
+            );
+            theme::prop(ui, "Priority", |ui| {
+                let default = if keys.important == Some(true) { 100 } else { 0 };
+                let mut v = keys.priority.unwrap_or(default) as u32;
+                let r = ui
+                    .add(egui::DragValue::new(&mut v).range(0..=255))
+                    .on_hover_text("A full caption queue drops the lowest first");
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, "Caption priority")
+                });
+                if r.changed() {
+                    cmds.push(Cmd::SetAudioKey(
+                        l.clone(),
+                        "caption_priority",
+                        Some(v.to_string()),
+                    ));
+                }
+            });
+            theme::prop(ui, "Seconds", |ui| {
+                let mut v = keys
+                    .seconds
+                    .unwrap_or(trino_core::access::captions::DEFAULT_SECONDS);
+                let r = ui.add(
+                    egui::DragValue::new(&mut v)
+                        .range(0.1..=60.0)
+                        .speed(0.1)
+                        .max_decimals(1)
+                        .suffix(" s"),
+                );
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, "Caption seconds")
+                });
+                if r.changed() {
+                    cmds.push(Cmd::SetAudioKey(
+                        l.clone(),
+                        "caption_seconds",
+                        Some(format!("{v}")),
+                    ));
+                }
+            });
+            theme::prop(ui, "Preview", |ui| {
+                use trino_core::access::CaptionPlace;
+                let name = |p: CaptionPlace| match p {
+                    CaptionPlace::Bottom => "bottom",
+                    CaptionPlace::Top => "top",
+                    CaptionPlace::SecondScreen => "3DS touch screen",
+                };
+                egui::ComboBox::from_id_salt("audio-caption-place")
+                    .selected_text(name(*place))
+                    .width(130.0)
+                    .show_ui(ui, |ui| {
+                        for p in [
+                            CaptionPlace::Bottom,
+                            CaptionPlace::Top,
+                            CaptionPlace::SecondScreen,
+                        ] {
+                            ui.selectable_value(place, p, name(p));
+                        }
+                    })
+                    .response
+                    .widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Caption place")
+                    });
+                if ui
+                .add_enabled(keys.key.is_some(), egui::Button::new(format!("{} Preview", icon::PLAY)))
+                .on_hover_text(
+                    "Show the caption in the Game view at the Accessibility tab's text size and \
+                     contrast",
+                )
+                .clicked()
+            {
+                preview = true;
+            }
+            });
+            // The checklist's lines for this sound.
+            for f in &findings {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{} {}", icon::WARNING, f.message))
+                            .size(11.5)
+                            .color(if f.level == trino_scene::ui::Level::Error {
+                                c::ERROR
+                            } else {
+                                c::WARN
+                            }),
+                    )
+                    .wrap(),
+                );
+            }
+            if findings.is_empty() && (keys.key.is_some() || keys.important == Some(true)) {
+                ui.label(
+                    RichText::new(format!("{} caption checks pass", icon::CHECK))
+                        .size(11.5)
+                        .color(c::OK),
+                );
+            }
+        },
+    );
+    if let Some(k) = new_key {
+        match app.localization.add_key_everywhere(&k) {
+            Ok(()) => {
+                app.audio.new_caption_key = None;
+                cmds.push(Cmd::SetAudioKey(l.clone(), "caption", Some(k)));
+            }
+            Err(e) => app.log.toast(crate::log::Level::Error, e),
+        }
+    }
+    if preview && let Some(k) = &keys.key {
+        let settings = app.access.preview;
+        let place = app.audio.caption_place;
+        app.access.caption.show(k, &keys, place, &settings);
+        app.cmds.push(Cmd::FocusTab(crate::app::Tab::Game));
+    }
+    app.cmds.extend(cmds);
 }

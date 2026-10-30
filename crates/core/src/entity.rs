@@ -475,6 +475,7 @@ mod tests {
             vis: None,
             glow: None,
             character: None,
+            access: None,
         }
     }
 

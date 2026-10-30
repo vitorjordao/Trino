@@ -31,6 +31,9 @@ pub struct Library {
     pub impostors: BTreeMap<String, [Option<trino_core::Impostor>; 4]>,
     /// The collision layers (`assets/physics.ron`, issue #66).
     pub physics: crate::physics::PhysicsSettings,
+    /// The project's semantic colors (`assets/palettes.ron`, issue #96):
+    /// what a model's `Semantic` slot resolves to.
+    pub palettes: Option<crate::access::PalettesDef>,
     /// Files that failed to parse (path: error) — shown, never fatal.
     pub errors: Vec<String>,
 }
@@ -67,6 +70,10 @@ impl Library {
         let mut lib = Library::default();
         match crate::physics::PhysicsSettings::load(root) {
             Ok(p) => lib.physics = p,
+            Err(e) => lib.errors.push(e),
+        }
+        match crate::access::load_palettes(root) {
+            Ok(p) => lib.palettes = p,
             Err(e) => lib.errors.push(e),
         }
         for (logical, path) in scan(&root.join(MATERIALS_DIR), MATERIAL_EXT, "materials") {

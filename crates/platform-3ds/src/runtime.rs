@@ -85,12 +85,90 @@ pub fn trace_start() -> bool {
         return true;
     }
     static mut RING: GlobalRing = GlobalRing::new();
+    // The worker core's jobs on a track of their own (issue #130).
+    for lane in &lanes::LANES {
+        trace::add_lane(lane);
+    }
+    trace::set_thread_hooks(Some(lanes::HOOKS));
     // SAFETY: the only reference, handed over once (`is_on` above).
     trace::install(
         unsafe { &mut *core::ptr::addr_of_mut!(RING) },
         now_us,
         TracePlatform::N3ds,
     )
+}
+
+/// The trace's lanes for the threads other than the main one (issue #130):
+/// two static ones (the worker core's job thread, and a spare), each bound
+/// to a thread found by its TLS register (CP15 c13: one value per thread,
+/// read without a system call). The shim's audio thread runs C only, so it
+/// never records.
+mod lanes {
+    use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+    use trino_core::trace::{Lane, ThreadHooks};
+
+    pub static LANES: [Lane; 2] = [const { Lane::new() }; 2];
+    /// The bound threads' TLS values (0: free) and their lanes.
+    static KEYS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
+    static BOUND: [AtomicPtr<Lane>; 2] = [const { AtomicPtr::new(core::ptr::null_mut()) }; 2];
+
+    pub const HOOKS: ThreadHooks = ThreadHooks {
+        get,
+        set,
+        grow: || None,
+    };
+
+    #[cfg(target_os = "horizon")]
+    fn key() -> u32 {
+        let v: u32;
+        // SAFETY: reads the user-readable thread ID register (TPIDRURO),
+        // libctru's `getThreadLocalStorage`.
+        unsafe { core::arch::asm!("mrc p15, 0, {0}, c13, c0, 3", out(reg) v) };
+        v
+    }
+
+    // Host builds (tests): no thread is ever bound.
+    #[cfg(not(target_os = "horizon"))]
+    fn key() -> u32 {
+        0
+    }
+
+    fn get() -> Option<&'static Lane> {
+        let k = key();
+        if k == 0 {
+            return None;
+        }
+        let i = KEYS.iter().position(|s| s.load(Ordering::Acquire) == k)?;
+        let p = BOUND[i].load(Ordering::Acquire);
+        // SAFETY: only `&'static Lane`s are stored.
+        (!p.is_null()).then(|| unsafe { &*p })
+    }
+
+    fn set(lane: Option<&'static Lane>) {
+        let k = key();
+        if k == 0 {
+            return;
+        }
+        match lane {
+            Some(l) => {
+                for (i, slot) in KEYS.iter().enumerate() {
+                    if slot
+                        .compare_exchange(0, k, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        BOUND[i].store(l as *const Lane as *mut Lane, Ordering::Release);
+                        return;
+                    }
+                }
+            }
+            None => {
+                if let Some(i) = KEYS.iter().position(|s| s.load(Ordering::Acquire) == k) {
+                    BOUND[i].store(core::ptr::null_mut(), Ordering::Release);
+                    KEYS[i].store(0, Ordering::Release);
+                }
+            }
+        }
+    }
 }
 
 /// Print what the ring holds as `TRINO_TRACE:` lines of `session` through

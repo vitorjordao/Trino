@@ -3,7 +3,7 @@
 //!
 //! One process per session (`pid` from 1, named after the session), one
 //! thread per track (`tid` = [`TID_BASE`] + the track number, named `cpu`,
-//! `gpu`, ...: Perfetto takes a `tid` equal to the `pid` for the process's
+//! `gpu`, `worker 2`, ...: Perfetto takes a `tid` equal to the `pid` for the process's
 //! main thread and folds `tid` 0 away, which merged the tracks):
 //! zones are complete events (`"ph": "X"`), counters `"C"`, frame marks
 //! instant events (`"i"`). `otherData` keeps what Chrome has no field for
@@ -36,7 +36,7 @@ pub fn write(trace: &Trace) -> Value {
         for t in s.tracks() {
             events.push(
                 json!({"ph": "M", "name": "thread_name", "pid": pid, "tid": TID_BASE + t as i64,
-                "args": {"name": track::name(t)}}),
+                "args": {"name": track::label(t).to_string()}}),
             );
         }
         for z in &s.zones {

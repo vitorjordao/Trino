@@ -590,7 +590,10 @@ impl BundleLoad {
             })
             .sum();
         let workers = threads.min((bytes / MIN_BYTES_PER_WORKER).max(1) as u32);
-        let decoded = crate::par::map_ordered(workers, &plans, |(at, slots)| {
+        // On the trace's loader tracks (issue #130).
+        let loader = Some(trino_core::trace::track::LOADER);
+        let decoded = crate::par::map_ordered_on(workers, loader, &plans, |(at, slots)| {
+            trino_core::zone!("decode entry");
             let first = b.entry(*at);
             let bytes = decode(&first)?;
             let mut read = first.read_bytes() as u64;

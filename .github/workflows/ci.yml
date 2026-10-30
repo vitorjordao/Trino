@@ -32,6 +32,7 @@ jobs:
       # global ring, and Tracy (its C++ client) on the PC.
       - run: cargo clippy --workspace --all-targets --features trino-core/trace -- -D warnings
       - run: cargo test -p trino-core --features trace --lib trace
+      - run: cargo test -p trino-core --features trace --test trace_threads
       - run: cargo clippy -p trino-app-pc --features tracy --all-targets -- -D warnings
       # Determinism guard rails (issue #67): a NaN or a subnormal in a state
       # hash panics with its name; castle64's PC recording replays under it.
@@ -93,7 +94,7 @@ jobs:
       - name: Trace (Linux)
         if: runner.os == 'Linux'
         run: |
-          cargo test -p trino-platform-pc --features trino-core/trace --test trace_zones
+          cargo test -p trino-platform-pc --features trino-core/trace --test trace_zones --test trace_threads
           TRINO_TRACE=target/traces/smoke.log TRINO_SMOKE_FRAMES=60 xvfb-run -a cargo run -p trino-app-pc --features trino-core/trace
           cargo xtask trace collect target/traces/smoke.log --out target/traces/smoke.json
           cargo xtask trace report target/traces/smoke.json --json > target/traces/report.json

@@ -17,7 +17,7 @@ use trino_core::render3d::{
     MeshLayout, ScreenTri, SurfaceScratch, TnlContext, TnlScratch, TnlStats, tessellate_surface,
     tessellate_with,
 };
-use trino_core::{Mat34, Mesh, ModelParams};
+use trino_core::{Mat34, Mesh, ModelParams, trace};
 
 use super::batch::TexKey;
 use super::{NO_SURFACE, SurfTri};
@@ -108,9 +108,16 @@ pub fn run(
         let handles: Vec<_> = chunks
             .iter()
             .zip(pool.iter_mut())
-            .map(|(range, scratch)| {
+            .enumerate()
+            .map(|(i, (range, scratch))| {
                 let part = &jobs[range.clone()];
-                s.spawn(move || run_chunk(meshes, ctxs, part, scratch))
+                s.spawn(move || {
+                    // Worker i's zones on track `worker i+1` (issue #130).
+                    let _lane =
+                        trace::bind_thread(trace::track::on(trace::track::WORKER, i as u8 + 1));
+                    trino_core::zone!("tnl chunk");
+                    run_chunk(meshes, ctxs, part, scratch)
+                })
             })
             .collect();
         handles

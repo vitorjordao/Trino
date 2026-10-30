@@ -76,8 +76,26 @@ csvexport/build/tracy-csvexport run.tracy                    # zone names, count
   without `--trace` links the recorder).
 - Out-of-line work only when tracing: `if trino_core::trace::ENABLED { out_of_line() }`
   with the callee `#[inline(never)]` (the N64 renderer's `trace_counters`).
-- Main thread only; another thread that finds the ring busy loses its event (counted in
-  `dropped`, shown by `report`). Per-thread tracks are a follow-up issue (#105 item 3).
+- **Other threads (issue #130):** `let _lane = trace::bind_thread(track::on(track::WORKER,
+  n))` at the top of a thread's closure, then plain `zone!`s. The thread records into a
+  `Lane` only it writes (512 events, `&'static str` names), and the main thread merges
+  every lane into the ring at `frame_mark`, `flush` and `with_ring`: no lock, nothing lost
+  unless a lane fills between two merges (then `dropped`). A track byte is a kind (low 3
+  bits) and an instance (`track::on`, shown as `worker 3` through `track::label`); a
+  thread has one track, whatever track a `zone!` inside it names.
+  - Bound today: the PC's CPU T&L workers (`worker 1..8`, `tnl chunk`), the audio stream
+    (`audio`: `stream fill` > `stream job`), the group loader's decoders (`loader 1..`,
+    `decode entry`, through `par::map_ordered_on`), the 3DS worker core's queued jobs
+    (`worker`, `job`; `test 3ds --trace` checks the `3ds-worker` session).
+  - Binding needs `ThreadHooks`: the PC/Web `TraceHost::start` sets a `thread_local!`
+    (`trace_host::thread_hooks`), the 3DS's `trace_start` keys two static lanes by the TLS
+    register. Without hooks (an editor bake, the N64) `bind_thread` binds nothing and the
+    zones go to the global ring as before; an unbound thread that finds the ring busy
+    still loses its event (`dropped`).
+  - A job a console runs **inline** (no worker, or its ring full) must not use the
+    worker's lane: the 3DS times only queued jobs, through a trampoline.
+  - Scoped workers come and go: pass the track instance from the worker's index, never
+    the lane's slot, or the rows shuffle between frames.
 - Game zones under hot reload: `cargo xtask watch pc --trace` builds the app and every
   reloaded dylib with the zones; the dylib's own `trino-core` adopts the host's ring through
   `Platform::trace_hooks` (`export_game!` calls `trace::adopt` each update; the PC copies
@@ -132,7 +150,9 @@ csvexport/build/tracy-csvexport run.tracy                    # zone names, count
 
 ## Code map
 
-`crates/core/src/trace.rs` (ring, packet, lines, global recorder, hooks);
+`crates/core/src/trace.rs` (ring, packet, lines, global recorder, hooks, lanes);
+`crates/core/tests/trace_threads.rs`, `crates/platform-pc/tests/trace_threads.rs` (other
+threads);
 `crates/trace/` (`collect`, `chrome`, `stats`, `perf`: reports, the RSP fit, symbols,
 A/B); `crates/platform-n64/src/prof.rs` (counters, `--prof rsp|sample`);
 `xtask/src/{perf_cmd.rs, rsp_count.rs}`; `xtask/src/trace.rs` (CLI, `Capture` for

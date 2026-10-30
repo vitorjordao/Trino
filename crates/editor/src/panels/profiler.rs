@@ -401,7 +401,7 @@ fn paint_tracks(
         painter.text(
             Pos2::new(rect.left() + 6.0, y + 1.0),
             egui::Align2::LEFT_TOP,
-            track::name(tr),
+            track::label(tr).to_string(),
             small.clone(),
             c::TEXT_WEAK,
         );
@@ -445,7 +445,7 @@ fn paint_tracks(
             {
                 hovered = Some(format!(
                     "{name} ({})\n{} · starts at {} · depth {}",
-                    track::name(z.track),
+                    track::label(z.track),
                     fmt_us(z.dur as f64),
                     fmt_us(z.start as f64 - origin),
                     z.depth
@@ -624,7 +624,7 @@ fn zone_table(app: &mut App, ui: &mut egui::Ui) {
         let n = |v: f64| (fmt_us(v), c::TEXT_WEAK);
         let mut cells = vec![(z.name.clone(), c::TEXT)];
         if wide {
-            cells.push((track::name(z.track).to_string(), c::TEXT_FAINT));
+            cells.push((track::label(z.track).to_string(), c::TEXT_FAINT));
             cells.push((z.count.to_string(), c::TEXT_WEAK));
         }
         cells.push(n(z.mean_us));
@@ -721,7 +721,7 @@ fn diff_table(app: &mut App, ui: &mut egui::Ui) {
         let opt = |v: Option<f64>| v.map_or("-".to_string(), fmt_us);
         let mut cells = vec![(z.name.clone(), c::TEXT)];
         if wide {
-            cells.push((track::name(z.track).to_string(), c::TEXT_FAINT));
+            cells.push((track::label(z.track).to_string(), c::TEXT_FAINT));
             cells.push((opt(z.a.as_ref().map(|s| s.mean_us)), c::TEXT_WEAK));
             cells.push((opt(z.b.as_ref().map(|s| s.mean_us)), c::TEXT_WEAK));
         }

@@ -10,6 +10,18 @@ pub fn map_ordered<T: Sync, R: Send>(
     items: &[T],
     f: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
+    map_ordered_on(threads, None, items, f)
+}
+
+/// [`map_ordered`] whose workers record their trace zones on tracks of
+/// their own: worker `n` on `track::on(kind, n + 1)` (issue #130; nothing
+/// without `trino-core/trace` or a trace host).
+pub fn map_ordered_on<T: Sync, R: Send>(
+    threads: u32,
+    kind: Option<u8>,
+    items: &[T],
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
     let workers = (threads.max(1) as usize).min(items.len());
     if workers <= 1 {
         return items.iter().map(f).collect();
@@ -17,8 +29,15 @@ pub fn map_ordered<T: Sync, R: Send>(
     let next = AtomicUsize::new(0);
     let mut done: Vec<(usize, R)> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                s.spawn(|| {
+            .map(|w| {
+                let (next, f) = (&next, &f);
+                s.spawn(move || {
+                    let _lane = kind.map(|k| {
+                        trino_core::trace::bind_thread(trino_core::trace::track::on(
+                            k,
+                            w.min(254) as u8 + 1,
+                        ))
+                    });
                     let mut mine = Vec::new();
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);

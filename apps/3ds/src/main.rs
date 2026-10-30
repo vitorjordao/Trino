@@ -294,6 +294,10 @@ mod n3ds {
         ));
     }
 
+    /// The `--trace` session of the worker check's jobs (`cargo xtask test
+    /// 3ds --trace` finds them on the worker track, issue #130).
+    const WORKER_SESSION: &str = "3ds-worker";
+
     /// The worker core (issue #54 Phase 3): eight jobs on the second core
     /// compute what the main thread computes meanwhile, and match it. Logs
     /// `TRINO_STEP:worker core=2 queued=8 …` (core -1: inline, no worker).
@@ -315,11 +319,20 @@ mod n3ds {
             OUT[i as usize].store(work(i), Ordering::Release);
         }
         let core = worker::start();
+        // `--trace` builds: the jobs as a session of their own, each a `job`
+        // zone on the worker track (issue #130).
+        let tracing = runtime::trace_start();
+        if tracing {
+            trino_core::trace::restart();
+        }
         let t0 = runtime::now_us();
         let queued = (0..JOBS as u32).filter(|&i| worker::submit(job, i)).count();
         let want: [u32; JOBS] = core::array::from_fn(|i| work(i as u32));
         worker::wait();
         let us = runtime::now_us().wrapping_sub(t0);
+        if tracing {
+            runtime::trace_flush(WORKER_SESSION, &mut 0);
+        }
         for (i, w) in want.iter().enumerate() {
             if OUT[i].load(Ordering::Acquire) != *w {
                 return Err(format!("worker: job {i} computed the wrong value"));

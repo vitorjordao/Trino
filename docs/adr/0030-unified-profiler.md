@@ -32,8 +32,8 @@ showed estimates, never a measured console frame.
   N64's count register, `svcGetSystemTick` on the 3DS, `Instant` / `performance.now()`).
 - Locking: the N64 has one thread and no zone in an interrupt, so a plain flag (no
   read-modify-write atomics on the VR4300 path). Elsewhere an atomic try-lock: an event from a
-  thread that finds the ring busy is **counted** (`dropped`), never blocks. Only main-thread
-  code is instrumented today.
+  thread that finds the ring busy is **counted** (`dropped`), never blocks. Other threads
+  record into lanes of their own since #130 (§7).
 - Under hot reload (`watch pc`) the game dylib links its own copy of the core: game zones go
   to a ring nobody installed. Traces come from statically linked builds (documented pitfall).
 - Instrumentation sits at the existing stage sites (`tick`/`charge` on the N64, the 3DS and PC
@@ -105,6 +105,28 @@ track with zoom and pan, a per-frame flame view, a per-zone table and a second t
 session to compare (the `Diff` table). It follows a file that grows (`run pc --trace` writes
 `pc.log` live). Hooks: `TRINO_EDITOR_TAB=profiler`, `TRINO_EDITOR_TRACE`,
 `TRINO_EDITOR_TRACE_B`.
+
+### 7. Other threads: a lane each, merged by the main thread (issue #130)
+
+- A `Lane` is a single-producer, single-consumer buffer of `LANE_EVENTS` (512) events
+  whose names stay `&'static str`: the thread bound to it writes without a lock, and the
+  ring's holder moves its events into the ring, interning the names there, at each
+  `frame_mark`, `flush` and `with_ring`. A full lane counts what it refuses in the next
+  packet's `dropped`. The packet format doesn't change: lane events are ordinary events
+  of their own track (`trino-trace` sorts zones by start).
+- `trace::bind_thread(track)` claims a free registered lane (`add_lane`, at most
+  `MAX_LANES` = 32) and returns a guard that releases it (its events stay for the merge).
+  `trino-core` has no threads, so the host says which lane is the calling thread's:
+  `ThreadHooks { get, set, grow }` (a `thread_local!` and leaked lanes on the PC and the
+  Web; two static lanes keyed by the TLS register on the 3DS). The N64 has one thread:
+  `current_lane` is `None` there at compile time.
+- A track byte is a kind (low 3 bits: `cpu`, `gpu`, `rsp`, `audio`, `worker`, `loader`)
+  and an instance (high 5 bits, `track::on`), so eight T&L workers are eight rows
+  (`worker 1` .. `worker 8`, `track::label`). The caller picks the instance (a worker's
+  index), so the rows stay put when scoped threads claim lanes in another order.
+- Chosen over one ring with a track per thread (#130 option 2): contention would still drop
+  events, and 3 bits leave four spare tracks. The cost is 16 KB per lane on the PC and 10 KB
+  on the 3DS, only in `--trace` builds.
 
 ## Consequences
 

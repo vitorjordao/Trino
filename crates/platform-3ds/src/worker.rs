@@ -72,13 +72,69 @@ pub fn core() -> Option<u8> {
 }
 
 /// Queue `job(arg)` for the worker, or run it now (no worker, or the ring
-/// is full). Returns true when it was queued.
+/// is full). Returns true when it was queued. While a `--trace` build
+/// records, a queued job runs inside a `job` zone on the worker track
+/// (issue #130); one run inline stays on the main thread's.
 pub fn submit(job: Job, arg: u32) -> bool {
-    if core().is_some() && queue(job, arg) {
-        return true;
+    if core().is_some() {
+        let queued = if trino_core::trace::ENABLED && trino_core::trace::is_on() {
+            traced::queue(job, arg)
+        } else {
+            queue(job, arg)
+        };
+        if queued {
+            return true;
+        }
     }
     job(arg);
     false
+}
+
+/// Jobs queued through a trampoline that times them (`--trace` builds).
+mod traced {
+    use super::Job;
+    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+    use trino_core::trace::{self, track};
+
+    /// Twice the shim's 32-job ring: a slot is reused only after the 32
+    /// queued after it, so never while its job still waits.
+    const SLOTS: usize = 64;
+    static JOBS: [AtomicPtr<()>; SLOTS] = [const { AtomicPtr::new(core::ptr::null_mut()) }; SLOTS];
+    static ARGS: [AtomicU32; SLOTS] = [const { AtomicU32::new(0) }; SLOTS];
+    /// Jobs queued through here (the main thread's).
+    static QUEUED: AtomicU32 = AtomicU32::new(0);
+
+    pub fn queue(job: Job, arg: u32) -> bool {
+        let q = QUEUED.load(Ordering::Relaxed);
+        let slot = q as usize % SLOTS;
+        JOBS[slot].store(job as *mut (), Ordering::Release);
+        ARGS[slot].store(arg, Ordering::Release);
+        if !super::queue(run, slot as u32) {
+            return false; // the slot stays free: `q` didn't move
+        }
+        QUEUED.store(q.wrapping_add(1), Ordering::Relaxed);
+        true
+    }
+
+    /// On the worker thread only.
+    extern "C" fn run(slot: u32) {
+        // The worker thread binds once, for good.
+        static BOUND: AtomicBool = AtomicBool::new(false);
+        if !BOUND.load(Ordering::Relaxed) {
+            let lane = trace::bind_thread(track::WORKER);
+            if lane.is_bound() {
+                BOUND.store(true, Ordering::Relaxed);
+                // Never unbound (a guard without the feature has no Drop).
+                let _ = core::mem::ManuallyDrop::new(lane);
+            }
+        }
+        let i = slot as usize % SLOTS;
+        // SAFETY: only `Job` pointers are stored in JOBS.
+        let job: Job = unsafe { core::mem::transmute(JOBS[i].load(Ordering::Acquire)) };
+        let arg = ARGS[i].load(Ordering::Acquire);
+        trino_core::zone!("job");
+        job(arg);
+    }
 }
 
 /// Block until every queued job has run.

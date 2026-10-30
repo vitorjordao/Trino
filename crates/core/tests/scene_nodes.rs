@@ -34,6 +34,8 @@ const fn node(name: &'static str, tags: &'static [&'static str], x: f32, z: f32)
         vis: None,
         glow: None,
         character: None,
+        semantic: [0; 4],
+        outline: None,
     }
 }
 
@@ -411,9 +413,9 @@ fn baked_scene_rejects_bad_blobs() {
         SceneError::BadMagic
     );
     // v1 (8-byte LOD records), v2 (no surface), v3 (no water), v4 (no
-    // shadows), v5 (no glow), v6 (no physics) and future versions need a
-    // rebake.
-    for v in [1u8, 2, 3, 4, 5, 6, 8] {
+    // shadows), v5 (no glow), v6 (no physics), v7 (no semantic slots or
+    // outline) and future versions need a rebake.
+    for v in [1u8, 2, 3, 4, 5, 6, 7, 9] {
         let mut other = good.to_vec();
         other[4] = v;
         assert_eq!(
@@ -471,4 +473,94 @@ fn baked_scene_rejects_bad_blobs() {
     let e = BakedScene::parse(empty).unwrap();
     assert_eq!((e.node_count(), e.nodes().count()), (0, 0));
     assert_eq!(e.light(), DEFAULT_LIGHT);
+}
+
+/// Semantic slot colors and outlines (issue #96): `draw_nodes_with` swaps
+/// a node's semantic slots to the player's color-vision mode (a name the
+/// data lacks keeps its base), and in high contrast with a camera draws
+/// the outline's ring before the node; `NodeAccess::NONE` (what
+/// `draw_nodes` passes) draws exactly the old call.
+#[test]
+fn draw_nodes_with_swaps_semantic_slots_and_rings_outlined_nodes() {
+    use trino_core::access::{AccessData, AccessSettings, CvdMode, data};
+    use trino_core::scene::{NodeAccess, NodeOutline};
+    let red = Color::rgb(200, 30, 30);
+    let pro = Color::rgb(240, 160, 0);
+    let id = trino_core::asset_id("team.home");
+    let mut buf = vec![0u8; 256];
+    let n = data::encode(&[(id, [red, pro, pro, red, red])], &[], &[], None, &mut buf).unwrap();
+    let blob: &'static [u8] = Box::leak(buf[..n].to_vec().into_boxed_slice());
+    let colors = AccessData::parse(blob).unwrap();
+    let node = SceneNode {
+        params: trino_core::ModelParams {
+            palette: Some([red, Color::rgb(1, 2, 3), Color::WHITE, red]),
+            ..trino_core::ModelParams::DEFAULT
+        },
+        // Slot 1 semantic, slot 4 a name the data lacks (keeps its base).
+        semantic: [id, 0, 0, trino_core::asset_id("not.there")],
+        outline: Some(NodeOutline {
+            color: Color::rgb(255, 230, 0),
+            center: Vec3::ZERO,
+            radius: 0.5,
+            pixels: 2.0,
+        }),
+        ..node("player", &[], 0.0, 0.0)
+    };
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -5.0),
+        ..Camera3::default()
+    };
+    let draw = |access: &NodeAccess| {
+        let mut r = recorder();
+        r.set_camera(&camera);
+        r.begin_frame(Color::BLACK);
+        scene::draw_nodes_with(
+            &mut r,
+            core::slice::from_ref(&node),
+            &Mat34::IDENTITY,
+            0.0,
+            camera.eye,
+            u64::MAX,
+            access,
+        );
+        r.models()
+    };
+    // NONE: one draw, the baked palette as it is.
+    let plain = draw(&NodeAccess::NONE);
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].2.palette, node.params.palette);
+    let mut r = recorder();
+    r.begin_frame(Color::BLACK);
+    scene::draw_nodes(
+        &mut r,
+        core::slice::from_ref(&node),
+        &Mat34::IDENTITY,
+        0.0,
+        camera.eye,
+    );
+    assert_eq!(r.models()[0].2, plain[0].2, "draw_nodes is NONE");
+    // Protanopia: slot 1 swaps, slot 2 (literal) and slot 4 (unknown) stay.
+    let settings = AccessSettings {
+        cvd: CvdMode::Protanopia,
+        ..AccessSettings::default()
+    };
+    let seen = draw(&NodeAccess::new(Some(&colors), &settings, Some(&camera)));
+    assert_eq!(seen.len(), 1, "no outline without high contrast");
+    assert_eq!(
+        seen[0].2.palette,
+        Some([pro, Color::rgb(1, 2, 3), Color::WHITE, red])
+    );
+    // High contrast: the ring first (unlit, solid, larger), then the node.
+    let hc = AccessSettings {
+        high_contrast: true,
+        ..settings
+    };
+    let ringed = draw(&NodeAccess::new(Some(&colors), &hc, Some(&camera)));
+    assert_eq!(ringed.len(), 2);
+    assert_eq!(ringed[0].2.shading, trino_core::Shading::Unlit);
+    assert_eq!(ringed[0].2.emissive, Color::rgb(255, 230, 0));
+    assert!(ringed[0].1.m[0][0] > 1.0, "the copy is scaled up");
+    assert_eq!(ringed[1].2.palette, seen[0].2.palette);
+    // No camera, no ring.
+    assert_eq!(draw(&NodeAccess::new(Some(&colors), &hc, None)).len(), 1);
 }

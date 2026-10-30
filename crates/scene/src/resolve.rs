@@ -50,9 +50,46 @@ pub struct DrawItem {
     pub anim_graph: Option<crate::AnimGraphComponent>,
     /// True for parts that come from a prefab (not editable in place).
     pub from_prefab: bool,
+    /// Its model's semantic slots (issue #96): `asset_id` of each
+    /// `palettes.ron` name, 0 = none; `params.palette` holds their base
+    /// colors. `trino_core::scene::semantic_params` swaps them per mode.
+    pub semantic: [u32; 4],
+    /// The names behind [`Self::semantic`] (the editor's Inspector and
+    /// simulation).
+    pub semantic_names: [Option<String>; 4],
+    /// Its high-contrast outline (`outline`, issue #96): the model's
+    /// bounding sphere in its own space unless a radius was authored.
+    pub outline: Option<trino_core::scene::NodeOutline>,
 }
 
 impl DrawItem {
+    /// Its surface as the player's accessibility settings see it (issue
+    /// #96): the semantic slots in their color-vision mode.
+    pub fn params_for(&self, access: &trino_core::scene::NodeAccess) -> ModelParams {
+        trino_core::scene::semantic_params(&self.params, &self.semantic, access.data, access.cvd)
+    }
+
+    /// Draw its model `model` (the LOD pick) at `matrix` as `access` sees
+    /// it: in high contrast its outline's ring first, then the model with
+    /// `params` (from [`Self::params_for`], plus a pose). What
+    /// `trino_core::scene::draw_nodes_with` does for an exported node.
+    pub fn draw_with(
+        &self,
+        r: &mut dyn trino_core::Renderer,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        access: &trino_core::scene::NodeAccess,
+    ) {
+        if access.high_contrast
+            && let (Some(camera), Some(o)) = (access.camera, &self.outline)
+        {
+            o.at(matrix)
+                .draw(r, camera, model, matrix, trino_core::Material::VertexLit);
+        }
+        r.draw_model_matrix(model, matrix, trino_core::Material::VertexLit, params);
+    }
+
     /// Whether this item becomes a game-side `SceneNode` (codegen, TSCN):
     /// 2D-only sprites stay in the editor.
     pub fn exported(&self) -> bool {
@@ -392,6 +429,79 @@ fn visit(
         }
         (m.model_id(), m.path.clone())
     });
+    // Slot colors (issue #96): literal ones as they are, semantic ones at
+    // their base color (the runtime swaps them per color-vision mode).
+    let mut semantic = [0u32; 4];
+    let mut semantic_names: [Option<String>; 4] = Default::default();
+    if let Some(m) = model_c
+        && !m.palette.is_empty()
+    {
+        let mut palette = [trino_core::Color::WHITE; 4];
+        for slot in &m.palette {
+            let Some(i) = slot.index() else {
+                ctx.out.warnings.push(format!(
+                    "{name}: palette slot {} (1 to 4) — ignored",
+                    slot.slot
+                ));
+                continue;
+            };
+            palette[i] = match &slot.color {
+                crate::SlotColor::Rgb([r, g, b]) => trino_core::Color::rgb(*r, *g, *b),
+                crate::SlotColor::Semantic(n) => {
+                    semantic[i] = trino_core::asset_id(n);
+                    semantic_names[i] = Some(n.clone());
+                    let base = ctx
+                        .lib
+                        .palettes
+                        .as_ref()
+                        .and_then(|p| p.color(n, trino_core::access::CvdMode::Off));
+                    base.unwrap_or_else(|| {
+                        ctx.out.warnings.push(format!(
+                            "{name}: semantic color `{n}` is not in assets/palettes.ron — \
+                             slot {} stays white",
+                            slot.slot
+                        ));
+                        trino_core::Color::WHITE
+                    })
+                }
+            };
+        }
+        params.palette = Some(palette);
+    }
+    let outline = match (&e.outline, &model) {
+        (Some(o), Some((_, path))) => {
+            let bounds = ctx.lib.model_bounds.get(path);
+            let (center, radius) = match (o.radius, bounds) {
+                (r, Some((min, max))) => {
+                    let (min, max) = (crate::v3(*min), crate::v3(*max));
+                    let half = (max - min) * 0.5;
+                    let fit = half.dot(half).sqrt();
+                    ((min + max) * 0.5, if r > 0.0 { r } else { fit })
+                }
+                (r, None) if r > 0.0 => (Vec3::ZERO, r),
+                (_, None) => {
+                    ctx.out.warnings.push(format!(
+                        "{name}: an outline needs a radius or a model with known bounds — \
+                         it draws none"
+                    ));
+                    (Vec3::ZERO, 0.0)
+                }
+            };
+            (radius > 0.0).then(|| trino_core::scene::NodeOutline {
+                color: trino_core::Color::rgb(o.color[0], o.color[1], o.color[2]),
+                center,
+                radius,
+                pixels: o.pixels,
+            })
+        }
+        (Some(_), None) => {
+            ctx.out
+                .warnings
+                .push(format!("{name}: an outline needs a model — it draws none"));
+            None
+        }
+        _ => None,
+    };
     let sprite = e.sprite.as_ref().map(|s| SpriteDraw {
         id: s.sprite_id(),
         path: s.path.clone(),
@@ -516,6 +626,9 @@ fn visit(
         character: e.character.as_ref().map(|c| c.to_core()),
         anim_graph,
         from_prefab,
+        semantic,
+        semantic_names,
+        outline,
     });
 
     if let Some(inst) = &e.prefab {

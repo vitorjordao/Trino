@@ -32,9 +32,25 @@ pub struct AccessState {
     /// The last checklist and the revision it ran at.
     pub report: Option<Result<AccessReport, String>>,
     pub report_rev: u64,
+    /// The audio inspector's caption preview (issue #96).
+    pub caption: CaptionPreview,
 }
 
 impl AccessState {
+    /// What the views draw with (issue #96): the palettes, and the
+    /// simulated settings while the simulation is on (the defaults
+    /// otherwise: semantic slots at their base, no outlines).
+    pub fn view(&self) -> (&PalettesDef, AccessSettings) {
+        (
+            &self.palettes,
+            if self.simulate {
+                self.preview
+            } else {
+                AccessSettings::default()
+            },
+        )
+    }
+
     pub fn load(root: &Path) -> AccessState {
         let mut s = AccessState {
             palettes: PalettesDef::default(),
@@ -46,6 +62,7 @@ impl AccessState {
             simulate: true,
             report: None,
             report_rev: 0,
+            caption: CaptionPreview::default(),
         };
         let text = std::fs::read_to_string(palettes_path(root)).ok();
         s.reload(text.as_deref());
@@ -115,5 +132,67 @@ impl AccessState {
                 ],
             )
         }));
+    }
+}
+
+/// The audio inspector's caption Preview (issue #96): a caption queued in
+/// the Game view as a player with the Accessibility tab's simulated text
+/// size and contrast sees it, where the chosen style puts it.
+pub struct CaptionPreview {
+    pub queue: trino_core::access::Captions,
+    pub place: trino_core::access::CaptionPlace,
+    last: Option<std::time::Instant>,
+}
+
+impl Default for CaptionPreview {
+    fn default() -> Self {
+        CaptionPreview {
+            queue: trino_core::access::Captions::new(),
+            place: trino_core::access::CaptionPlace::Bottom,
+            last: None,
+        }
+    }
+}
+
+impl CaptionPreview {
+    /// Queue `key`'s caption with the sound's settings. The preview shows
+    /// it even when the simulated caption mode is off (it was asked for).
+    pub fn show(
+        &mut self,
+        key: &str,
+        keys: &crate::audio::CaptionKeys,
+        place: trino_core::access::CaptionPlace,
+        settings: &AccessSettings,
+    ) {
+        // A `'static` key, as a game's caption table's are: one small
+        // string per click.
+        let key: &'static str = Box::leak(key.to_owned().into_boxed_str());
+        let mut s = *settings;
+        s.captions = trino_core::access::CaptionMode::All;
+        self.queue.configure(None, &s);
+        self.place = place;
+        let important = keys.important.unwrap_or(false);
+        self.queue.push(
+            trino_core::access::CaptionInfo {
+                key,
+                priority: keys.priority.unwrap_or(if important { 100 } else { 0 }),
+                important,
+                direction: keys.direction.unwrap_or(false),
+                duration_ms: keys.seconds.map_or(0, |t| (t * 1000.0) as u16),
+            },
+            keys.direction.unwrap_or(false).then_some(0.8),
+        );
+        self.last = Some(std::time::Instant::now());
+    }
+
+    /// Age the queue by the time since the last call; `true` while it
+    /// shows something (the views repaint).
+    pub fn tick(&mut self) -> bool {
+        if let Some(t) = self.last {
+            let now = std::time::Instant::now();
+            self.queue.update(now.duration_since(t).as_secs_f32());
+            self.last = Some(now);
+        }
+        !self.queue.is_empty()
     }
 }

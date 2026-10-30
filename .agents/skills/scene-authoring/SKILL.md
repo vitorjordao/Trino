@@ -213,6 +213,19 @@ See `scenes/interior.scene.ron` for a working portal example.
 - For the consoles: `bake_grading = true` on the scene's manifest entry and `grading` on
   its models; `cargo xtask scene export --platform n64 --bake-grading` for code.
 
+### Accessibility in scenes (scene v8, prefab v6, TSCN v8; issue #96)
+
+- A model's color slots: `model: Some((path: "models/player", palette: [(slot: 1, color:
+  Semantic("team.home")), (slot: 2, color: Rgb((20, 20, 30)))]))`. `Semantic` names come
+  from `assets/palettes.ron` (an unknown one: a warning, the slot stays white); the
+  player's color-vision mode picks the alternative at run time. Slots 1..=4, the mesh's
+  glTF `_SLOT`s.
+- An entity's high-contrast ring: `outline: Some(())` (yellow, 2 px, the model's bounding
+  sphere) or `Some((color: (255, 255, 255), pixels: 3.0, radius: 0.8))`. Drawn while the
+  player's high contrast is on; one more unlit draw per part (on the N64's RSP).
+- Game code draws both with `trino_core::scene::draw_nodes_with(.., &NodeAccess::new(
+  data, &settings, Some(&camera)))`; plain `draw_nodes` keeps the base colors.
+
 ### Collision (issue #66, ADR 0035)
 
 - **The worked example** is `scenes/physics_playground.scene.ron`: a walkable 30° ramp,

@@ -362,6 +362,33 @@ viewport re-renders when it changes (`cvd_rendered`). The UI tab takes the same
 settings (`UiScreens::access`, part of its render key). The colors table's header names
 the modes too: a kittest click on "Deuteranopia" must pick the first match.
 
+### Authoring accessibility in the inspectors (issue #96)
+
+- **Assets › Audio › Caption** (`panels/audio.rs::caption_section`): the key combo
+  ("Caption key": none, "New key…", every table key), the texts per language with
+  "missing in" warnings, checkboxes "Important"/"Direction", drag values "Caption
+  priority"/"Caption seconds", "Caption place" + Preview. Edits are `Cmd::SetAudioKey`
+  (`manifest::edit::set_audio_key`'s caption keys). The keys are read apart from the
+  codec inspection (`AudioView::caption`, keyed on the manifest's text) so a checkbox
+  never waits on "Measuring codecs…". New key: `Localization::add_key_everywhere`, then
+  the app's usual `take_writes`. Preview: `AccessState::caption` (a core `Captions`
+  queue at the simulated settings, mode forced to All), drawn by the Game view after its
+  2D (`ViewInput::captions`), ticked in `App::ui`.
+- **Icons**: the UI tab's "Icon (color vision)" row (`ui_screens.rs::cvd_icon_row`: a
+  sprite path, its size shown, a hint from `trino_scene::access::icon_hint`), and Assets ›
+  Texture › Color vision (`panels/texture.rs::cvd_icon`, `Cmd::SetSpriteIcon` →
+  `manifest::edit::set_sprite_icon`; `Textures::icon` reads the manifest apart, like the
+  caption).
+- **Inspector › Model › Color slots** (`slot_colors`): one "Slot n color" combo per slot
+  the mesh uses (`Mesh::slots_used`): Baked, Color (a picker), or a semantic color of the
+  Accessibility tab's palettes; a swatch in the simulated mode. **Add component ›
+  Outline** (`outline_component`: color, width, radius or the model's).
+- **Views**: `viewport::view_params` swaps a semantic slot through the palettes the tab
+  edits (`AccessState::view()`: the simulated settings while the simulation is on, the
+  defaults otherwise) and draws an outlined item's ring first in simulated high contrast.
+  Both are in `RenderKey`. Tests: `audio_inspector_authors_a_sounds_caption`,
+  `icons_for_color_vision_on_nodes_and_sprites`, `palette_slots_and_outlines_in_the_inspector`.
+
 ## Project tab (issue #61, ADR 0029)
 
 - `shipping.rs` (state) + `panels/shipping.rs` (UI): **Achievements** edits

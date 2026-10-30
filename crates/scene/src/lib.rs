@@ -74,7 +74,7 @@ use trino_core::SpriteId;
 /// own choices when it saves (as one that ignored the tiers would drop
 /// theirs, or one that ignored `requires` a level's groups). The bump makes
 /// such an engine refuse the file instead.
-pub const SCENE_VERSION: u32 = 7;
+pub const SCENE_VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -833,6 +833,11 @@ pub struct Entity {
     /// for this spawn point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character: Option<CharacterComponent>,
+    /// A high-contrast outline around its model (issue #96): drawn while
+    /// the player's high contrast is on, by the scene runtime, the exported
+    /// and baked scenes and the editor's simulation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<OutlineComponent>,
     /// An animation graph that animates its model (issue #65): Play and
     /// the scene player run it with no game code. Not in TSCN or the
     /// exported code yet: a console game drives its graph itself.
@@ -870,6 +875,7 @@ impl Entity {
             shadow: None,
             glow: None,
             character: None,
+            outline: None,
             anim_graph: None,
             platforms: PlatformVariants::default(),
             children: Vec::new(),
@@ -958,7 +964,7 @@ impl SpriteComponent {
 }
 
 /// Draws a baked model (`models/<name>` — glTF or a placeholder primitive).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct ModelComponent {
     /// Logical asset path, e.g. `"models/crate"`.
     pub path: String,
@@ -977,6 +983,78 @@ pub struct ModelComponent {
     /// each level can move or drop out per platform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lod: Vec<LodDef>,
+    /// Colors of the model's color slots (issue #96): a semantic color of
+    /// `assets/palettes.ron`, which follows the player's color-vision mode,
+    /// or a literal color. Slots left out keep their baked color.
+    ///
+    /// ```ron
+    /// palette: [(slot: 1, color: Semantic("team.home")), (slot: 2, color: Rgb((20, 20, 30)))]
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette: Vec<SlotColorDef>,
+}
+
+/// One color slot of a [`ModelComponent`] (issue #96).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SlotColorDef {
+    /// The mesh's color slot, 1..=4 (glTF `_SLOT`).
+    pub slot: u8,
+    pub color: SlotColor,
+}
+
+/// A slot's color: a name of `assets/palettes.ron` or a literal.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum SlotColor {
+    Semantic(String),
+    Rgb([u8; 3]),
+}
+
+/// The high-contrast outline of an entity's model (issue #96,
+/// `trino_core::access::Outline`): `outline: Some(())` is a 2-pixel ring
+/// in the engine's yellow around the model's bounding sphere.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineComponent {
+    #[serde(default = "outline_color")]
+    pub color: [u8; 3],
+    /// The sphere's radius in the entity's space; 0 = from the model's
+    /// bounds (the usual).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub radius: f32,
+    /// The ring's width in a 240-line picture's pixels.
+    #[serde(default = "outline_pixels")]
+    pub pixels: f32,
+}
+
+fn outline_color() -> [u8; 3] {
+    let c = trino_core::access::OUTLINE_COLOR;
+    [c.r, c.g, c.b]
+}
+
+fn outline_pixels() -> f32 {
+    2.0
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+impl Default for OutlineComponent {
+    fn default() -> Self {
+        OutlineComponent {
+            color: outline_color(),
+            radius: 0.0,
+            pixels: outline_pixels(),
+        }
+    }
+}
+
+impl SlotColorDef {
+    /// `slot` (1..=4) as an index into a `Palette`.
+    pub fn index(&self) -> Option<usize> {
+        (1..=4).contains(&self.slot).then(|| self.slot as usize - 1)
+    }
 }
 
 /// One LOD level of a [`ModelComponent`]: a chain full mesh → light mesh →
@@ -1089,6 +1167,7 @@ impl ModelComponent {
             tint: None,
             anim: None,
             lod: Vec::new(),
+            palette: Vec::new(),
         }
     }
 
@@ -1357,11 +1436,12 @@ impl Scene {
             ron::from_str(text).map_err(|e| format!("scene parse error: {e}"))?;
         match versioned.version {
             SCENE_VERSION => ron::from_str(text).map_err(|e| format!("scene parse error: {e}")),
-            // v6 is v7 without shadows, v5 is v6 without groups (`requires`
+            // v7 is v8 without semantic slot colors and outlines (issue
+            // #96), v6 is v7 without shadows, v5 is v6 without groups (`requires`
             // defaults to boot), v4 is v5 without the hardware tiers, v3 is
             // v4 without the Web, v2 is v3 without variants: same fields,
             // defaults fill the rest.
-            2..=6 => {
+            2..=7 => {
                 let mut scene: Scene = ron::from_str(text)
                     .map_err(|e| format!("scene parse error (v{} file): {e}", versioned.version))?;
                 scene.version = SCENE_VERSION;
@@ -1906,18 +1986,18 @@ mod tests {
     }
 
     #[test]
-    fn v6_scenes_load_as_v7_without_shadows() {
+    fn v6_scenes_load_as_current_without_shadows() {
         let text = r#"(version: 6, name: "old", environment: (ao: Some(())),
             entities: [(name: "rock", model: Some((path: "models/rock")))])"#;
         let scene = Scene::from_ron(text).unwrap();
         assert_eq!(scene.version, SCENE_VERSION);
-        assert_eq!(SCENE_VERSION, 7);
+        assert_eq!(SCENE_VERSION, 8);
         assert_eq!(scene.environment.shadows, None);
         assert!(scene.entities[0].shadow.is_none());
         assert!(scene.environment.ao.is_some(), "the rest kept");
-        // Saved as v7, it reloads the same.
+        // Saved as the current version, it reloads the same.
         let saved = scene.to_ron();
-        assert!(saved.contains("version: 7"));
+        assert!(saved.contains("version: 8"));
         assert_eq!(Scene::from_ron(&saved).unwrap(), scene);
     }
 

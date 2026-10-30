@@ -249,6 +249,113 @@ pub struct SceneNode {
     /// A character's body (spawn point of a player or an NPC, issue #66):
     /// [`Character::config`] makes its controller.
     pub character: Option<Character>,
+    /// Semantic colors of its model's color slots 1..=4 (issue #96): the
+    /// `asset_id` of a `palettes.ron` name, 0 = that slot keeps
+    /// `params.palette`'s color. `params.palette` holds each name's base
+    /// color, so a game without the access data draws those;
+    /// [`draw_nodes_with`] swaps them by the player's color-vision mode.
+    pub semantic: [u32; 4],
+    /// A high-contrast outline around its model (issue #96), drawn by
+    /// [`draw_nodes_with`] while the player's settings ask for high
+    /// contrast.
+    pub outline: Option<NodeOutline>,
+}
+
+/// A node's high-contrast outline ([`crate::access::Outline`], issue #96):
+/// its color and width, and the model's bounding sphere in the node's own
+/// space (the tools fill it from the model's bounds unless a radius was
+/// authored).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct NodeOutline {
+    pub color: Color,
+    pub center: Vec3,
+    pub radius: f32,
+    /// The ring's width at the sphere's depth, in a 240-line picture's
+    /// pixels ([`crate::access::Outline::pixels`]).
+    pub pixels: f32,
+}
+
+impl NodeOutline {
+    /// The outline of the node drawn at world matrix `m`: the sphere moved
+    /// with it, its radius scaled by the matrix's largest axis.
+    pub fn at(&self, m: &Mat34) -> crate::access::Outline {
+        crate::access::Outline::new(
+            self.color,
+            m.transform_point(self.center),
+            self.radius * m.max_scale(),
+        )
+        .with_pixels(self.pixels)
+    }
+}
+
+/// What the player's accessibility settings change in a scene's drawing
+/// (issue #96): semantic slot colors by color-vision mode, outlines in high
+/// contrast. [`NodeAccess::NONE`] draws exactly what [`draw_nodes_in`]
+/// always drew.
+#[derive(Clone, Copy)]
+pub struct NodeAccess<'a> {
+    /// The project's semantic colors (`access/data`); without them a
+    /// semantic slot keeps its base color.
+    pub data: Option<&'a crate::access::AccessData<'a>>,
+    pub cvd: crate::access::CvdMode,
+    pub high_contrast: bool,
+    /// The camera an outline is pushed back from: no camera, no outlines.
+    pub camera: Option<&'a Camera3>,
+}
+
+impl NodeAccess<'_> {
+    pub const NONE: NodeAccess<'static> = NodeAccess {
+        data: None,
+        cvd: crate::access::CvdMode::Off,
+        high_contrast: false,
+        camera: None,
+    };
+}
+
+impl<'a> NodeAccess<'a> {
+    /// The player's `settings`, the project's colors and the frame's
+    /// camera.
+    pub fn new(
+        data: Option<&'a crate::access::AccessData<'a>>,
+        settings: &crate::access::AccessSettings,
+        camera: Option<&'a Camera3>,
+    ) -> NodeAccess<'a> {
+        NodeAccess {
+            data,
+            cvd: settings.cvd,
+            high_contrast: settings.high_contrast,
+            camera,
+        }
+    }
+}
+
+/// `params` with the semantic slots of `semantic` (ids, 0 = keep) taken
+/// from `data` in `mode` (issue #96). Unchanged when no slot is semantic;
+/// a name `data` lacks keeps the slot's color in `params.palette` (its
+/// base).
+pub fn semantic_params(
+    params: &ModelParams,
+    semantic: &[u32; 4],
+    data: Option<&crate::access::AccessData<'_>>,
+    mode: crate::access::CvdMode,
+) -> ModelParams {
+    if *semantic == [0; 4] {
+        return *params;
+    }
+    let mut palette = params.palette.unwrap_or([Color::WHITE; 4]);
+    if let Some(data) = data {
+        for (c, &id) in palette.iter_mut().zip(semantic) {
+            if id != 0
+                && let Some(v) = data.color_id(id, mode)
+            {
+                *c = v;
+            }
+        }
+    }
+    ModelParams {
+        palette: Some(palette),
+        ..*params
+    }
 }
 
 impl SceneNode {
@@ -337,6 +444,10 @@ impl SceneNode {
 ///   (flag bit16): f32 radius, f32 height, f32 max_slope_deg,
 ///   f32 step_height; shapes 4 (ramp: a b c = half extents) and 5 (mesh:
 ///   a b c = half extents of its local bounds)
+///   access (v8, issue #96): u32*4 semantic slot ids (0 = none), the
+///   palette rgba*4 (flag bit18; the semantic slots' base colors), then
+///   the outline (flag bit17): color rgba, center f32*3, radius f32,
+///   pixels f32
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
 /// ```
 ///
@@ -350,9 +461,10 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// what they cast and the receiver they are (28 bytes, ADR 0025). v6:
 /// nodes end with their glow (16 bytes, issue #64). v7: then their
 /// physics (24 bytes, issue #66): collider layer, one-way, ramps, mesh
-/// colliders and the character component.
+/// colliders and the character component. v8: then their semantic slot
+/// colors, palette and high-contrast outline (56 bytes, issue #96).
 /// Older blobs are refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 7;
+pub const TSCN_VERSION: u16 = 8;
 pub const TSCN_HEADER: usize = 12;
 pub const TSCN_ENV_BYTES: usize = 68 + TSCN_ENV_SHADOW_BYTES;
 /// The shadows block at the end of the environment (v5).
@@ -375,17 +487,22 @@ pub const TSCN_NODE_BYTES: usize = 16
     + TSCN_WATER_BYTES
     + TSCN_SHADOW_BYTES
     + TSCN_GLOW_BYTES
-    + TSCN_PHYSICS_BYTES;
+    + TSCN_PHYSICS_BYTES
+    + TSCN_ACCESS_BYTES;
 /// The water block at the end of a node (v4).
 pub const TSCN_WATER_BYTES: usize = 28;
 /// The shadow block near the end of a node (v5).
 pub const TSCN_SHADOW_BYTES: usize = 28;
 /// The glow block at the end of a node (v6).
 pub const TSCN_GLOW_BYTES: usize = 16;
-/// The physics block at the end of a node (v7).
+/// The physics block near the end of a node (v7).
 pub const TSCN_PHYSICS_BYTES: usize = 24;
+/// The accessibility block at the end of a node (v8).
+pub const TSCN_ACCESS_BYTES: usize = 56;
+/// Where a node's accessibility block starts.
+const ACCESS_AT: usize = TSCN_NODE_BYTES - TSCN_ACCESS_BYTES;
 /// Where a node's physics block starts.
-const PHYSICS_AT: usize = TSCN_NODE_BYTES - TSCN_PHYSICS_BYTES;
+const PHYSICS_AT: usize = ACCESS_AT - TSCN_PHYSICS_BYTES;
 /// Where a node's glow block starts.
 const GLOW_AT: usize = PHYSICS_AT - TSCN_GLOW_BYTES;
 /// Where a node's shadow block starts.
@@ -629,6 +746,14 @@ impl BakedScene {
             },
             ..ModelParams::DEFAULT
         };
+        // The palette (v8, flag bit 18): the semantic slots' base colors.
+        let params = ModelParams {
+            palette: (flags & (1 << 18) != 0).then(|| {
+                let p = at + ACCESS_AT + 16;
+                [0, 4, 8, 12].map(|o| rd_rgba(d, p + o))
+            }),
+            ..params
+        };
         let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
         let shape = match (flags >> 12) & 7 {
             1 => Some(Shape::Box {
@@ -690,9 +815,19 @@ impl BakedScene {
                 crate::post::GlowMode::Baked
             },
         });
+        let a = at + ACCESS_AT;
+        let semantic = [0, 4, 8, 12].map(|o| rd_u32(d, a + o));
+        let outline = (flags & (1 << 17) != 0).then(|| NodeOutline {
+            color: rd_rgba(d, a + 32),
+            center: rd_vec3(d, a + 36),
+            radius: rd_f32(d, a + 48),
+            pixels: rd_f32(d, a + 52),
+        });
         SceneNode {
             name,
             tags: Tags::Packed(tags),
+            semantic,
+            outline,
             glow,
             cell: d[v],
             vis,
@@ -808,6 +943,21 @@ pub fn draw_nodes_in(
     eye: Vec3,
     visible: u64,
 ) {
+    draw_nodes_with(renderer, nodes, root, time, eye, visible, &NodeAccess::NONE);
+}
+
+/// [`draw_nodes_in`] as the player's accessibility settings see it (issue
+/// #96): semantic slots in their color-vision mode, and in high contrast
+/// each outlined node's ring before it (one more unlit draw per node).
+pub fn draw_nodes_with(
+    renderer: &mut dyn Renderer,
+    nodes: &[SceneNode],
+    root: &Mat34,
+    time: f32,
+    eye: Vec3,
+    visible: u64,
+    access: &NodeAccess,
+) {
     // The quality's LOD bias (1 on the consoles), read once per call.
     let bias = renderer.lod_bias();
     for node in nodes {
@@ -819,11 +969,17 @@ pub fn draw_nodes_in(
         if pick == LodPick::None && (node.model.is_some() || node.glow.is_none()) {
             continue;
         }
-        let mut params = node.params;
+        let mut params = semantic_params(&node.params, &node.semantic, access.data, access.cvd);
         if let Some((clip, speed)) = node.anim {
             params.anim = Some(AnimRef::new(clip, time * speed));
         }
         let matrix = root.mul(&node.matrix);
+        if access.high_contrast
+            && let (Some(camera), Some(o), LodPick::Model(m)) = (access.camera, &node.outline, pick)
+        {
+            o.at(&matrix)
+                .draw(renderer, camera, m, &matrix, Material::VertexLit);
+        }
         if pick != LodPick::None {
             pick.draw(renderer, &matrix, &params, eye);
         }
@@ -864,6 +1020,8 @@ mod tests {
             vis: None,
             glow: None,
             character: None,
+            semantic: [0; 4],
+            outline: None,
         },
         SceneNode {
             name: "spawn",
@@ -885,6 +1043,8 @@ mod tests {
             vis: None,
             glow: None,
             character: None,
+            semantic: [0; 4],
+            outline: None,
         },
     ];
 
@@ -980,6 +1140,12 @@ mod tests {
         // Physics (v7): layer 4, not one-way, no character.
         b.extend_from_slice(&[4, 0, 0, 0]);
         b.extend_from_slice(&[0; TSCN_PHYSICS_BYTES - 4]);
+        // Access (v8): slot 2 semantic, no palette (flag bit18 off) nor
+        // outline (bit17 off).
+        for id in [0u32, 0xAB, 0, 0] {
+            b.extend_from_slice(&id.to_le_bytes());
+        }
+        b.extend_from_slice(&[0; TSCN_ACCESS_BYTES - 16]);
         b.extend_from_slice(b"a/doordoor\nx");
         f(&mut b, &[30.0]);
         b.extend_from_slice(&0u32.to_le_bytes()); // culled beyond 30
@@ -1015,6 +1181,11 @@ mod tests {
         );
         assert_eq!(c.offset, Vec3::new(0.0, 1.0, 0.0));
         assert_eq!((c.layer, c.one_way, n.character), (4, false, None));
+        // v8: one semantic slot, no palette, no outline.
+        assert_eq!(
+            (n.semantic, n.params.palette, n.outline),
+            ([0, 0xAB, 0, 0], None, None)
+        );
         // LOD: model 7 up close, nothing beyond 30 units.
         assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 0.0)), Some(ModelId(7)));
         assert_eq!(n.model_from(Vec3::new(3.0, 0.0, 40.0)), None);

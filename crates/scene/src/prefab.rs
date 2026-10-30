@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::Entity;
 
-/// v5: an entity's `shadow` (issue #57, ADR 0025: what it casts, whether
-/// it receives). v4: the consoles' hardware tiers' variants and LOD starts
-/// (`n64_expanded`, `n3ds_new`, issue #54). v3: the Web's (`web`, issue
-/// #47). v2: entities may carry per-platform variants (`platforms`, see
-/// [`crate::platform`]). v1 to v4 files load unchanged and save as v5.
-pub const PREFAB_VERSION: u32 = 5;
+/// v6: a model's semantic slot colors (`palette`) and an entity's
+/// high-contrast `outline` (issue #96). v5: an entity's `shadow` (issue
+/// #57, ADR 0025: what it casts, whether it receives). v4: the consoles'
+/// hardware tiers' variants and LOD starts (`n64_expanded`, `n3ds_new`,
+/// issue #54). v3: the Web's (`web`, issue #47). v2: entities may carry
+/// per-platform variants (`platforms`, see [`crate::platform`]). v1 to v5
+/// files load unchanged and save as v6.
+pub const PREFAB_VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Prefab {

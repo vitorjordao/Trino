@@ -72,7 +72,7 @@ pub fn to_rust_graded(
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId, NodeOutline,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -333,7 +333,7 @@ pub fn to_rust_graded(
             .collect();
         let _ = writeln!(
             out,
-            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: None,\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n        character: {},\n    }},",
+            "    SceneNode {{\n        name: \"{}\",\n        tags: Tags::List(&[{}]),\n        matrix: Mat34 {{\n            m: [{}],\n        }},\n        model: {},\n        params: ModelParams {{\n            tint: {},\n            emissive: {},\n            shading: Shading::{},\n            double_sided: {},\n            anim: None,\n            texture: {},\n            palette: {},\n            gloss: {},\n            filter: TexFilter::{:?},\n            detail: {},\n            water: {},\n            shadow: {},\n        }},\n        anim: {},\n        collider: {},\n        lod: {},\n        sound: {},\n        cell: {},\n        vis: {},\n        glow: {},\n        character: {},\n        semantic: [{}],\n        outline: {},\n    }},",
             esc(&item.name),
             tags.join(", "),
             rows.join(", "),
@@ -344,6 +344,13 @@ pub fn to_rust_graded(
             p.double_sided,
             match p.texture {
                 Some(t) => format!("Some(SpriteId({:#010x}))", t.0),
+                None => "None".into(),
+            },
+            match p.palette {
+                Some(pal) => format!(
+                    "Some([{}])",
+                    pal.iter().map(|c| color(*c)).collect::<Vec<_>>().join(", ")
+                ),
                 None => "None".into(),
             },
             p.gloss,
@@ -413,6 +420,25 @@ pub fn to_rust_graded(
                     f(c.height),
                     f(c.max_slope_deg),
                     f(c.step_height)
+                ),
+                None => "None".into(),
+            },
+            item.semantic
+                .iter()
+                .zip(&item.semantic_names)
+                .map(|(id, n)| match n {
+                    Some(n) => format!("{id:#010x} /* {} */", esc(n)),
+                    None => "0".into(),
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            match item.outline {
+                Some(o) => format!(
+                    "Some(NodeOutline {{ color: {}, center: {}, radius: {}, pixels: {} }})",
+                    color(o.color),
+                    v3(o.center),
+                    f(o.radius),
+                    f(o.pixels)
                 ),
                 None => "None".into(),
             }

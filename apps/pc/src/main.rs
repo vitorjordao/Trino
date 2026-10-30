@@ -423,6 +423,7 @@ impl ApplicationHandler for App {
                     .apply_access(&trino_core::Platform::access(&ctx.platform));
 
                 if let Some(player) = &mut ctx.player {
+                    player.set_access(&ctx.platform);
                     player.update(&input, dt);
                     player.render(&mut ctx.renderer);
                 } else if let Some(game) = &mut ctx.showcase {

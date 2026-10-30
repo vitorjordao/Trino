@@ -145,6 +145,8 @@ pub enum Cmd {
     SetTextureFormat(String, pipeline::Platform, Option<String>),
     /// A texture's `quality` or `min_psnr` (`None` removes it).
     SetTextureKey(String, &'static str, Option<String>),
+    /// A sprite's color-vision icon (`cvd_icon`, issue #96).
+    SetSpriteIcon(String, Option<String>),
     /// A sound's `quality`, `stream`, `loop` or `bus` (`None` removes it).
     SetAudioKey(String, &'static str, Option<String>),
     /// One platform's `codec` or `sample_rate` entry of a sound (`None`:
@@ -852,6 +854,12 @@ impl App {
             memory: self.groups.ready_plans(),
             stereo_preview: self.game_view.stereo_view != trino_platform_pc::StereoView::Off,
             scene_path: &self.doc.path,
+            access: self.access.view(),
+            captions: Some((
+                &self.access.caption,
+                &self.localization.langs,
+                self.localization.preview.as_deref(),
+            )),
         }
     }
 
@@ -1893,6 +1901,13 @@ impl App {
                 if let Some(p) = &mut self.audio.player {
                     p.stop();
                 }
+            }
+            Cmd::SetSpriteIcon(logical, icon) => {
+                self.project.set_sprite_icon(&logical, icon.as_deref())?;
+                self.log.info(format!(
+                    "{logical}: cvd_icon {}",
+                    icon.as_deref().unwrap_or("none")
+                ));
             }
             Cmd::SetTextureKey(logical, key, value) => {
                 self.project
@@ -3712,6 +3727,11 @@ impl eframe::App for App {
             self.rev += 1; // animated content re-renders every frame
             ctx.request_repaint();
         }
+        // A previewed caption counts down (issue #96).
+        if self.access.caption.tick() {
+            self.rev += 1;
+            ctx.request_repaint();
+        }
 
         egui::Panel::top("menu")
             .frame(
@@ -3985,6 +4005,12 @@ impl egui_dock::TabViewer for TabView<'_> {
                     memory: app.groups.ready_plans(),
                     stereo_preview: app.game_view.stereo_view != trino_platform_pc::StereoView::Off,
                     scene_path: &app.doc.path,
+                    access: app.access.view(),
+                    captions: Some((
+                        &app.access.caption,
+                        &app.localization.langs,
+                        app.localization.preview.as_deref(),
+                    )),
                 };
                 if kind == ViewKind::Game {
                     // The previewed preset, as the Quality tab defines it.

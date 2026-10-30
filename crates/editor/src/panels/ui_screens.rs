@@ -686,6 +686,10 @@ fn issues(app: &mut App, ui: &mut egui::Ui) {
 struct Choices {
     fonts: Vec<String>,
     sprites: Vec<String>,
+    /// Each sprite's size (the icon's size comes from it).
+    sprite_sizes: std::collections::BTreeMap<String, (u32, u32)>,
+    /// The project's semantic colors (the icon hint, issue #96).
+    palettes: trino_scene::access::PalettesDef,
     models: Vec<String>,
     /// Controls with an id (focus and nav targets).
     controls: Vec<String>,
@@ -705,6 +709,13 @@ fn inspector(app: &mut App, ui: &mut egui::Ui) {
             .filter(|k| k.starts_with("sprites/"))
             .cloned()
             .collect(),
+        sprite_sizes: app
+            .project
+            .sprites
+            .iter()
+            .map(|(k, v)| (k.clone(), (v.width, v.height)))
+            .collect(),
+        palettes: app.access.palettes.clone(),
         models: app.project.models.keys().cloned().collect(),
         controls: def
             .nodes()
@@ -763,6 +774,52 @@ fn check(ui: &mut egui::Ui, name: &str, v: &mut bool, text: &str) {
     let r = ui.checkbox(v, text);
     let on = *v;
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name));
+}
+
+/// The node's color-vision icon (issue #96): a sprite drawn at its right
+/// end while the player's color-vision mode is on, its size the sprite's;
+/// and a hint when the node's color is a `distinct` group's and it has
+/// none (the same check as `cargo xtask access check`).
+fn cvd_icon_row(ui: &mut egui::Ui, n: &mut NodeDef, choices: &Choices) {
+    theme::prop(ui, "icon", |ui| {
+        path_combo(
+            ui,
+            "Icon (color vision)",
+            &mut n.cvd_icon,
+            &choices.sprites,
+            "none",
+        );
+        if !n.cvd_icon.is_empty() {
+            if let Some((w, h)) = choices.sprite_sizes.get(&n.cvd_icon) {
+                ui.label(
+                    RichText::new(format!("{w}×{h}"))
+                        .size(11.0)
+                        .color(c::TEXT_FAINT),
+                );
+            }
+            if theme::named_icon_button(ui, icon::X, "Remove the icon").clicked() {
+                n.cvd_icon.clear();
+            }
+        }
+    });
+    if let Some([r, g, b, _]) = n.color
+        && let Some(f) = trino_scene::access::icon_hint(
+            &choices.palettes,
+            &n.id,
+            [r, g, b],
+            !n.cvd_icon.is_empty(),
+            trino_scene::access::ICON_NODE_DELTA_E,
+        )
+    {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("{} {}", icon::WARNING, f.message))
+                    .size(11.0)
+                    .color(c::WARN),
+            )
+            .wrap(),
+        );
+    }
 }
 
 /// A combo of `options` (value, label) named `name`.
@@ -905,6 +962,7 @@ fn node_sections(
                 };
                 color(ui, "Node color", &mut n.color, default)
             });
+            cvd_icon_row(ui, n, choices);
         },
     );
     if n.kind.has_text() {

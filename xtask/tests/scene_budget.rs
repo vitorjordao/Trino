@@ -810,3 +810,60 @@ fn the_stereo_budget_is_two_eyes_of_the_3ds_frame() {
     let text = String::from_utf8_lossy(&text.stdout);
     assert!(text.contains("stereo: 2 eyes"), "{text}");
 }
+
+/// High-contrast outlines and palettes on water in the platform budget
+/// (issue #96): each outlined part in view is one more draw, on the N64's
+/// RSP (unlit, solid); a palette on a water surface is the one palette
+/// that leaves the RSP, and the advice says so, a tint for a single-slot
+/// mesh.
+#[test]
+fn outlines_and_water_palettes_reach_the_budget() {
+    let (meshes, lib) = assets();
+    let mut scene = Scene::new("budget");
+    scene.environment.camera.eye = [0.0, 2.0, -8.0];
+    scene.environment.camera.target = [0.0, 0.5, 0.0];
+    let mut rock = rock_at("rock", [0.0, 0.0, 0.0]);
+    rock.outline = Some(trino_scene::OutlineComponent::default());
+    scene.entities.push(rock);
+    scene.entities.push(rock_at("plain", [2.0, 0.0, 0.0]));
+    let tris = |b: &FrameBudget| b.outlines.tris;
+    let n64 = estimate(&scene, &lib, &meshes, Target::N64);
+    assert_eq!(
+        (n64.outlines.draws, n64.outlines.rsp),
+        (1, 1),
+        "{:?}",
+        n64.outlines
+    );
+    assert!(tris(&n64) > 0);
+    let line = budget::outline_line(&n64).unwrap();
+    assert!(
+        line.contains("+1 outline draw") && line.contains("(1 on the RSP)"),
+        "{line}"
+    );
+    let pc = estimate(&scene, &lib, &meshes, Target::Pc);
+    assert_eq!(pc.outlines.draws, 1);
+    assert!(!budget::outline_line(&pc).unwrap().contains("RSP"));
+    scene.entities[0].outline = None;
+    assert!(budget::outline_line(&estimate(&scene, &lib, &meshes, Target::N64)).is_none());
+
+    // The slotted card under the water material, its slot 1 recolored.
+    let mut card = Entity::new("card").with_model(ModelComponent {
+        material: Some("materials/water".into()),
+        palette: vec![trino_scene::SlotColorDef {
+            slot: 1,
+            color: trino_scene::SlotColor::Rgb([0, 90, 200]),
+        }],
+        ..ModelComponent::new("models/selftest_slots")
+    });
+    card.transform.pos = [0.0, 0.5, 0.0];
+    scene.entities.push(card);
+    let n64 = estimate(&scene, &lib, &meshes, Target::N64);
+    assert_eq!(n64.water_palettes.len(), 1, "{:?}", n64.water_palettes);
+    let advice = budget::water_palette_lines(&n64);
+    assert!(
+        advice[0].starts_with("card: a palette on water leaves the N64's RSP"),
+        "{advice:?}"
+    );
+    // Slots 1 and 4 of the card: a tint can't stand in for both.
+    assert!(advice[0].contains("2 slots"), "{advice:?}");
+}

@@ -40,6 +40,8 @@ fn node(glow: Option<Glow>) -> SceneNode {
         vis: None,
         glow,
         character: None,
+        semantic: [0; 4],
+        outline: None,
     }
 }
 

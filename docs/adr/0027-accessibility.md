@@ -190,6 +190,34 @@ contrast) applied to the Scene, Game and UI views (also View › Accessibility s
 sees it (edits write `assets/palettes.ron`, outside edits show live), and the checklist
 from the same `check_project` the CLI runs. A kittest flow and the layout audit cover it.
 
+**Authoring in the editor (GitHub #96).** Every accessibility feature that was text-only
+is now edited where its asset is, writing the same file a person or an agent writes, and
+following outside edits live:
+
+- **Captions** (Assets › Audio › Caption): the key from the string tables' keys (or "New
+  key…", added to every language through the Localization tab's writer), the text in each
+  language with "missing in pt-BR" warnings, `important`, `caption_priority`, `direction`,
+  `caption_seconds` (`manifest::edit::set_audio_key`), a Preview that queues the caption in
+  the Game view at the simulated text size and contrast (bottom, top or the 3DS touch
+  screen), and this sound's lines of `check_captions`.
+- **Color-vision icons**: a node's `cvd_icon` in the UI tab's inspector (its size is the
+  sprite's: `TUIL` derives it, so the row shows it rather than edits it) and a sprite's in
+  Assets › Texture (`manifest::edit::set_sprite_icon`). `trino_scene::access::icon_hint`
+  flags a node whose color is within ΔE 3 of a `distinct` group's color, or a sprite whose
+  mean opaque color is within ΔE 12, with no icon; `check_project` runs the same check, so
+  `access check` and the panels agree.
+- **Semantic slot colors** (scene v8, prefab v6, TSCN v8): a model's `palette: [(slot: n,
+  color: Semantic("name") | Rgb((r, g, b)))]`. Resolve writes each name's base color into
+  `ModelParams::palette` and its `asset_id` into `DrawItem::semantic`; codegen and TSCN carry
+  both (`SceneNode::semantic`); `trino_core::scene::draw_nodes_with` and the scene player
+  swap them by the player's mode through `AccessData::color_id`, the editor's views by the
+  simulation. A palette stays on the N64's RSP since #128 except on water: the budget's
+  advice suggests a tint for a single-slot water mesh.
+- **Outlines**: an `outline` component (color, width, a radius or the model's bounds) that
+  `draw_nodes_with`, the scene player and the editor's views draw (§7's ring) while high
+  contrast is on (simulated in the editor). The platform budget counts one more draw per
+  outlined part and, on the N64, how many stay on the RSP (`budget::outline_line`).
+
 ### 11. Adopters
 
 - castle64: the stage doors' open tints come from `palettes.ron` per mode; the coin, star

@@ -907,11 +907,37 @@ pub mod edit {
         set_key(text, kind, name, key, value.as_deref())
     }
 
+    /// Set or remove (`None`) a sprite's color-vision icon (`cvd_icon =
+    /// "sprites/x"` of `[sprites.<name>]`, issue #96): the sprite drawn with
+    /// it while the player's color-vision mode is on. Keeps every other
+    /// line.
+    pub fn set_sprite_icon(text: &str, name: &str, icon: Option<&str>) -> Result<String, String> {
+        let value = match icon {
+            None => None,
+            Some(i) => {
+                let ok = i.strip_prefix("sprites/").is_some_and(|n| {
+                    !n.is_empty() && !n.contains(|c: char| c == '"' || c.is_whitespace())
+                });
+                if !ok {
+                    return Err(format!("cvd_icon `{i}` (a sprite: sprites/<name>)"));
+                }
+                if i == format!("sprites/{name}") {
+                    return Err(format!("`sprites/{name}` can't be its own icon"));
+                }
+                Some(format!("\"{i}\""))
+            }
+        };
+        set_key(text, "sprites", name, "cvd_icon", value.as_deref())
+    }
+
     /// Set or remove (`None`) a key of `[sounds.<name>]` / `[music.<name>]`
     /// (`kind`) that is the same on every platform: `quality` (0..=10),
     /// `stream` and `loop` (`true`/`false`) or `bus` (a bus label, written
-    /// quoted) — what the editor's audio inspector writes. Keeps every
-    /// other line.
+    /// quoted), and the caption's keys (issue #96): `caption` (a string-table
+    /// key, written quoted), `important` and `direction` (`true`/`false`),
+    /// `caption_priority` (0..=255), `caption_seconds` (more than 0, at most
+    /// 60) — what the editor's audio inspector writes. Keeps every other
+    /// line.
     pub fn set_audio_key(
         text: &str,
         kind: &str,
@@ -920,7 +946,39 @@ pub mod edit {
         value: Option<&str>,
     ) -> Result<String, String> {
         let value = match (key, value) {
-            ("quality" | "stream" | "loop" | "bus", None) => None,
+            (
+                "quality" | "stream" | "loop" | "bus" | "caption" | "important" | "direction"
+                | "caption_priority" | "caption_seconds",
+                None,
+            ) => None,
+            ("caption", Some(k)) => {
+                let k = k.trim();
+                if k.is_empty() || k.contains(char::is_whitespace) || k.contains('"') {
+                    return Err(format!(
+                        "caption `{k}` (a string-table key, like cap.whistle)"
+                    ));
+                }
+                Some(format!("\"{k}\""))
+            }
+            ("important" | "direction", Some(v @ ("true" | "false"))) => Some(v.to_string()),
+            ("important" | "direction", Some(v)) => {
+                return Err(format!("{key} `{v}` (true or false)"));
+            }
+            ("caption_priority", Some(v)) => {
+                let p: u8 = v
+                    .parse()
+                    .map_err(|_| format!("caption_priority `{v}` (0 to 255)"))?;
+                Some(p.to_string())
+            }
+            ("caption_seconds", Some(v)) => {
+                let t: f32 = v
+                    .parse()
+                    .map_err(|_| format!("caption_seconds `{v}` is not a number"))?;
+                if !(t > 0.0 && t <= 60.0) {
+                    return Err(format!("caption_seconds {t} (more than 0, at most 60)"));
+                }
+                Some(v.to_string())
+            }
             ("quality", Some(v)) => {
                 let q: f32 = v
                     .parse()
@@ -940,7 +998,8 @@ pub mod edit {
             }
             (other, _) => {
                 return Err(format!(
-                    "`{other}` is not an audio key (quality, stream, loop, bus)"
+                    "`{other}` is not an audio key (quality, stream, loop, bus, caption, \
+                     important, direction, caption_priority, caption_seconds)"
                 ));
             }
         };
@@ -1273,6 +1332,19 @@ pub mod edit {
             assert_eq!(back, text);
             assert!(set_texture_format(text, "sprites", "ghost", "pc", None).is_err());
             assert!(set_texture_key(text, "sprites", "grass", "file", Some("x")).is_err());
+            // The color-vision icon (issue #96): written, read back, removed.
+            let i = set_sprite_icon(text, "grass", Some("sprites/stripes")).unwrap();
+            assert!(i.contains("cvd_icon = \"sprites/stripes\""), "{i}");
+            let m: crate::Manifest = toml::from_str(&i).unwrap();
+            assert_eq!(
+                m.sprites["grass"].cvd_icon.as_deref(),
+                Some("sprites/stripes")
+            );
+            assert_eq!(set_sprite_icon(&i, "grass", None).unwrap(), text);
+            for bad in ["stripes", "sprites/", "sprites/a b", "sprites/grass"] {
+                assert!(set_sprite_icon(text, "grass", Some(bad)).is_err(), "{bad}");
+            }
+            assert!(set_sprite_icon(text, "ghost", Some("sprites/x")).is_err());
         }
 
         #[test]
@@ -1341,6 +1413,56 @@ pub mod edit {
             assert!(set_audio_key(text, "music", "theme", "bus", Some("master")).is_err());
             assert!(set_audio_key(text, "music", "theme", "stream", Some("yes")).is_err());
             assert!(set_audio_key(text, "music", "theme", "file", Some("x")).is_err());
+            // The caption's keys (issue #96) round-trip into the manifest's
+            // fields, and come out again.
+            let e = [
+                ("caption", "cap.beep"),
+                ("important", "true"),
+                ("caption_priority", "200"),
+                ("direction", "true"),
+                ("caption_seconds", "2.5"),
+            ]
+            .iter()
+            .fold(text.to_string(), |t, (k, v)| {
+                set_audio_key(&t, "sounds", "beep", k, Some(v)).unwrap()
+            });
+            assert!(e.contains("caption = \"cap.beep\""), "{e}");
+            let m: crate::Manifest = toml::from_str(&e).unwrap();
+            let b = &m.sounds["beep"];
+            assert_eq!(b.caption.as_deref(), Some("cap.beep"));
+            assert_eq!(
+                (
+                    b.important,
+                    b.caption_priority,
+                    b.direction,
+                    b.caption_seconds
+                ),
+                (Some(true), Some(200), Some(true), Some(2.5))
+            );
+            let back = [
+                "caption",
+                "important",
+                "caption_priority",
+                "direction",
+                "caption_seconds",
+            ]
+            .iter()
+            .fold(e, |t, k| {
+                set_audio_key(&t, "sounds", "beep", k, None).unwrap()
+            });
+            assert_eq!(back, text);
+            for (k, v) in [
+                ("caption", "two words"),
+                ("important", "yes"),
+                ("caption_priority", "300"),
+                ("caption_seconds", "0"),
+                ("caption_seconds", "61"),
+            ] {
+                assert!(
+                    set_audio_key(text, "sounds", "beep", k, Some(v)).is_err(),
+                    "{k}={v}"
+                );
+            }
             assert!(
                 set_audio_platform(text, "sounds", "beep", "codec", Platform::Pc, Some("mp3"))
                     .is_err()

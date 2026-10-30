@@ -746,6 +746,16 @@ impl<'a> Mesh<'a> {
         self.slots.is_some()
     }
 
+    /// The color slots (1..=[`MAX_SLOT`]) its vertices use, as bits
+    /// (`1 << slot`; slot 0, the baked color, is left out).
+    pub fn slots_used(&self) -> u8 {
+        self.slots.map_or(0, |s| {
+            s.iter()
+                .filter(|&&v| v > 0 && v <= MAX_SLOT)
+                .fold(0, |m, &v| m | 1 << v)
+        })
+    }
+
     #[inline]
     pub fn index(&self, i: usize) -> u16 {
         u16::from_le_bytes(self.indices[i])

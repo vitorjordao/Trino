@@ -988,6 +988,21 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
             )));
         h.run_steps(4);
         crate::layout_audit::assert_clean(&mut h, size, true, &what("impostor section"));
+        // A slotted card with its color slots and an Outline (issue #96).
+        let mut card = trino_scene::Entity::new("card").with_model(trino_scene::ModelComponent {
+            palette: vec![trino_scene::SlotColorDef {
+                slot: 1,
+                color: trino_scene::SlotColor::Semantic("castle64.door.red".into()),
+            }],
+            ..trino_scene::ModelComponent::new("models/selftest_slots")
+        });
+        card.outline = Some(trino_scene::OutlineComponent::default());
+        h.state_mut().cmds.push(Cmd::Create {
+            parent: None,
+            entity: Box::new(card),
+        });
+        h.run_steps(4);
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("color slots and outline"));
         // The texture inspector, measured, its formats scrolled into view,
         // with a bake error (ETC1 under a min_psnr) in a column.
         let photo = "sprites/selftest_photo_etc1";
@@ -1022,6 +1037,17 @@ fn editor_layout_is_clean_at_minimum_and_default_sizes() {
                 .is_some_and(|(_, i)| i.logical == "music/theme")
         });
         crate::layout_audit::assert_clean(&mut h, size, true, &what("audio inspector"));
+        // A captioned sound's Caption section (issue #96).
+        h.state_mut().inspect_focus = None;
+        h.state_mut()
+            .cmds
+            .push(Cmd::SelectAsset(crate::app::AssetSel::Audio(
+                "sounds/beep".into(),
+            )));
+        wait_for(&mut h, "the caption section", |a| {
+            a.audio.caption_shown().is_some_and(|c| c.key.is_some())
+        });
+        crate::layout_audit::assert_clean(&mut h, size, true, &what("audio caption"));
         h.state_mut().cmds.push(Cmd::FocusTab(Tab::Mixer));
         h.run_steps(3);
         crate::layout_audit::assert_clean(&mut h, size, true, &what("Mixer tab"));
@@ -1629,7 +1655,7 @@ fn asset_groups_chips_requires_cells_and_memory() {
     h.state_mut().cmds.push(Cmd::Save);
     h.run_steps(3);
     let saved = std::fs::read_to_string(tmp.path().join("scenes/showcase.scene.ron")).unwrap();
-    assert!(saved.contains("version: 7"), "migrated on save");
+    assert!(saved.contains("version: 8"), "migrated on save");
     assert!(
         saved.contains("requires: [\n        \"boot\",\n        \"selftest_level\",\n    ],"),
         "{}",
@@ -4445,5 +4471,269 @@ fn physics_layers_inspector_and_play_here_controller() {
     }
     h.state_mut().cmds.push(Cmd::StopPlayHere);
     h.run_steps(2);
+    leave_temp_project(&repo);
+}
+
+/// Issue #96, item 1: a sound's caption in Assets › Audio. The key from
+/// the tables' keys, then `important` and the seconds, each written to the
+/// manifest; the texts per language; Preview queues it in the Game view;
+/// a new key lands in every language; an outside edit shows at once.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn audio_inspector_authors_a_sounds_caption() {
+    use crate::app::{AssetSel, Cmd};
+    use egui::accesskit::Role;
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    const TABLE: &str = "[sounds.jump]";
+    let table = || {
+        let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+        manifest_table(&text, TABLE).to_string()
+    };
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Audio("sounds/jump".into())));
+    wait_for(&mut h, "the caption section", |a| {
+        a.audio.caption_shown().is_some()
+    });
+    assert!(h.query_by_label("Caption key").is_some());
+    assert_eq!(h.state().audio.caption_shown().unwrap().key, None);
+    // The key from the string tables: its text in every language.
+    pick(&mut h, "Caption key", "cap.coin");
+    assert!(table().contains("caption = \"cap.coin\""), "{}", table());
+    wait_for(&mut h, "the key to show", |a| {
+        a.audio.caption_shown().unwrap().key.as_deref() == Some("cap.coin")
+    });
+    for text in ["[coin chimes]", "[moeda tilinta]", "[tintineo de moneda]"] {
+        assert!(h.query_by_label(text).is_some(), "{text}");
+    }
+    // Important, a priority and the seconds.
+    press(&mut h, Role::CheckBox, "Important");
+    assert!(table().contains("important = true"), "{}", table());
+    set_value(&mut h, "Caption priority", 180.0);
+    set_value(&mut h, "Caption seconds", 2.5);
+    h.run_steps(3);
+    let t = table();
+    assert!(
+        t.contains("caption_priority = 180") && t.contains("caption_seconds = 2.5"),
+        "{t}"
+    );
+    // Preview: queued in the Game view's simulation.
+    press(&mut h, Role::Button, "Preview");
+    h.run_steps(3);
+    assert!(!h.state().access.caption.queue.is_empty());
+    assert_eq!(
+        h.state().access.caption.queue.keys().next(),
+        Some("cap.coin")
+    );
+    // An outside edit of the manifest shows at once.
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    std::fs::write(
+        "assets/manifest.toml",
+        text.replace(
+            "caption = \"cap.coin\"\nimportant",
+            "caption = \"cap.star\"\nimportant",
+        ),
+    )
+    .unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        a.audio.caption_shown().unwrap().key.as_deref() == Some("cap.star")
+    });
+    // A new key: added to every language, then written.
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Audio("sounds/jump".into())));
+    pick(&mut h, "Caption key", "New key…");
+    h.get_by_label("New caption key").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("cap.jump".into()));
+    h.key_press(egui::Key::Enter);
+    wait_for(&mut h, "the new key", |a| {
+        a.audio.caption_shown().unwrap().key.as_deref() == Some("cap.jump")
+    });
+    let langs = &h.state().localization.langs;
+    for lang in ["en-US", "pt-BR", "es-ES"] {
+        assert!(langs.strings(lang).has_own("cap.jump"), "{lang}");
+    }
+    wait_for(&mut h, "the tables to be written", |_| {
+        std::fs::read_to_string("assets/i18n/pt-BR.ron").is_ok_and(|t| t.contains("cap.jump"))
+    });
+    leave_temp_project(&repo);
+}
+
+/// Issue #96, item 2: color-vision icons. A UI node's from the UI tab's
+/// inspector (written to its `.ui.ron`, an outside edit followed), the
+/// hint on a node in a distinct group's color without one; a sprite's
+/// from the texture inspector (written to the manifest).
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn icons_for_color_vision_on_nodes_and_sprites() {
+    use crate::app::{AssetSel, Cmd};
+    const SCREEN: &str = "ui/selftest.ui.ron";
+    // SAFETY: --ignored --test-threads=1 only (module docs).
+    unsafe { std::env::set_var("TRINO_EDITOR_UI", "selftest,pc") };
+    let started = temp_project_app(egui::vec2(1600.0, 1000.0));
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("TRINO_EDITOR_UI") };
+    let Some((mut h, _tmp, repo)) = started else {
+        return;
+    };
+    let node = |a: &App, id: &str| {
+        a.ui_screens
+            .def
+            .as_ref()?
+            .nodes()
+            .into_iter()
+            .find(|(_, n)| n.id == id)
+            .map(|(_, n)| n.clone())
+    };
+    h.run_steps(3);
+    click(&mut h, "Button \"two\"");
+    pick(&mut h, "Icon (color vision)", "sprites/cvd_stripes");
+    wait_for(&mut h, "the icon to be written", |a| {
+        !a.ui_screens.dirty && node(a, "two").is_some_and(|n| n.cvd_icon == "sprites/cvd_stripes")
+    });
+    let text = std::fs::read_to_string(SCREEN).unwrap();
+    assert!(
+        text.contains("id: \"two\"")
+            && text.matches("cvd_icon: \"sprites/cvd_stripes\"").count() == 2,
+        "{text}"
+    );
+    // Outside: `three` turns castle64's green door color, no icon: the hint.
+    let mut def = trino_scene::ui::ScreenDef::from_ron(&text).unwrap();
+    let three = def
+        .nodes()
+        .into_iter()
+        .find(|(_, n)| n.id == "three")
+        .map(|(p, _)| p)
+        .unwrap();
+    def.root.at_mut(&three).unwrap().color = Some([95, 205, 95, 255]);
+    std::fs::write(SCREEN, def.to_ron()).unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        node(a, "three").is_some_and(|n| n.color.is_some())
+    });
+    click(&mut h, "Button \"three\"");
+    h.run_steps(3);
+    assert!(
+        h.query_by_label_contains("shows castle64.door.green")
+            .is_some(),
+        "the hint"
+    );
+    // A sprite's icon from the texture inspector.
+    h.state_mut()
+        .cmds
+        .push(Cmd::SelectAsset(AssetSel::Sprite("sprites/flag".into())));
+    wait_for(&mut h, "the texture inspector", |a| {
+        a.textures
+            .icon_shown()
+            .is_some_and(|(l, _)| l == "sprites/flag")
+    });
+    pick(&mut h, "Sprite icon (color vision)", "sprites/cvd_stripes");
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    assert!(
+        manifest_table(&text, "[sprites.flag]").contains("cvd_icon = \"sprites/cvd_stripes\""),
+        "{text}"
+    );
+    wait_for(&mut h, "the icon to show", |a| {
+        a.textures.icon_shown() == Some(("sprites/flag", Some("sprites/cvd_stripes")))
+    });
+    leave_temp_project(&repo);
+}
+
+/// Issue #96, items 3 and 4: an entity's color slots (a semantic color of
+/// `palettes.ron` or a literal one) and its Outline component, from the
+/// Inspector to the scene file; the Game view draws the slot in the
+/// simulated mode and the ring in simulated high contrast.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn palette_slots_and_outlines_in_the_inspector() {
+    use crate::app::{Cmd, Tab};
+    let Some((mut h, _tmp, repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    // A slotted card in front of the scene's camera.
+    {
+        let app = h.state_mut();
+        let cam = app.doc.scene.environment.camera;
+        let mut card = trino_scene::Entity::new("card")
+            .with_model(trino_scene::ModelComponent::new("models/selftest_slots"));
+        let t = cam.target;
+        card.transform.pos = [
+            t[0] + (cam.eye[0] - t[0]) * 0.5,
+            t[1] + (cam.eye[1] - t[1]) * 0.5,
+            t[2] + (cam.eye[2] - t[2]) * 0.5,
+        ];
+        app.doc.scene.entities.push(card);
+        let i = app.doc.scene.entities.len() - 1;
+        app.cmds.push(Cmd::Select(Some(vec![i])));
+    }
+    h.run_steps(4);
+    let i = h.state().doc.scene.entities.len() - 1;
+    let model = |a: &App| a.doc.scene.entities[i].model.clone().unwrap();
+    // Slot 1: castle64's red door color; slot 4: a literal color.
+    pick(&mut h, "Slot 1 color", "castle64.door.red");
+    pick(&mut h, "Slot 4 color", "Color");
+    h.run_steps(3);
+    let m = model(h.state());
+    assert_eq!(
+        m.palette,
+        vec![
+            trino_scene::SlotColorDef {
+                slot: 1,
+                color: trino_scene::SlotColor::Semantic("castle64.door.red".into()),
+            },
+            trino_scene::SlotColorDef {
+                slot: 4,
+                color: trino_scene::SlotColor::Rgb([255, 255, 255]),
+            },
+        ]
+    );
+    // The resolved draw: the base color; in the simulated mode, its
+    // alternative.
+    let red = |a: &App| {
+        let item = a.resolved.items.iter().find(|it| it.name == "card")?;
+        Some(crate::viewport::view_params(item, &a.access.view()).palette?[0])
+    };
+    assert_eq!(red(h.state()), Some(trino_core::Color::rgb(230, 95, 80)));
+    h.state_mut().access.simulate = true;
+    h.state_mut().access.preview.cvd = trino_core::CvdMode::Deuteranopia;
+    assert_eq!(red(h.state()), Some(trino_core::Color::rgb(120, 70, 30)));
+    // An Outline from Add component; high contrast simulated: one more draw.
+    click(&mut h, "Add component");
+    click(&mut h, "Outline");
+    h.run_steps(3);
+    assert_eq!(
+        h.state().doc.scene.entities[i].outline,
+        Some(trino_scene::OutlineComponent::default())
+    );
+    h.state_mut().cmds.push(Cmd::FocusTab(Tab::Game));
+    h.run_steps(6);
+    let before = h.state().game_view.stats.frame.models;
+    h.state_mut().access.preview.high_contrast = true;
+    h.run_steps(6);
+    assert_eq!(
+        h.state().game_view.stats.frame.models,
+        before + 1,
+        "the ring"
+    );
+    // Saved: the scene file holds both.
+    h.state_mut().cmds.push(Cmd::Save);
+    h.run_steps(3);
+    let text = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
+    assert!(text.contains("Semantic(\"castle64.door.red\")"), "{text}");
+    assert!(text.contains("outline: Some("), "{text}");
+    assert!(text.contains("version: 8"), "{text}");
+    // Edited outside: the slot's color changes in the Inspector.
+    std::fs::write(
+        "scenes/showcase.scene.ron",
+        text.replace("castle64.door.red", "castle64.door.blue"),
+    )
+    .unwrap();
+    wait_for(&mut h, "the outside edit", |a| {
+        a.doc.scene.entities[i].model.as_ref().unwrap().palette[0].color
+            == trino_scene::SlotColor::Semantic("castle64.door.blue".into())
+    });
     leave_temp_project(&repo);
 }

@@ -410,6 +410,57 @@ pub fn check_theme(t: &Theme) -> Vec<Finding> {
         .collect()
 }
 
+/// How close a UI node's color must be to a `distinct` group's color to
+/// count as that color (CIE76; it is set to the value, give or take a
+/// rounding).
+pub const ICON_NODE_DELTA_E: f32 = 3.0;
+/// The same for a sprite's mean opaque color (its art is that color with
+/// shading).
+pub const ICON_SPRITE_DELTA_E: f32 = 12.0;
+
+/// The `distinct` group color `rgb` reads as (issue #96): the nearest
+/// member's base within `max_delta_e`, if any.
+pub fn distinct_match(def: &PalettesDef, rgb: [u8; 3], max_delta_e: f32) -> Option<&str> {
+    let c = Color::rgb(rgb[0], rgb[1], rgb[2]);
+    def.distinct
+        .iter()
+        .flatten()
+        .filter_map(|n| {
+            let base = def.colors.get(n)?.get(CvdMode::Off);
+            Some((n.as_str(), trino_core::access::delta_e(c, base)))
+        })
+        .filter(|(_, d)| *d <= max_delta_e)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(n, _)| n)
+}
+
+/// A node or a sprite showing a `distinct` group's color with no
+/// color-vision icon (issue #96): the color is its only channel, which
+/// the Game Accessibility Guidelines ask to double. `None` when it has an
+/// icon or isn't such a color.
+pub fn icon_hint(
+    def: &PalettesDef,
+    subject: &str,
+    rgb: [u8; 3],
+    has_icon: bool,
+    max_delta_e: f32,
+) -> Option<Finding> {
+    if has_icon {
+        return None;
+    }
+    let name = distinct_match(def, rgb, max_delta_e)?;
+    Some(finding(
+        Level::Warning,
+        "icons",
+        subject,
+        None,
+        format!(
+            "shows {name} (a distinct group's color) with no color-vision icon: add `cvd_icon` \
+             so it doesn't rely on color alone"
+        ),
+    ))
+}
+
 /// A sound's caption as the manifest declares it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CaptionDecl {

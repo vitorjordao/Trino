@@ -153,8 +153,8 @@ fn draw_mesh(mesh: &Mesh) {
 
 // ------------------------------------------------------------- scenes etc.
 
-/// TSCN: every node, its LOD chain and tags, the environment, shadows and
-/// receivers. `BakedScene` borrows `'static` (console blobs are), so the
+/// TSCN: every node, its LOD chain and tags, its semantic slots and
+/// outline, the environment, shadows and receivers. `BakedScene` borrows `'static` (console blobs are), so the
 /// input is leaked for the call and freed after every view is gone.
 pub fn tscn(data: &[u8]) {
     let leaked: &'static mut [u8] = Box::leak(data.to_vec().into_boxed_slice());
@@ -183,6 +183,9 @@ pub fn tscn(data: &[u8]) {
                 }
                 keep(node.lod_from(Vec3::new(1.0, 2.0, 3.0)));
                 keep(node.lod_from_biased(Vec3::ZERO, 0.5));
+                // v8's accessibility block (issue #96).
+                keep(node.semantic());
+                keep(node.outline());
             }
             keep(scene.find("player"));
         }

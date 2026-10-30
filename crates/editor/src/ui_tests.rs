@@ -4639,6 +4639,16 @@ fn icons_for_color_vision_on_nodes_and_sprites() {
     wait_for(&mut h, "the icon to show", |a| {
         a.textures.icon_shown() == Some(("sprites/flag", Some("sprites/cvd_stripes")))
     });
+    // The manifest edited outside: the row follows.
+    let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
+    std::fs::write(
+        "assets/manifest.toml",
+        text.replacen("cvd_icon = \"sprites/cvd_stripes\"\n", "", 1),
+    )
+    .unwrap();
+    wait_for(&mut h, "the outside edit of the icon", |a| {
+        a.textures.icon_shown() == Some(("sprites/flag", None))
+    });
     leave_temp_project(&repo);
 }
 
@@ -4725,15 +4735,18 @@ fn palette_slots_and_outlines_in_the_inspector() {
     assert!(text.contains("Semantic(\"castle64.door.red\")"), "{text}");
     assert!(text.contains("outline: Some("), "{text}");
     assert!(text.contains("version: 8"), "{text}");
-    // Edited outside: the slot's color changes in the Inspector.
-    std::fs::write(
-        "scenes/showcase.scene.ron",
-        text.replace("castle64.door.red", "castle64.door.blue"),
-    )
-    .unwrap();
+    // Edited outside: the slot's color and the outline's width follow.
+    let mut outside = trino_scene::Scene::from_ron(&text).unwrap();
+    let card = &mut outside.entities[i];
+    card.model.as_mut().unwrap().palette[0].color =
+        trino_scene::SlotColor::Semantic("castle64.door.blue".into());
+    card.outline.as_mut().unwrap().pixels = 3.0;
+    std::fs::write("scenes/showcase.scene.ron", outside.to_ron()).unwrap();
     wait_for(&mut h, "the outside edit", |a| {
-        a.doc.scene.entities[i].model.as_ref().unwrap().palette[0].color
+        let e = &a.doc.scene.entities[i];
+        e.model.as_ref().unwrap().palette[0].color
             == trino_scene::SlotColor::Semantic("castle64.door.blue".into())
+            && e.outline.as_ref().is_some_and(|o| o.pixels == 3.0)
     });
     leave_temp_project(&repo);
 }

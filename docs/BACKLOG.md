@@ -98,8 +98,12 @@ shipping a 3D game first**, then by cost:
     Solid Eleven's hand-drawn menus and match HUD)~~: **done** (#95, #86 item 8): all 18
     Solid Eleven menus and the 3DS touch screen are now UI-system screens (`examples/solid-eleven/ui/*.ui.ron`),
     and both Solid Eleven's match HUD and castle64's HUD counters scale up to 200 % text.
-  - The Inspector's palette slots by semantic name (`ModelParams::palette` in authored
-    content is P2 #13); the Accessibility tab edits the palettes today.
+  - ~~The Inspector's palette slots by semantic name~~: **done** (#96: scene v8 `palette`,
+    Inspector › Model › Color slots, `draw_nodes_with`; ADR 0027 §10).
+  - The sprite-icon hint (`icon_hint`, a mean opaque color within ΔE 12 of a `distinct`
+    color) is a warning, and `access check` fails on warnings. A project whose art merely
+    resembles a team color must add an icon or rename the group; an allow-list per sprite
+    would be the escape hatch if one asks.
   - Plan & Party's status colors and Solid Eleven's menus on semantic palettes; speaker
     names and colors for dialogue captions; caption fonts per language with #59.
   - A ready-made Accessibility page in the core (like `GraphicsOptions`) for games that
@@ -226,9 +230,9 @@ shipping a 3D game first**, then by cost:
     a real-hardware listen on the N64 and the 3DS (ares and Azahar only so far); `auto`
     picking PCM16 on the PC/Web when Vorbis is bigger (Ogg's ~4 KB of headers make a
     0.05 s click 2× its PCM16 size — Solid Eleven's `se_click`).
-13. **Palette in authored content** (S). `ModelParams::palette` is code-only today.
-    Expose it in materials (`*.material.ron`), scene entities, TSCN (version bump),
-    scene codegen and the editor inspector.
+13. **Palette in authored content** (S). Scene entities, prefabs, TSCN v8, codegen and
+    the Inspector have it since #96 (semantic or literal slot colors). Left: materials
+    (`*.material.ron`).
 14. **A redesigned 2D sprite and tile system** (L), for a future release. The 2D-only
     examples from the first phases (`examples/hello-sprite`, `examples/platformer`)
     are legacy: the engine's model is low-poly 3D with 2D drawn in the same pipeline
@@ -300,6 +304,15 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — accessibility authored in the editor: captions, color-vision icons, semantic slot colors, outlines (2026-10-30, branch `feat/96-editor-access`, GitHub #96, ADR 0027 §10)
+
+| Item | Evidence |
+|---|---|
+| Assets › Audio › Caption: key (tables or a new one in every language), texts per language, important, priority, direction, seconds, Preview in the Game view, `check_captions` lines | `audio_inspector_authors_a_sounds_caption`, the manifest edit tests |
+| Color-vision icons on UI nodes and sprites, `icon_hint` in the panels and in `access check` | `icons_for_color_vision_on_nodes_and_sprites`, `access_cli` (the broken fixture's flag) |
+| Scene v8 / prefab v6 / TSCN v8: semantic or literal slot colors, an outline component; resolve, codegen, the scene player, `draw_nodes_with`; the budget's outline and water-palette lines | `access_slots.rs`, `draw_nodes_with_swaps_semantic_slots_and_rings_outlined_nodes`, `outlines_and_water_palettes_reach_the_budget`, `palette_slots_and_outlines_in_the_inspector` |
+| Consoles | `test n64 --expansion-pak both` and `test 3ds --new3ds both` pass; the base N64 needed the node block behind a reference (AGENTS pitfall) |
 
 ## Done — palette draws on the N64 RSP, and the local WebGL2 crash (2026-10-29, branch `feat/107-122-palette-rsp`, GitHub #122 and #107, ADR 0018 §9)
 

@@ -98,7 +98,8 @@ fn slot_colors_and_outlines_resolve_export_and_bake() {
 #[test]
 fn the_file_round_trips_and_older_ones_load() {
     let (scene, _) = fixture();
-    let text = scene.to_ron();
+    // ron's pretty printer ends lines in `\r\n` on Windows.
+    let text = scene.to_ron().replace("\r\n", "\n");
     assert!(text.contains("Semantic(\"team.home\")"), "{text}");
     assert!(text.contains("Rgb((10, 20, 30))"), "{text}");
     assert!(text.contains("outline: Some(("), "{text}");

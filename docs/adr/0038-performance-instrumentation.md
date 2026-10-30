@@ -44,8 +44,10 @@ stretch a scope.
 
 `prof::NAMES`, in this order (the editor and `trino_trace::perf::COUNTERS` hold the same
 list): `memo_hit`, `memo_miss`, `memo_culled` (a remembered whole-mesh cull),
-`memo_store`, `memo_evict` (a store over another key; a moving object replaces its own last
-entry too), `water_hit`, `water_miss`, `water_evict`, `rsp_reject` (an RSP mesh refused by the
+`memo_store`, `memo_evict` (a store over another key, stale or live: a store goes to its
+key's slot, so once the memo is full an eviction is most stores, and the counter can't
+tell thrashing from overwriting dead entries; the castle64 hub reads 15 stores, 15
+evictions), `water_hit`, `water_miss`, `water_evict`, `rsp_reject` (an RSP mesh refused by the
 eligibility test), then the shim's `rspq_words` (words the CPU wrote into the rspq buffer:
 RSP commands exactly, rdpq triangles and blits by the write pointer's delta), `rsp_cmds`,
 `ovl_switch` (consecutive commands for another overlay, rdpq's own counting as one),
@@ -119,10 +121,13 @@ Its first run was this change against `main` (2026-10-30, 8 paddings × 3 arms, 
 ares). The work was identical in all 30 scenes. The control (192 bytes of dead code)
 moved every scene by at most 3 %. The head moved the gated scenes 3–5 % faster and some
 micro scenes up to 8 % slower. Its hot code is the plain build's: `tessellate_joints`
-16 252 bytes in every arm, `shim.o`'s `.text` identical, `draw_model_matrix` one
-instruction longer. What changed is the link order of the Rust functions
-(`draw_model_matrix` moved 58 KB), a layout move the padding knob doesn't sample. That is
-#69's lesson reproduced end to end: the tool tells such a shift from a speed-up.
+16 252 bytes in every arm, `shim.o`'s functions identical, `draw_model_matrix` one
+instruction longer. The 18 hottest sampled functions keep their relative order and their
+sizes. What changed is how far apart they land: the renderer's functions moved 58.6 KB,
+the T&L's 2.3 KB the other way and libdragon's 768 bytes, so their sets in the 16 KB
+direct-mapped I-cache changed. The padding knob doesn't sample that kind of layout move,
+because it shifts all Rust code together. That is #69's lesson reproduced end to end:
+the tool tells such a shift from a speed-up.
 
 ### 9. The editor
 

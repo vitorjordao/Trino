@@ -101,7 +101,8 @@ csvexport/build/tracy-csvexport run.tracy                    # zone names, count
   same list): `memo_hit/miss/culled/store/evict`, `water_hit/miss/evict`, `rsp_reject`,
   and from the shim (`shim_prof.o`, `-DTRINO_PROF`) `rspq_words`, `rsp_cmds`,
   `ovl_switch`, `rsp_flush`, `tex_upload`, `tex_resident`, `cpu_tris`. `memo_evict` counts
-  a store over any other key, a moving object's own last entry included.
+  a store over any other key, stale or live: once the memo is full most stores evict,
+  so read it against `memo_hit`/`memo_miss`, not as thrashing by itself.
 - Adding a counter: a `Counter` variant + its name in both lists (Rust side), or a `TP_*`
   slot + `TRINO_PROF_ADD` in the shim (C side, in the `TP_*` order); bump only through
   `prof::bump`/`add` (compiled out without `trace`); never a renderer field.

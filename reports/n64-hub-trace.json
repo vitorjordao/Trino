@@ -1,0 +1,456 @@
+{
+  "format": "trino-perf-report",
+  "version": 1,
+  "target": "n64",
+  "scene": "hub",
+  "build": "trace",
+  "pad": 0,
+  "fields": {
+    "backfaced": 8,
+    "begin": 2091,
+    "clipped": 4,
+    "cpu_tris": 19,
+    "culled": 0,
+    "draws": 25,
+    "emitted": 5,
+    "end": 1877,
+    "frames": 4,
+    "game": 6962,
+    "memo_culled": 0,
+    "memo_evict": 15,
+    "memo_hit": 9,
+    "memo_miss": 16,
+    "memo_store": 15,
+    "ovl_switch": 2,
+    "render": 16441,
+    "rsp_cmds": 24,
+    "rsp_draws": 24,
+    "rsp_flush": 0,
+    "rsp_reject": 1,
+    "rsp_tris": 581,
+    "rspq_words": 1125,
+    "sort": 90,
+    "splits": 0,
+    "sprites": 604,
+    "submit": 1450,
+    "tex_resident": 0,
+    "tex_upload": 6,
+    "tnl": 3365,
+    "tris_in": 12,
+    "update": 529,
+    "vblanks": 4,
+    "verts": 24,
+    "water_evict": 0,
+    "water_hit": 0,
+    "water_miss": 0
+  },
+  "models": [
+    {
+      "model": "cef562e8",
+      "calls": 1,
+      "us": 955,
+      "verts": 24,
+      "tris_in": 12,
+      "emitted": 5
+    },
+    {
+      "model": "d016924b",
+      "calls": 7,
+      "us": 508,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "628a58de",
+      "calls": 3,
+      "us": 373,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "518de348",
+      "calls": 3,
+      "us": 306,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "9378c0e0",
+      "calls": 2,
+      "us": 252,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "158d530a",
+      "calls": 2,
+      "us": 244,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e9c6f6a0",
+      "calls": 1,
+      "us": 164,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e2dd959e",
+      "calls": 3,
+      "us": 152,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "dba14f84",
+      "calls": 1,
+      "us": 143,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "ce3cd9ad",
+      "calls": 1,
+      "us": 59,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e2d8d1f0",
+      "calls": 1,
+      "us": 47,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    }
+  ],
+  "counters": {
+    "cpu_tris": 19,
+    "memo_culled": 0,
+    "memo_evict": 15,
+    "memo_hit": 9,
+    "memo_miss": 16,
+    "memo_store": 15,
+    "ovl_switch": 2,
+    "rsp_cmds": 24,
+    "rsp_flush": 0,
+    "rsp_reject": 1,
+    "rspq_words": 1125,
+    "tex_resident": 0,
+    "tex_upload": 6,
+    "water_evict": 0,
+    "water_hit": 0,
+    "water_miss": 0
+  },
+  "zones": {
+    "counters": [
+      {
+        "max": 25,
+        "mean": 25.0,
+        "name": "draws",
+        "samples": 4
+      },
+      {
+        "max": 19,
+        "mean": 19.0,
+        "name": "tris",
+        "samples": 4
+      },
+      {
+        "max": 24,
+        "mean": 24.0,
+        "name": "rsp_draws",
+        "samples": 4
+      },
+      {
+        "max": 581,
+        "mean": 581.0,
+        "name": "rsp_tris",
+        "samples": 4
+      },
+      {
+        "max": 12,
+        "mean": 9.0,
+        "name": "memo_hit",
+        "samples": 4
+      },
+      {
+        "max": 25,
+        "mean": 16.0,
+        "name": "memo_miss",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "memo_culled",
+        "samples": 4
+      },
+      {
+        "max": 24,
+        "mean": 15.0,
+        "name": "memo_store",
+        "samples": 4
+      },
+      {
+        "max": 24,
+        "mean": 15.0,
+        "name": "memo_evict",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "water_hit",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "water_miss",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "water_evict",
+        "samples": 4
+      },
+      {
+        "max": 1,
+        "mean": 1.0,
+        "name": "rsp_reject",
+        "samples": 4
+      },
+      {
+        "max": 1142,
+        "mean": 1125.8,
+        "name": "rspq_words",
+        "samples": 4
+      },
+      {
+        "max": 24,
+        "mean": 24.0,
+        "name": "rsp_cmds",
+        "samples": 4
+      },
+      {
+        "max": 2,
+        "mean": 2.0,
+        "name": "ovl_switch",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "rsp_flush",
+        "samples": 4
+      },
+      {
+        "max": 6,
+        "mean": 6.0,
+        "name": "tex_upload",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "tex_resident",
+        "samples": 4
+      },
+      {
+        "max": 19,
+        "mean": 19.0,
+        "name": "cpu_tris",
+        "samples": 4
+      }
+    ],
+    "dropped": 0,
+    "frames": {
+      "count": 3,
+      "max_us": 20105,
+      "mean_us": 19628.0,
+      "p50_us": 19756,
+      "p95_us": 20105
+    },
+    "platform": "n64",
+    "session": "n64-hub",
+    "zones": [
+      {
+        "count": 4,
+        "max_us": 19041,
+        "mean_us": 16430.5,
+        "name": "render",
+        "p50_us": 16073,
+        "p95_us": 19041,
+        "per_frame_us": 16430.5,
+        "total_us": 65722,
+        "track": "cpu"
+      },
+      {
+        "count": 100,
+        "max_us": 1227,
+        "mean_us": 290.2,
+        "name": "draw",
+        "p50_us": 320,
+        "p95_us": 417,
+        "per_frame_us": 7255.0,
+        "total_us": 29020,
+        "track": "cpu"
+      },
+      {
+        "count": 60,
+        "max_us": 204,
+        "mean_us": 150.4,
+        "name": "rsp cmd",
+        "p50_us": 141,
+        "p95_us": 187,
+        "per_frame_us": 2255.8,
+        "total_us": 9023,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 5548,
+        "mean_us": 2086.0,
+        "name": "begin",
+        "p50_us": 201,
+        "p95_us": 5548,
+        "per_frame_us": 2086.0,
+        "total_us": 8344,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 1976,
+        "mean_us": 1871.8,
+        "name": "end",
+        "p50_us": 1809,
+        "p95_us": 1976,
+        "per_frame_us": 1871.8,
+        "total_us": 7487,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 2704,
+        "mean_us": 1343.0,
+        "name": "audio",
+        "p50_us": 145,
+        "p95_us": 2704,
+        "per_frame_us": 1343.0,
+        "total_us": 5372,
+        "track": "cpu"
+      },
+      {
+        "count": 64,
+        "max_us": 177,
+        "mean_us": 77.0,
+        "name": "eligible",
+        "p50_us": 71,
+        "p95_us": 94,
+        "per_frame_us": 1232.0,
+        "total_us": 4928,
+        "track": "cpu"
+      },
+      {
+        "count": 100,
+        "max_us": 132,
+        "mean_us": 40.9,
+        "name": "memo",
+        "p50_us": 23,
+        "p95_us": 92,
+        "per_frame_us": 1022.5,
+        "total_us": 4090,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 940,
+        "mean_us": 934.5,
+        "name": "submit",
+        "p50_us": 935,
+        "p95_us": 940,
+        "per_frame_us": 934.5,
+        "total_us": 3738,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 986,
+        "mean_us": 914.8,
+        "name": "cpu tnl",
+        "p50_us": 890,
+        "p95_us": 986,
+        "per_frame_us": 914.8,
+        "total_us": 3659,
+        "track": "cpu"
+      },
+      {
+        "count": 16,
+        "max_us": 215,
+        "mean_us": 153.9,
+        "name": "2d",
+        "p50_us": 156,
+        "p95_us": 215,
+        "per_frame_us": 615.8,
+        "total_us": 2463,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 515,
+        "mean_us": 501.0,
+        "name": "update",
+        "p50_us": 499,
+        "p95_us": 515,
+        "per_frame_us": 501.0,
+        "total_us": 2004,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 529,
+        "mean_us": 376.8,
+        "name": "rsp queue",
+        "p50_us": 288,
+        "p95_us": 529,
+        "per_frame_us": 376.8,
+        "total_us": 1507,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 529,
+        "mean_us": 354.8,
+        "name": "rsp submit",
+        "p50_us": 250,
+        "p95_us": 529,
+        "per_frame_us": 354.8,
+        "total_us": 1419,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 92,
+        "mean_us": 90.3,
+        "name": "sort",
+        "p50_us": 90,
+        "p95_us": 92,
+        "per_frame_us": 90.3,
+        "total_us": 361,
+        "track": "cpu"
+      }
+    ]
+  }
+}

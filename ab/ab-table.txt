@@ -1,0 +1,213 @@
+n64 A/B over 8 paddings (0,352,1024,2048,3072,4096,6144,8192): base origin/main vs head working tree, control = base + a no-op patch
+
+[cpu-green-hills] work identical in every arm
+  frame    base=20784 (19722–22046) head=19918 (18951–20718) control=20575 (19492–21380)  head−base -866 (-4.2%)  control−base -210 (-1.0%)
+  tnl      base=10646 (9854–11586) head=10482 (9679–11343) control=10648 (9901–11497)  head−base -163 (-1.5%)  control−base +3 (+0.0%)
+  sort     base=873 (822–953) head=929 (845–1163) control=888 (842–1002)  head−base +57 (+6.5%)  control−base +16 (+1.8%)
+  submit   base=5060 (4868–5729) head=4149 (4038–4248) control=4813 (4595–5703)  head−base -910 (-18.0%)  control−base -246 (-4.9%)
+  end      base=248 (240–256) head=244 (223–259) control=247 (242–254)  head−base -4 (-1.6%)  control−base -1 (-0.4%)
+
+[cpu-hub] work identical in every arm
+  frame    base=42489 (40017–44894) head=40192 (38663–42481) control=42307 (39968–44444)  head−base -2297 (-5.4%)  control−base -181 (-0.4%)
+  tnl      base=23640 (21884–25257) head=23227 (22004–25777) control=24065 (22444–26022)  head−base -412 (-1.7%)  control−base +426 (+1.8%)
+  sort     base=2280 (2053–2610) head=2218 (2042–2486) control=2219 (2028–2629)  head−base -62 (-2.7%)  control−base -61 (-2.7%)
+  submit   base=10625 (10190–12386) head=8602 (8399–8930) control=10074 (9557–12373)  head−base -2022 (-19.0%)  control−base -551 (-5.2%)
+  end      base=257 (250–275) head=254 (244–267) control=255 (245–261)  head−base -3 (-1.2%)  control−base -2 (-0.9%)
+
+[cpu-lava-land] work identical in every arm
+  frame    base=22636 (21433–23439) head=21550 (20912–22589) control=22399 (21111–22989)  head−base -1085 (-4.8%)  control−base -236 (-1.0%)
+  tnl      base=11826 (10761–12687) head=11567 (11025–12633) control=11851 (10811–12521)  head−base -259 (-2.2%)  control−base +25 (+0.2%)
+  sort     base=957 (917–1007) head=1019 (916–1349) control=966 (921–1049)  head−base +62 (+6.5%)  control−base +8 (+0.9%)
+  submit   base=5668 (5459–6433) head=4642 (4543–4792) control=5398 (5125–6430)  head−base -1026 (-18.1%)  control−base -270 (-4.8%)
+  end      base=247 (235–263) head=238 (224–258) control=240 (233–247)  head−base -9 (-3.7%)  control−base -7 (-2.8%)
+
+[cpu-sky-tower] work identical in every arm
+  frame    base=19917 (18891–20730) head=19073 (18315–19931) control=19707 (18710–20481)  head−base -844 (-4.2%)  control−base -210 (-1.1%)
+  tnl      base=10128 (9374–10872) head=9971 (9376–10795) control=10117 (9399–10811)  head−base -157 (-1.6%)  control−base -11 (-0.1%)
+  sort     base=829 (777–952) head=880 (785–1073) control=849 (799–988)  head−base +52 (+6.2%)  control−base +20 (+2.4%)
+  submit   base=4653 (4472–5356) head=3784 (3707–3906) control=4414 (4165–5336)  head−base -870 (-18.7%)  control−base -238 (-5.1%)
+  end      base=237 (230–247) head=238 (218–250) control=234 (231–238)  head−base +1 (+0.3%)  control−base -3 (-1.2%)
+
+[cpu-throne] work identical in every arm
+  frame    base=34740 (33154–36743) head=33057 (31574–34765) control=34410 (32750–36233)  head−base -1684 (-4.8%)  control−base -331 (-1.0%)
+  tnl      base=19124 (17704–21195) head=18873 (17625–20753) control=19201 (17826–20902)  head−base -250 (-1.3%)  control−base +78 (+0.4%)
+  sort     base=1613 (1460–2074) head=1612 (1478–1975) control=1599 (1450–2052)  head−base -0 (-0.0%)  control−base -14 (-0.8%)
+  submit   base=8130 (7793–9391) head=6595 (6448–6805) control=7729 (7365–9381)  head−base -1535 (-18.9%)  control−base -401 (-4.9%)
+  end      base=242 (224–258) head=243 (233–253) control=236 (225–254)  head−base +1 (+0.6%)  control−base -5 (-2.1%)
+
+[green-hills] work identical in every arm
+  frame    base=7626 (7357–7789) head=7342 (7188–7454) control=7582 (7347–7717)  head−base -284 (-3.7%)  control−base -45 (-0.6%)
+  tnl      base=1294 (1234–1338) head=1193 (1127–1289) control=1295 (1221–1356)  head−base -101 (-7.8%)  control−base +1 (+0.1%)
+  sort     base=59 (44–66) head=65 (60–67) control=62 (55–67)  head−base +6 (+10.6%)  control−base +3 (+4.9%)
+  submit   base=1199 (1144–1279) head=1099 (960–1202) control=1181 (1099–1229)  head−base -100 (-8.4%)  control−base -19 (-1.6%)
+  end      base=805 (735–835) head=797 (724–849) control=800 (737–837)  head−base -8 (-1.0%)  control−base -5 (-0.6%)
+
+[hub] work identical in every arm
+  frame    base=12682 (11960–13097) head=12312 (11988–12664) control=12685 (11974–13066)  head−base -370 (-2.9%)  control−base +4 (+0.0%)
+  tnl      base=3130 (2811–3275) head=2892 (2761–3052) control=3132 (2760–3330)  head−base -238 (-7.6%)  control−base +2 (+0.1%)
+  sort     base=78 (66–85) head=79 (66–89) control=79 (66–91)  head−base +1 (+1.6%)  control−base +2 (+2.4%)
+  submit   base=1565 (1494–1735) head=1443 (1341–1533) control=1549 (1484–1646)  head−base -122 (-7.8%)  control−base -16 (-1.0%)
+  end      base=2328 (2272–2353) head=2309 (2222–2366) control=2317 (2255–2347)  head−base -18 (-0.8%)  control−base -10 (-0.4%)
+
+[lava-land] work identical in every arm
+  frame    base=8213 (7887–8410) head=7901 (7710–8133) control=8163 (7889–8319)  head−base -312 (-3.8%)  control−base -50 (-0.6%)
+  tnl      base=1631 (1463–1682) head=1421 (1307–1532) control=1612 (1488–1682)  head−base -210 (-12.9%)  control−base -18 (-1.1%)
+  sort     base=64 (44–72) head=58 (44–67) control=65 (56–72)  head−base -6 (-10.1%)  control−base +1 (+1.2%)
+  submit   base=1200 (1134–1287) head=1110 (991–1206) control=1192 (1118–1225)  head−base -90 (-7.5%)  control−base -8 (-0.6%)
+  end      base=933 (859–969) head=926 (866–973) control=924 (847–961)  head−base -6 (-0.7%)  control−base -8 (-0.9%)
+
+[micro-culled] work identical in every arm
+  frame    base=4705 (4323–5118) head=4307 (3886–4988) control=4698 (4382–5331)  head−base -398 (-8.5%)  control−base -6 (-0.1%)
+  tnl      base=1871 (1526–2666) head=2052 (1588–2370) control=2044 (1467–2385)  head−base +181 (+9.7%)  control−base +173 (+9.2%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  end      base=84 (77–101) head=87 (78–101) control=79 (68–96)  head−base +2 (+2.8%)  control−base -5 (-6.2%)
+
+[micro-culled-rsp] work identical in every arm
+  frame    base=4359 (3976–4738) head=4185 (3612–4452) control=4237 (3767–4604)  head−base -174 (-4.0%)  control−base -122 (-2.8%)
+  tnl      base=529 (455–581) head=513 (425–566) control=520 (407–575)  head−base -16 (-3.0%)  control−base -8 (-1.6%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  end      base=96 (82–102) head=98 (87–109) control=95 (88–102)  head−base +2 (+1.6%)  control−base -1 (-0.9%)
+
+[micro-draws] work identical in every arm
+  frame    base=14023 (13263–14824) head=14589 (12977–16471) control=14016 (12941–14951)  head−base +566 (+4.0%)  control−base -7 (-0.0%)
+  tnl      base=8342 (7950–8919) head=9107 (7983–10034) control=8435 (7977–9428)  head−base +765 (+9.2%)  control−base +93 (+1.1%)
+  sort     base=109 (94–116) head=112 (110–118) control=109 (94–112)  head−base +3 (+3.0%)  control−base +0 (+0.1%)
+  submit   base=1598 (1427–2035) head=1513 (1426–1828) control=1606 (1445–1961)  head−base -85 (-5.3%)  control−base +8 (+0.5%)
+  end      base=109 (98–117) head=108 (92–123) control=106 (86–123)  head−base -1 (-0.6%)  control−base -3 (-2.9%)
+
+[micro-draws-rsp] work identical in every arm
+  frame    base=9310 (7873–10191) head=8478 (7840–8944) control=9094 (8387–9629)  head−base -831 (-8.9%)  control−base -216 (-2.3%)
+  tnl      base=3747 (3099–4170) head=3189 (2824–3466) control=3635 (3218–3959)  head−base -558 (-14.9%)  control−base -112 (-3.0%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=775 (755–790) head=781 (775–790) control=774 (766–784)  head−base +6 (+0.8%)  control−base -2 (-0.2%)
+  end      base=365 (352–377) head=368 (356–377) control=367 (351–379)  head−base +3 (+0.9%)  control−base +2 (+0.5%)
+
+[micro-flat] work identical in every arm
+  frame    base=37206 (33875–43307) head=39043 (35955–43395) control=37294 (33905–42851)  head−base +1837 (+4.9%)  control−base +88 (+0.2%)
+  tnl      base=24417 (22214–27570) head=27020 (24250–31697) control=24530 (22222–28183)  head−base +2602 (+10.7%)  control−base +113 (+0.5%)
+  sort     base=896 (886–910) head=918 (909–933) control=895 (889–910)  head−base +22 (+2.5%)  control−base -1 (-0.1%)
+  submit   base=11473 (10324–14431) head=10714 (10385–12690) control=11441 (10328–14033)  head−base -759 (-6.6%)  control−base -32 (-0.3%)
+  end      base=122 (103–143) head=115 (107–121) control=123 (110–133)  head−base -8 (-6.1%)  control−base +1 (+0.8%)
+
+[micro-flat-rsp] work identical in every arm
+  frame    base=4019 (4008–4032) head=4015 (3985–4029) control=4021 (4010–4030)  head−base -4 (-0.1%)  control−base +2 (+0.1%)
+  tnl      base=62 (51–72) head=60 (47–77) control=58 (46–72)  head−base -2 (-3.2%)  control−base -4 (-6.4%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=26 (22–33) head=33 (22–44) control=27 (22–33)  head−base +7 (+26.2%)  control−base +1 (+2.4%)
+  end      base=3707 (3698–3714) head=3707 (3695–3718) control=3707 (3695–3716)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+
+[micro-gouraud] work identical in every arm
+  frame    base=25758 (23733–28704) head=25131 (23367–28964) control=25776 (23734–28054)  head−base -628 (-2.4%)  control−base +18 (+0.1%)
+  tnl      base=12951 (11870–15363) head=13114 (11630–17337) control=12997 (11901–15625)  head−base +162 (+1.3%)  control−base +45 (+0.3%)
+  sort     base=904 (887–911) head=923 (909–959) control=920 (888–1013)  head−base +18 (+2.0%)  control−base +16 (+1.7%)
+  submit   base=11498 (10350–14429) head=10693 (10255–12687) control=11453 (10366–14016)  head−base -805 (-7.0%)  control−base -45 (-0.4%)
+  end      base=119 (101–136) head=117 (107–127) control=121 (109–132)  head−base -2 (-2.0%)  control−base +2 (+1.6%)
+
+[micro-gouraud-rsp] work identical in every arm
+  frame    base=2461 (2444–2474) head=2452 (2430–2469) control=2462 (2447–2481)  head−base -9 (-0.4%)  control−base +1 (+0.0%)
+  tnl      base=63 (51–77) head=58 (47–76) control=61 (57–64)  head−base -5 (-8.5%)  control−base -2 (-4.0%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=25 (22–33) head=30 (22–44) control=27 (22–44)  head−base +5 (+20.2%)  control−base +2 (+6.4%)
+  end      base=2158 (2144–2171) head=2158 (2150–2162) control=2165 (2159–2167)  head−base +1 (+0.0%)  control−base +7 (+0.3%)
+
+[micro-palette] work identical in every arm
+  frame    base=51194 (46911–58792) head=50142 (46348–56267) control=51168 (46764–57870)  head−base -1052 (-2.1%)  control−base -26 (-0.1%)
+  tnl      base=27204 (24362–31354) head=27420 (24160–34234) control=27226 (24381–31717)  head−base +216 (+0.8%)  control−base +21 (+0.1%)
+  sort     base=1881 (1843–1958) head=1916 (1888–1967) control=1883 (1843–1955)  head−base +35 (+1.9%)  control−base +2 (+0.1%)
+  submit   base=20179 (18111–25416) head=18734 (18117–22298) control=20118 (18145–24772)  head−base -1446 (-7.2%)  control−base -61 (-0.3%)
+  end      base=123 (114–134) head=126 (118–141) control=123 (114–139)  head−base +3 (+2.3%)  control−base -1 (-0.5%)
+
+[micro-palette-rsp] work identical in every arm
+  frame    base=7176 (6920–7379) head=7161 (6999–7298) control=7199 (7014–7460)  head−base -15 (-0.2%)  control−base +23 (+0.3%)
+  tnl      base=1452 (1287–1570) head=1466 (1279–1580) control=1466 (1310–1626)  head−base +13 (+0.9%)  control−base +14 (+1.0%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=392 (374–430) head=398 (366–423) control=392 (364–430)  head−base +6 (+1.5%)  control−base -0 (-0.1%)
+  end      base=3211 (3179–3227) head=3215 (3182–3244) control=3212 (3182–3229)  head−base +4 (+0.1%)  control−base +1 (+0.0%)
+
+[micro-river] work identical in every arm
+  frame    base=1838 (1778–1892) head=1791 (1734–1834) control=1831 (1788–1878)  head−base -47 (-2.6%)  control−base -8 (-0.4%)
+  tnl      base=940 (875–1011) head=930 (866–970) control=938 (894–981)  head−base -10 (-1.0%)  control−base -2 (-0.2%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=22 (21–22) head=21 (10–33) control=23 (22–28)  head−base -1 (-4.0%)  control−base +1 (+4.6%)
+  end      base=366 (353–386) head=366 (349–374) control=373 (364–389)  head−base -0 (-0.1%)  control−base +7 (+1.9%)
+
+[micro-tris] work identical in every arm
+  frame    base=48437 (44905–54077) head=47457 (44384–55465) control=48351 (44947–52349)  head−base -980 (-2.0%)  control−base -86 (-0.2%)
+  tnl      base=23066 (21531–27238) head=23676 (21278–32249) control=23033 (21558–27398)  head−base +610 (+2.6%)  control−base -32 (-0.1%)
+  sort     base=2351 (2322–2375) head=2376 (2335–2451) control=2349 (2325–2357)  head−base +25 (+1.1%)  control−base -2 (-0.1%)
+  submit   base=22622 (20307–28508) head=21001 (20341–24953) control=22567 (20314–27777)  head−base -1621 (-7.2%)  control−base -55 (-0.2%)
+  end      base=120 (115–129) head=122 (115–134) control=120 (113–128)  head−base +2 (+1.6%)  control−base +0 (+0.1%)
+
+[micro-tris-rsp] work identical in every arm
+  frame    base=3670 (3657–3692) head=3661 (3649–3674) control=3666 (3651–3682)  head−base -9 (-0.3%)  control−base -4 (-0.1%)
+  tnl      base=60 (51–69) head=55 (50–62) control=59 (45–76)  head−base -5 (-8.3%)  control−base -1 (-1.9%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=38 (32–44) head=41 (35–45) control=39 (33–51)  head−base +3 (+8.2%)  control−base +1 (+2.0%)
+  end      base=3364 (3354–3371) head=3360 (3354–3365) control=3361 (3350–3368)  head−base -4 (-0.1%)  control−base -3 (-0.1%)
+
+[micro-trs] work identical in every arm
+  frame    base=14829 (13893–15656) head=15942 (14099–17882) control=14877 (13949–15691)  head−base +1112 (+7.5%)  control−base +48 (+0.3%)
+  tnl      base=8484 (7503–9105) head=9287 (7786–10693) control=8497 (7588–9080)  head−base +803 (+9.5%)  control−base +12 (+0.1%)
+  sort     base=109 (88–132) head=124 (110–135) control=108 (89–112)  head−base +16 (+14.4%)  control−base -1 (-0.7%)
+  submit   base=1596 (1429–2029) head=1516 (1417–1818) control=1604 (1443–1952)  head−base -80 (-5.0%)  control−base +8 (+0.5%)
+  end      base=150 (135–166) head=150 (137–178) control=146 (127–162)  head−base -0 (-0.2%)  control−base -4 (-2.6%)
+
+[micro-trs-rsp] work identical in every arm
+  frame    base=9478 (8087–10346) head=8778 (8117–9262) control=9322 (8835–9772)  head−base -699 (-7.4%)  control−base -155 (-1.6%)
+  tnl      base=3590 (2941–3955) head=3110 (2865–3264) control=3480 (3166–3815)  head−base -480 (-13.4%)  control−base -110 (-3.1%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=751 (739–767) head=760 (744–776) control=752 (738–775)  head−base +10 (+1.3%)  control−base +2 (+0.2%)
+  end      base=382 (360–394) head=380 (367–398) control=381 (363–390)  head−base -2 (-0.4%)  control−base -1 (-0.2%)
+
+[micro-unlit] work identical in every arm
+  frame    base=24626 (22702–27545) head=24386 (23081–28634) control=24646 (22716–26680)  head−base -240 (-1.0%)  control−base +21 (+0.1%)
+  tnl      base=11820 (11000–13479) head=12375 (11293–17028) control=11874 (11005–13756)  head−base +556 (+4.7%)  control−base +54 (+0.5%)
+  sort     base=910 (893–927) head=926 (910–935) control=909 (889–916)  head−base +16 (+1.8%)  control−base -1 (-0.1%)
+  submit   base=11496 (10352–14430) head=10704 (10316–12683) control=11462 (10363–14021)  head−base -792 (-6.9%)  control−base -34 (-0.3%)
+  end      base=120 (102–139) head=114 (107–127) control=116 (105–124)  head−base -6 (-5.2%)  control−base -4 (-3.4%)
+
+[micro-unlit-rsp] work identical in every arm
+  frame    base=2456 (2428–2482) head=2446 (2422–2464) control=2454 (2441–2474)  head−base -10 (-0.4%)  control−base -2 (-0.1%)
+  tnl      base=62 (52–76) head=60 (51–69) control=64 (54–79)  head−base -2 (-4.0%)  control−base +2 (+2.4%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=27 (11–38) head=32 (22–44) control=32 (17–44)  head−base +5 (+18.3%)  control−base +4 (+15.1%)
+  end      base=2162 (2146–2167) head=2157 (2143–2172) control=2161 (2145–2171)  head−base -5 (-0.2%)  control−base -1 (-0.0%)
+
+[micro-yaw] work identical in every arm
+  frame    base=15442 (14398–16462) head=16694 (14762–18673) control=15552 (14522–16438)  head−base +1252 (+8.1%)  control−base +110 (+0.7%)
+  tnl      base=8898 (7911–9505) head=9610 (8267–10956) control=8776 (7876–9563)  head−base +712 (+8.0%)  control−base -122 (-1.4%)
+  sort     base=110 (94–134) head=122 (106–134) control=109 (94–112)  head−base +11 (+10.2%)  control−base -2 (-1.4%)
+  submit   base=1599 (1423–2037) head=1539 (1433–1885) control=1611 (1455–1960)  head−base -60 (-3.8%)  control−base +12 (+0.7%)
+  end      base=135 (119–158) head=131 (124–140) control=129 (109–144)  head−base -4 (-2.9%)  control−base -6 (-4.5%)
+
+[micro-yaw-rsp] work identical in every arm
+  frame    base=9421 (9022–9797) head=8963 (8669–9549) control=9278 (8060–10174)  head−base -458 (-4.9%)  control−base -143 (-1.5%)
+  tnl      base=3415 (3154–3687) head=3058 (2752–3371) control=3323 (2678–3650)  head−base -357 (-10.5%)  control−base -92 (-2.7%)
+  sort     base=0 (0–0) head=0 (0–0) control=0 (0–0)  head−base +0 (+0.0%)  control−base +0 (+0.0%)
+  submit   base=799 (782–817) head=802 (786–814) control=797 (776–819)  head−base +3 (+0.4%)  control−base -2 (-0.3%)
+  end      base=361 (353–378) head=359 (343–373) control=361 (346–370)  head−base -2 (-0.6%)  control−base +0 (+0.1%)
+
+[showcase-river] work identical in every arm
+  frame    base=25342 (24809–26223) head=25406 (24919–26934) control=25406 (24735–26164)  head−base +64 (+0.3%)  control−base +64 (+0.3%)
+  tnl      base=12712 (12461–12922) head=12102 (11675–12857) control=12738 (12575–13013)  head−base -610 (-4.8%)  control−base +26 (+0.2%)
+  sort     base=58 (44–78) head=62 (49–89) control=54 (49–66)  head−base +3 (+5.4%)  control−base -4 (-7.3%)
+  submit   base=1162 (1049–1297) head=1091 (992–1248) control=1159 (983–1272)  head−base -71 (-6.1%)  control−base -3 (-0.3%)
+  end      base=731 (603–791) head=794 (706–853) control=720 (620–827)  head−base +63 (+8.7%)  control−base -11 (-1.5%)
+
+[sky-tower] work identical in every arm
+  frame    base=7441 (7309–7592) head=7203 (7073–7356) control=7384 (7239–7535)  head−base -238 (-3.2%)  control−base -57 (-0.8%)
+  tnl      base=1272 (1206–1357) head=1151 (1118–1240) control=1250 (1175–1314)  head−base -121 (-9.5%)  control−base -22 (-1.7%)
+  sort     base=34 (22–45) head=32 (22–44) control=32 (22–44)  head−base -2 (-7.2%)  control−base -3 (-8.3%)
+  submit   base=852 (826–894) head=797 (711–870) control=844 (800–875)  head−base -55 (-6.5%)  control−base -9 (-1.0%)
+  end      base=798 (742–831) head=796 (736–849) control=789 (715–823)  head−base -3 (-0.3%)  control−base -10 (-1.2%)
+
+[throne] work identical in every arm
+  frame    base=18937 (18467–19384) head=18134 (17585–18673) control=18788 (18284–19234)  head−base -803 (-4.2%)  control−base -149 (-0.8%)
+  tnl      base=7999 (7639–8301) head=7656 (7173–8099) control=7932 (7577–8385)  head−base -343 (-4.3%)  control−base -67 (-0.8%)
+  sort     base=305 (284–318) head=297 (266–323) control=314 (273–412)  head−base -8 (-2.6%)  control−base +9 (+2.8%)
+  submit   base=2231 (2127–2342) head=1963 (1831–2107) control=2157 (2044–2297)  head−base -268 (-12.0%)  control−base -74 (-3.3%)
+  end      base=1258 (1179–1329) head=1262 (1174–1353) control=1227 (1160–1289)  head−base +4 (+0.3%)  control−base -31 (-2.5%)
+
+[perf ab] report: /home/v/Documents/projects/Trino-wt/perf79/target/perf-ab/ab.json

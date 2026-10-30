@@ -1,0 +1,874 @@
+{
+  "format": "trino-perf-report",
+  "version": 1,
+  "target": "n64",
+  "scene": "showcase-river",
+  "build": "prof-rsp",
+  "pad": 0,
+  "fields": {
+    "backfaced": 0,
+    "begin": 6285,
+    "clipped": 0,
+    "cpu_tris": 16,
+    "culled": 26,
+    "draws": 113,
+    "emitted": 0,
+    "end": 160,
+    "frames": 4,
+    "game": 14309,
+    "memo_culled": 23,
+    "memo_evict": 3,
+    "memo_hit": 60,
+    "memo_miss": 3,
+    "memo_store": 3,
+    "ovl_switch": 8,
+    "render": 60083,
+    "rsp_cmds": 88,
+    "rsp_draws": 87,
+    "rsp_flush": 24,
+    "rsp_reject": 0,
+    "rsp_tris": 4302,
+    "rspq_words": 3938,
+    "sort": 66,
+    "splits": 0,
+    "sprites": 253,
+    "submit": 1397,
+    "tex_resident": 6,
+    "tex_upload": 5,
+    "tnl": 37611,
+    "tris_in": 0,
+    "update": 1763,
+    "vblanks": 16,
+    "verts": 0,
+    "water_evict": 0,
+    "water_hit": 6,
+    "water_miss": 0
+  },
+  "models": [
+    {
+      "model": "67d1722a",
+      "calls": 1,
+      "us": 1256,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "14c7d939",
+      "calls": 1,
+      "us": 816,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "8537702a",
+      "calls": 1,
+      "us": 45,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "db28c432",
+      "calls": 1,
+      "us": 40,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "3a44168e",
+      "calls": 1,
+      "us": 33,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "03d14153",
+      "calls": 1,
+      "us": 28,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "714cbe8c",
+      "calls": 1,
+      "us": 27,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "80463156",
+      "calls": 1,
+      "us": 24,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "f40f2526",
+      "calls": 1,
+      "us": 22,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "206470ce",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "58247a68",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "1f9db24e",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "8bf322cc",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e452a74d",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "4fcfc607",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "1a12adc1",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "b5d39c4d",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "b83fb31e",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "6ff9ace1",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "5f5cf269",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "ebc2837f",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "ecf0eef4",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "9803c4b7",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "dd0f19af",
+      "calls": 1,
+      "us": 0,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "00000000",
+      "calls": 89,
+      "us": 35316,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    }
+  ],
+  "counters": {
+    "cpu_tris": 16,
+    "memo_culled": 23,
+    "memo_evict": 3,
+    "memo_hit": 60,
+    "memo_miss": 3,
+    "memo_store": 3,
+    "ovl_switch": 8,
+    "rsp_cmds": 88,
+    "rsp_flush": 24,
+    "rsp_reject": 0,
+    "rspq_words": 3938,
+    "tex_resident": 6,
+    "tex_upload": 5,
+    "water_evict": 0,
+    "water_hit": 6,
+    "water_miss": 0
+  },
+  "zones": {
+    "counters": [
+      {
+        "max": 102,
+        "mean": 102.0,
+        "name": "draws",
+        "samples": 4
+      },
+      {
+        "max": 18,
+        "mean": 16.5,
+        "name": "tris",
+        "samples": 4
+      },
+      {
+        "max": 87,
+        "mean": 87.0,
+        "name": "rsp_draws",
+        "samples": 4
+      },
+      {
+        "max": 4302,
+        "mean": 4302.0,
+        "name": "rsp_tris",
+        "samples": 4
+      },
+      {
+        "max": 60,
+        "mean": 60.0,
+        "name": "memo_hit",
+        "samples": 4
+      },
+      {
+        "max": 3,
+        "mean": 3.0,
+        "name": "memo_miss",
+        "samples": 4
+      },
+      {
+        "max": 23,
+        "mean": 23.0,
+        "name": "memo_culled",
+        "samples": 4
+      },
+      {
+        "max": 3,
+        "mean": 3.0,
+        "name": "memo_store",
+        "samples": 4
+      },
+      {
+        "max": 3,
+        "mean": 3.0,
+        "name": "memo_evict",
+        "samples": 4
+      },
+      {
+        "max": 6,
+        "mean": 6.0,
+        "name": "water_hit",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "water_miss",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "water_evict",
+        "samples": 4
+      },
+      {
+        "max": 0,
+        "mean": 0.0,
+        "name": "rsp_reject",
+        "samples": 4
+      },
+      {
+        "max": 3991,
+        "mean": 3938.0,
+        "name": "rspq_words",
+        "samples": 4
+      },
+      {
+        "max": 88,
+        "mean": 88.0,
+        "name": "rsp_cmds",
+        "samples": 4
+      },
+      {
+        "max": 8,
+        "mean": 8.0,
+        "name": "ovl_switch",
+        "samples": 4
+      },
+      {
+        "max": 24,
+        "mean": 24.0,
+        "name": "rsp_flush",
+        "samples": 4
+      },
+      {
+        "max": 5,
+        "mean": 5.0,
+        "name": "tex_upload",
+        "samples": 4
+      },
+      {
+        "max": 6,
+        "mean": 6.0,
+        "name": "tex_resident",
+        "samples": 4
+      },
+      {
+        "max": 18,
+        "mean": 16.5,
+        "name": "cpu_tris",
+        "samples": 4
+      }
+    ],
+    "dropped": 0,
+    "frames": {
+      "count": 3,
+      "max_us": 77020,
+      "mean_us": 68069.7,
+      "p50_us": 69118,
+      "p95_us": 77020
+    },
+    "platform": "n64",
+    "session": "n64-showcase-river",
+    "zones": [
+      {
+        "count": 408,
+        "max_us": 3883,
+        "mean_us": 458.9,
+        "name": "draw",
+        "p50_us": 113,
+        "p95_us": 1999,
+        "per_frame_us": 46811.0,
+        "total_us": 187244,
+        "track": "cpu"
+      },
+      {
+        "count": 84,
+        "max_us": 3641,
+        "mean_us": 1405.8,
+        "name": "rsp submit",
+        "p50_us": 1171,
+        "p95_us": 2567,
+        "per_frame_us": 29522.8,
+        "total_us": 118091,
+        "track": "cpu"
+      },
+      {
+        "count": 372,
+        "max_us": 2667,
+        "mean_us": 281.1,
+        "name": "memo",
+        "p50_us": 68,
+        "p95_us": 1824,
+        "per_frame_us": 26141.5,
+        "total_us": 104566,
+        "track": "cpu"
+      },
+      {
+        "count": 40,
+        "max_us": 3788,
+        "mean_us": 672.3,
+        "name": "rsp cmd",
+        "p50_us": 137,
+        "p95_us": 3762,
+        "per_frame_us": 6723.0,
+        "total_us": 26892,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 9976,
+        "mean_us": 6262.5,
+        "name": "begin",
+        "p50_us": 6362,
+        "p95_us": 9976,
+        "per_frame_us": 6262.5,
+        "total_us": 25050,
+        "track": "cpu"
+      },
+      {
+        "count": 12,
+        "max_us": 964,
+        "mean_us": 391.9,
+        "name": "water frame",
+        "p50_us": 171,
+        "p95_us": 964,
+        "per_frame_us": 1175.8,
+        "total_us": 4703,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 970,
+        "mean_us": 939.3,
+        "name": "submit",
+        "p50_us": 923,
+        "p95_us": 970,
+        "per_frame_us": 939.3,
+        "total_us": 3757,
+        "track": "cpu"
+      },
+      {
+        "count": 40,
+        "max_us": 120,
+        "mean_us": 69.9,
+        "name": "eligible",
+        "p50_us": 55,
+        "p95_us": 118,
+        "per_frame_us": 698.8,
+        "total_us": 2795,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 526,
+        "mean_us": 464.0,
+        "name": "water submit",
+        "p50_us": 443,
+        "p95_us": 526,
+        "per_frame_us": 464.0,
+        "total_us": 1856,
+        "track": "cpu"
+      },
+      {
+        "count": 12,
+        "max_us": 343,
+        "mean_us": 137.5,
+        "name": "water rings",
+        "p50_us": 46,
+        "p95_us": 343,
+        "per_frame_us": 412.5,
+        "total_us": 1650,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 270,
+        "mean_us": 264.3,
+        "name": "2d",
+        "p50_us": 268,
+        "p95_us": 270,
+        "per_frame_us": 264.3,
+        "total_us": 1057,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 165,
+        "mean_us": 160.5,
+        "name": "end",
+        "p50_us": 159,
+        "p95_us": 165,
+        "per_frame_us": 160.5,
+        "total_us": 642,
+        "track": "cpu"
+      },
+      {
+        "count": 4,
+        "max_us": 67,
+        "mean_us": 61.0,
+        "name": "sort",
+        "p50_us": 65,
+        "p95_us": 67,
+        "per_frame_us": 61.0,
+        "total_us": 244,
+        "track": "cpu"
+      }
+    ]
+  },
+  "rsp": {
+    "empty_drain_us": 33,
+    "entries": [
+      {
+        "ovl": "color",
+        "verts": 8,
+        "tris": 6,
+        "n": 12,
+        "us": 589
+      },
+      {
+        "ovl": "color",
+        "verts": 10,
+        "tris": 8,
+        "n": 4,
+        "us": 299
+      },
+      {
+        "ovl": "color",
+        "verts": 11,
+        "tris": 10,
+        "n": 4,
+        "us": 524
+      },
+      {
+        "ovl": "color",
+        "verts": 13,
+        "tris": 12,
+        "n": 4,
+        "us": 314
+      },
+      {
+        "ovl": "color",
+        "verts": 14,
+        "tris": 14,
+        "n": 4,
+        "us": 381
+      },
+      {
+        "ovl": "color",
+        "verts": 16,
+        "tris": 15,
+        "n": 4,
+        "us": 356
+      },
+      {
+        "ovl": "color",
+        "verts": 21,
+        "tris": 22,
+        "n": 4,
+        "us": 470
+      },
+      {
+        "ovl": "color",
+        "verts": 24,
+        "tris": 8,
+        "n": 20,
+        "us": 1561
+      },
+      {
+        "ovl": "color",
+        "verts": 25,
+        "tris": 32,
+        "n": 8,
+        "us": 1205
+      },
+      {
+        "ovl": "color",
+        "verts": 26,
+        "tris": 32,
+        "n": 8,
+        "us": 1188
+      },
+      {
+        "ovl": "color",
+        "verts": 30,
+        "tris": 40,
+        "n": 4,
+        "us": 704
+      },
+      {
+        "ovl": "color",
+        "verts": 42,
+        "tris": 41,
+        "n": 4,
+        "us": 798
+      },
+      {
+        "ovl": "color",
+        "verts": 44,
+        "tris": 24,
+        "n": 8,
+        "us": 1126
+      },
+      {
+        "ovl": "color",
+        "verts": 47,
+        "tris": 55,
+        "n": 4,
+        "us": 913
+      },
+      {
+        "ovl": "color",
+        "verts": 48,
+        "tris": 16,
+        "n": 4,
+        "us": 484
+      },
+      {
+        "ovl": "color",
+        "verts": 48,
+        "tris": 24,
+        "n": 40,
+        "us": 5757
+      },
+      {
+        "ovl": "color",
+        "verts": 49,
+        "tris": 48,
+        "n": 4,
+        "us": 907
+      },
+      {
+        "ovl": "color",
+        "verts": 52,
+        "tris": 80,
+        "n": 8,
+        "us": 2191
+      },
+      {
+        "ovl": "color",
+        "verts": 54,
+        "tris": 58,
+        "n": 4,
+        "us": 1038
+      },
+      {
+        "ovl": "color",
+        "verts": 57,
+        "tris": 59,
+        "n": 4,
+        "us": 1022
+      },
+      {
+        "ovl": "color",
+        "verts": 60,
+        "tris": 62,
+        "n": 4,
+        "us": 1103
+      },
+      {
+        "ovl": "color",
+        "verts": 62,
+        "tris": 100,
+        "n": 20,
+        "us": 5980
+      },
+      {
+        "ovl": "color",
+        "verts": 63,
+        "tris": 68,
+        "n": 4,
+        "us": 1161
+      },
+      {
+        "ovl": "color",
+        "verts": 72,
+        "tris": 24,
+        "n": 28,
+        "us": 5082
+      },
+      {
+        "ovl": "color",
+        "verts": 72,
+        "tris": 36,
+        "n": 8,
+        "us": 1686
+      },
+      {
+        "ovl": "color",
+        "verts": 78,
+        "tris": 80,
+        "n": 4,
+        "us": 1364
+      },
+      {
+        "ovl": "color",
+        "verts": 79,
+        "tris": 82,
+        "n": 4,
+        "us": 1389
+      },
+      {
+        "ovl": "color",
+        "verts": 82,
+        "tris": 80,
+        "n": 4,
+        "us": 1392
+      },
+      {
+        "ovl": "color",
+        "verts": 84,
+        "tris": 28,
+        "n": 32,
+        "us": 6457
+      },
+      {
+        "ovl": "color",
+        "verts": 126,
+        "tris": 168,
+        "n": 4,
+        "us": 2106
+      },
+      {
+        "ovl": "color",
+        "verts": 137,
+        "tris": 128,
+        "n": 4,
+        "us": 2256
+      },
+      {
+        "ovl": "color",
+        "verts": 144,
+        "tris": 48,
+        "n": 4,
+        "us": 1285
+      },
+      {
+        "ovl": "color",
+        "verts": 162,
+        "tris": 75,
+        "n": 4,
+        "us": 1751
+      },
+      {
+        "ovl": "color",
+        "verts": 173,
+        "tris": 168,
+        "n": 4,
+        "us": 2952
+      },
+      {
+        "ovl": "color",
+        "verts": 174,
+        "tris": 181,
+        "n": 4,
+        "us": 3040
+      },
+      {
+        "ovl": "color",
+        "verts": 205,
+        "tris": 203,
+        "n": 4,
+        "us": 3291
+      },
+      {
+        "ovl": "color",
+        "verts": 217,
+        "tris": 219,
+        "n": 4,
+        "us": 3647
+      },
+      {
+        "ovl": "color",
+        "verts": 288,
+        "tris": 96,
+        "n": 4,
+        "us": 2500
+      },
+      {
+        "ovl": "color",
+        "verts": 1044,
+        "tris": 348,
+        "n": 4,
+        "us": 8890
+      },
+      {
+        "ovl": "tex",
+        "verts": 36,
+        "tris": 12,
+        "n": 16,
+        "us": 3280
+      },
+      {
+        "ovl": "tex",
+        "verts": 120,
+        "tris": 40,
+        "n": 16,
+        "us": 6601
+      },
+      {
+        "ovl": "water",
+        "verts": 44,
+        "tris": 40,
+        "n": 4,
+        "us": 1236
+      }
+    ],
+    "fits": [
+      {
+        "ovl": "color",
+        "commands": 304,
+        "mean_us": 260.3914,
+        "per_cmd": 27.2202,
+        "per_vert": 1.2816,
+        "per_tri": 2.5092,
+        "r2": 0.9925
+      },
+      {
+        "ovl": "tex",
+        "commands": 32,
+        "mean_us": 308.7813,
+        "per_cmd": 116.0446,
+        "per_vert": 2.471,
+        "per_tri": 0.0,
+        "r2": 1.0
+      },
+      {
+        "ovl": "water",
+        "commands": 4,
+        "mean_us": 309.0,
+        "per_cmd": 309.0,
+        "per_vert": 0.0,
+        "per_tri": 0.0,
+        "r2": 1.0
+      }
+    ]
+  }
+}

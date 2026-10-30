@@ -1,0 +1,125 @@
+{
+  "format": "trino-perf-report",
+  "version": 1,
+  "target": "3ds",
+  "scene": "hub",
+  "build": "trace",
+  "pad": 0,
+  "fields": {
+    "frames": 25,
+    "render": 16723
+  },
+  "models": [],
+  "counters": {},
+  "zones": {
+    "counters": [
+      {
+        "max": 26,
+        "mean": 26.0,
+        "name": "draws",
+        "samples": 27
+      },
+      {
+        "max": 746,
+        "mean": 746.0,
+        "name": "tris",
+        "samples": 27
+      },
+      {
+        "max": 30,
+        "mean": 30.0,
+        "name": "gpu_draws",
+        "samples": 27
+      }
+    ],
+    "dropped": 524,
+    "frames": {
+      "count": 25,
+      "max_us": 16787,
+      "mean_us": 16723.3,
+      "p50_us": 16721,
+      "p95_us": 16786
+    },
+    "platform": "3ds",
+    "session": "3ds-hub",
+    "zones": [
+      {
+        "count": 27,
+        "max_us": 16778,
+        "mean_us": 16711.4,
+        "name": "render",
+        "p50_us": 16712,
+        "p95_us": 16778,
+        "per_frame_us": 17354.2,
+        "total_us": 451208,
+        "track": "cpu"
+      },
+      {
+        "count": 26,
+        "max_us": 12714,
+        "mean_us": 12660.6,
+        "name": "begin",
+        "p50_us": 12648,
+        "p95_us": 12714,
+        "per_frame_us": 12660.6,
+        "total_us": 329176,
+        "track": "cpu"
+      },
+      {
+        "count": 1656,
+        "max_us": 1478,
+        "mean_us": 25.1,
+        "name": "batch",
+        "p50_us": 3,
+        "p95_us": 3,
+        "per_frame_us": 1600.0,
+        "total_us": 41599,
+        "track": "cpu"
+      },
+      {
+        "count": 677,
+        "max_us": 130,
+        "mean_us": 37.4,
+        "name": "draw",
+        "p50_us": 26,
+        "p95_us": 77,
+        "per_frame_us": 974.3,
+        "total_us": 25333,
+        "track": "cpu"
+      },
+      {
+        "count": 1550,
+        "max_us": 36,
+        "mean_us": 7.3,
+        "name": "2d",
+        "p50_us": 4,
+        "p95_us": 21,
+        "per_frame_us": 435.7,
+        "total_us": 11329,
+        "track": "cpu"
+      },
+      {
+        "count": 27,
+        "max_us": 372,
+        "mean_us": 310.1,
+        "name": "end",
+        "p50_us": 307,
+        "p95_us": 333,
+        "per_frame_us": 322.0,
+        "total_us": 8373,
+        "track": "cpu"
+      },
+      {
+        "count": 26,
+        "max_us": 254,
+        "mean_us": 228.7,
+        "name": "submit",
+        "p50_us": 228,
+        "p95_us": 228,
+        "per_frame_us": 228.7,
+        "total_us": 5945,
+        "track": "cpu"
+      }
+    ]
+  }
+}

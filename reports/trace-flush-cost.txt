@@ -1,0 +1,12 @@
+[ares] TRINO_TRACE_FLUSH:n64-hub lines=62 us=19376 us_per_line=312
+[ares] TRINO_TRACE_FLUSH:n64-green-hills lines=45 us=14014 us_per_line=311
+[ares] TRINO_TRACE_FLUSH:n64-lava-land lines=46 us=14515 us_per_line=315
+[ares] TRINO_TRACE_FLUSH:n64-sky-tower lines=49 us=15267 us_per_line=311
+[ares] TRINO_TRACE_FLUSH:n64-throne lines=73 us=22567 us_per_line=309
+[ares] TRINO_TRACE_FLUSH:n64-cpu-hub lines=70 us=21921 us_per_line=313
+[ares] TRINO_TRACE_FLUSH:n64-cpu-green-hills lines=50 us=15699 us_per_line=313
+[ares] TRINO_TRACE_FLUSH:n64-cpu-lava-land lines=50 us=15716 us_per_line=314
+[ares] TRINO_TRACE_FLUSH:n64-cpu-sky-tower lines=56 us=17613 us_per_line=314
+[ares] TRINO_TRACE_FLUSH:n64-cpu-throne lines=74 us=23064 us_per_line=311
+[ares] TRINO_TRACE_FLUSH:n64-micro-river lines=21 us=6110 us_per_line=290
+[ares] TRINO_TRACE_FLUSH:n64-showcase-river lines=138 us=39886 us_per_line=289

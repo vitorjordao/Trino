@@ -1,0 +1,651 @@
+{
+  "format": "trino-perf-report",
+  "version": 1,
+  "target": "n64",
+  "scene": "hub",
+  "build": "prof-sample",
+  "pad": 0,
+  "fields": {
+    "backfaced": 8,
+    "begin": 120,
+    "clipped": 4,
+    "cpu_tris": 19,
+    "culled": 0,
+    "draws": 25,
+    "emitted": 5,
+    "end": 1962,
+    "frames": 4,
+    "game": 6217,
+    "memo_culled": 0,
+    "memo_evict": 15,
+    "memo_hit": 9,
+    "memo_miss": 16,
+    "memo_store": 15,
+    "ovl_switch": 2,
+    "render": 15314,
+    "rsp_cmds": 24,
+    "rsp_draws": 24,
+    "rsp_flush": 0,
+    "rsp_reject": 1,
+    "rsp_tris": 581,
+    "rspq_words": 1125,
+    "sort": 103,
+    "splits": 0,
+    "sprites": 725,
+    "submit": 2033,
+    "tex_resident": 0,
+    "tex_upload": 6,
+    "tnl": 4151,
+    "tris_in": 12,
+    "update": 616,
+    "vblanks": 11,
+    "verts": 24,
+    "water_evict": 0,
+    "water_hit": 0,
+    "water_miss": 0
+  },
+  "models": [
+    {
+      "model": "cef562e8",
+      "calls": 1,
+      "us": 1147,
+      "verts": 24,
+      "tris_in": 12,
+      "emitted": 5
+    },
+    {
+      "model": "d016924b",
+      "calls": 7,
+      "us": 576,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "628a58de",
+      "calls": 3,
+      "us": 466,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "518de348",
+      "calls": 3,
+      "us": 393,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "158d530a",
+      "calls": 2,
+      "us": 358,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "9378c0e0",
+      "calls": 2,
+      "us": 344,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e2dd959e",
+      "calls": 3,
+      "us": 198,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e9c6f6a0",
+      "calls": 1,
+      "us": 188,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "dba14f84",
+      "calls": 1,
+      "us": 181,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "ce3cd9ad",
+      "calls": 1,
+      "us": 66,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    },
+    {
+      "model": "e2d8d1f0",
+      "calls": 1,
+      "us": 57,
+      "verts": 0,
+      "tris_in": 0,
+      "emitted": 0
+    }
+  ],
+  "counters": {
+    "cpu_tris": 19,
+    "memo_culled": 0,
+    "memo_evict": 15,
+    "memo_hit": 9,
+    "memo_miss": 16,
+    "memo_store": 15,
+    "ovl_switch": 2,
+    "rsp_cmds": 24,
+    "rsp_flush": 0,
+    "rsp_reject": 1,
+    "rspq_words": 1125,
+    "tex_resident": 0,
+    "tex_upload": 6,
+    "water_evict": 0,
+    "water_hit": 0,
+    "water_miss": 0
+  },
+  "samples": {
+    "samples": 759,
+    "lost": 0,
+    "period_us": 100,
+    "frames": 4,
+    "handler_us": 5.587,
+    "overhead_pct": 5.5,
+    "functions": [
+      {
+        "name": "__rsp_check_assert",
+        "samples": 75,
+        "pct": 9.881422924901186
+      },
+      {
+        "name": "rspq_highpri_sync",
+        "samples": 64,
+        "pct": 8.432147562582346
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::draw_model_matrix",
+        "samples": 55,
+        "pct": 7.246376811594203
+      },
+      {
+        "name": "memcpy",
+        "samples": 49,
+        "pct": 6.455862977602108
+      },
+      {
+        "name": "trino_platform_n64::rsp::draw_words_at",
+        "samples": 32,
+        "pct": 4.216073781291173
+      },
+      {
+        "name": "rspq_syncpoint_wait",
+        "samples": 27,
+        "pct": 3.5573122529644268
+      },
+      {
+        "name": "memset",
+        "samples": 26,
+        "pct": 3.4255599472990776
+      },
+      {
+        "name": "<castle64::Castle64Game as trino_core::game::Game>::render",
+        "samples": 22,
+        "pct": 2.898550724637681
+      },
+      {
+        "name": "trino_core::memo::find_mut::<57>",
+        "samples": 18,
+        "pct": 2.3715415019762847
+      },
+      {
+        "name": "trino_core::render3d::rsp_check_mv",
+        "samples": 18,
+        "pct": 2.3715415019762847
+      },
+      {
+        "name": "trino_tri_tex",
+        "samples": 17,
+        "pct": 2.2397891963109355
+      },
+      {
+        "name": "rdpq_triangle_rsp",
+        "samples": 16,
+        "pct": 2.1080368906455864
+      },
+      {
+        "name": "trino_core::render3d::model_space_light",
+        "samples": 16,
+        "pct": 2.1080368906455864
+      },
+      {
+        "name": "dma_read",
+        "samples": 15,
+        "pct": 1.976284584980237
+      },
+      {
+        "name": "trino_core::render3d::tessellate_joints::<false, false>::{closure#1}",
+        "samples": 14,
+        "pct": 1.844532279314888
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::draw_model",
+        "samples": 13,
+        "pct": 1.7127799736495388
+      },
+      {
+        "name": "trino_core::render3d::clip_frustum",
+        "samples": 12,
+        "pct": 1.5810276679841897
+      },
+      {
+        "name": "trino_core::render3d::tessellate_joints::<false, false>",
+        "samples": 12,
+        "pct": 1.5810276679841897
+      },
+      {
+        "name": "trino_core::memo::evicts::<57>",
+        "samples": 11,
+        "pct": 1.4492753623188406
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer>::flush_cpu_batch",
+        "samples": 10,
+        "pct": 1.3175230566534915
+      },
+      {
+        "name": "trino_core::trace::global::begin",
+        "samples": 10,
+        "pct": 1.3175230566534915
+      },
+      {
+        "name": "trino_rsp_draw",
+        "samples": 10,
+        "pct": 1.3175230566534915
+      },
+      {
+        "name": "<trino_core::math3d::Mat34>::from_rotation_scale_translation",
+        "samples": 9,
+        "pct": 1.1857707509881423
+      },
+      {
+        "name": "enable_interrupts",
+        "samples": 9,
+        "pct": 1.1857707509881423
+      },
+      {
+        "name": "<castle64::Castle64Game as trino_core::game::Game>::update",
+        "samples": 8,
+        "pct": 1.0540184453227932
+      },
+      {
+        "name": "<trino_core::render3d::Mesh>::from_layout",
+        "samples": 8,
+        "pct": 1.0540184453227932
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer>::count_rsp_with",
+        "samples": 8,
+        "pct": 1.0540184453227932
+      },
+      {
+        "name": "trino_core::render3d::rsp_band_check",
+        "samples": 8,
+        "pct": 1.0540184453227932
+      },
+      {
+        "name": "<trino_core::render3d::RspPan>::new",
+        "samples": 7,
+        "pct": 0.922266139657444
+      },
+      {
+        "name": "texload_block_4bpp",
+        "samples": 6,
+        "pct": 0.7905138339920948
+      },
+      {
+        "name": "trino_core::text::layout",
+        "samples": 6,
+        "pct": 0.7905138339920948
+      },
+      {
+        "name": "<trino_core::memo::MemoKey>::slot",
+        "samples": 5,
+        "pct": 0.6587615283267457
+      },
+      {
+        "name": "__rdpq_write8",
+        "samples": 5,
+        "pct": 0.6587615283267457
+      },
+      {
+        "name": "floorf",
+        "samples": 5,
+        "pct": 0.6587615283267457
+      },
+      {
+        "name": "trino_core::render3d::billboard_with",
+        "samples": 5,
+        "pct": 0.6587615283267457
+      },
+      {
+        "name": "trino_core::render3d::tessellate_with",
+        "samples": 5,
+        "pct": 0.6587615283267457
+      },
+      {
+        "name": "<castle64::Castle64Game>::build_solids",
+        "samples": 4,
+        "pct": 0.5270092226613966
+      },
+      {
+        "name": "<trino_core::memo::MemoKey>::new",
+        "samples": 4,
+        "pct": 0.5270092226613966
+      },
+      {
+        "name": "<trino_core::perf::RenderProfile>::record_model",
+        "samples": 4,
+        "pct": 0.5270092226613966
+      },
+      {
+        "name": "__rdpq_autosync_change",
+        "samples": 4,
+        "pct": 0.5270092226613966
+      },
+      {
+        "name": "trino_core::physics::controller::move_body::<f32>",
+        "samples": 4,
+        "pct": 0.5270092226613966
+      },
+      {
+        "name": "trino_tri",
+        "samples": 4,
+        "pct": 0.5270092226613966
+      },
+      {
+        "name": "<f32 as trino_core::physics::scalar::Scalar>::controller_step",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "<trino_core::math3d::Mat34>::mul",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "<trino_core::shadow::ShadowFrame>::blob",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::draw_billboard",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::draw_sprite",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::draw_text",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "__rdpq_write8_syncchangeuse",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "mixer_poll",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "rspq_next_buffer",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "samplebuffer_append",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "trino_core::shadow::blob_tris",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "trino_platform_n64::prof::bump_out",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "trino_platform_n64::renderer::remember",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "trino_tri_body",
+        "samples": 3,
+        "pct": 0.3952569169960474
+      },
+      {
+        "name": "<trino_core::text::TextBuf<8> as core::fmt::Write>::write_char",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "<trino_core::text::TextBuf<8> as core::fmt::Write>::write_str",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "<trino_platform_n64::audio::N64Audio>::refresh",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::begin_frame",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::draw_text::{closure#0}",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::end_frame",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "__rdpq_reset_render_mode",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "__sprite_ext",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "attach",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "ltd_texloader",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "rdpq_fence",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "texload_set_rect",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "timer_ticks",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "trino_app_n64::n64::run_self_test::{closure#0}",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "trino_core::access::outline::draw_outlined",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "trino_ticks_us",
+        "samples": 2,
+        "pct": 0.2635046113306983
+      },
+      {
+        "name": "<core::fmt::Formatter>::pad_integral::write_prefix",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_core::audio::BusMixer>::update",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_core::shadow::ShadowFrame>::receiver_under",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_core::shadow::ShadowFrame>::set_receivers",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_core::text::BitmapFont>::glyph",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_platform_n64::audio::N64Audio>::poll",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::measure_text",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::set_post",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<trino_platform_n64::renderer::N64Renderer as trino_core::render::Renderer>::set_shadow_receivers",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "<usize as core::fmt::Display>::fmt",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "__rdpq_fill_rectangle",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "__rdpq_set_fill_color",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "__rdpq_sprite_upload",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "compiler_builtins::math::libm_math::fmod::fmodf",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "core::fmt::write",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "core::slice::sort::shared::smallsort::insertion_sort_shift_left::<(u64, u64), <(u64, u64) as core::cmp::PartialOrd>::lt>",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "floor",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "rdpq_detach_show",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "rdpq_tex_upload",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "rdpq_tex_upload_sub",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "read",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "rspq_flush_internal",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "tex_loader_load",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "texload_tile_4bpp",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      },
+      {
+        "name": "trino_platform_n64::prof::note_store_out::<57>",
+        "samples": 1,
+        "pct": 0.13175230566534915
+      }
+    ],
+    "unknown": 0
+  }
+}

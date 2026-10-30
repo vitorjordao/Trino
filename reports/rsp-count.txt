@@ -1,0 +1,29 @@
+rsp_trino: IMEM 2380 / 4096 bytes (1716 free), DMEM 2968 / 4096 bytes
+  command                 11 instructions
+  rdpq triangle          282 instructions
+  segment                 31 instructions
+  triangle                22 instructions
+  vertex pass             51 instructions
+rsp_trino_color: IMEM 2668 / 4096 bytes (1428 free), DMEM 3128 / 4096 bytes
+  command                 12 instructions
+  palette entry            2 instructions
+  rdpq triangle          282 instructions
+  segment                 49 instructions
+  triangle                22 instructions
+  vertex pass            101 instructions
+rsp_trino_tex: IMEM 2796 / 4096 bytes (1300 free), DMEM 3400 / 4096 bytes
+  command                 12 instructions
+  palette entry            2 instructions
+  rdpq triangle          282 instructions
+  segment                 49 instructions
+  triangle                22 instructions
+  vertex pass            132 instructions
+rsp_trino_water: IMEM 4028 / 4096 bytes (68 free), DMEM 3984 / 4096 bytes
+  command                 19 instructions
+  rdpq triangle          282 instructions
+  segment                 40 instructions
+  triangle                22 instructions
+  vertex pass            430 instructions
+  water ring pass        217 instructions
+  water ripples          117 instructions
+  water surface pass     313 instructions

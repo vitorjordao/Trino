@@ -1,0 +1,9 @@
+pc-solid-eleven (pc): 239 frames, mean 16680 us, p95 19685 us, max 38414 us
+  zone                     track       count    mean_us    p95_us   max_us    total  per_frame
+  cpu tnl                  cpu           240     2230.4      2660     4257   535289     2230.4
+  tnl chunk                worker 1      240     1530.1      2064     2659   367213     1530.1
+  tnl chunk                worker 2      240     1455.6      1952     2627   349339     1455.6
+  tnl chunk                worker 3      240     1035.8      1482     2262   248597     1035.8
+  stream fill              audio         784       30.1       114      209    23567       98.2
+  stream job               audio         784       29.7       114      208    23261       96.9
+  tnl chunk                worker 4      240       16.2        27       68     3885       16.2

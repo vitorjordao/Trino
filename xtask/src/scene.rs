@@ -425,6 +425,12 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     ),
                     None => "null".into(),
                 };
+                // High-contrast outlines (issue #96): the draws they add.
+                let o = &b.outlines;
+                let outlines = format!(
+                    "{{\"draws\":{},\"rsp\":{},\"tris\":{}}}",
+                    o.draws, o.rsp, o.tris
+                );
                 let s = &b.shadows;
                 let shadows = format!(
                     "{{\"tier\":\"{}\",\"casters\":{},\"blobs\":{},\"planar\":{},\"mapped\":{},\"over_budget\":{},\"receivers\":{}}}",
@@ -437,7 +443,7 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
                     s.receivers
                 );
                 format!(
-                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"shadows\":{shadows},\"stereo\":{stereo},\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
+                    "{{\"platform\":\"{}\",\"tier\":\"{}\",\"ram_bytes\":{ram},\"model_bytes\":{},\"cpu_cores\":{},\"cpu_mhz\":{},\"crowd_scale\":{},\"particle_scale\":{},\"draws\":{},\"tris\":{},\"verts\":{},\"culled\":{},\"billboards\":{},\"lod\":{:?},\"rsp_draws\":{},\"rsp_tris\":{},\"cpu_draws\":{},\"off_rsp\":[{}],\"gpu_draws\":{},\"gpu_tris\":{},\"off_gpu\":[{}],\"pc_gpu_draws\":{},\"pc_gpu_tris\":{},\"off_pc_gpu\":[{}],\"wasted\":[{}],\"water\":[{}],\"paths\":[{}],\"web_calls\":{},\"web_pipelines\":{},\"web_switches\":{},\"web_warnings\":[{}],\"outlines\":{outlines},\"shadows\":{shadows},\"stereo\":{stereo},\"n64_cpu_us\":{},\"n64_rsp_us\":{},\"n64_frame_us\":{}}}",
                     b.target.key(),
                     b.target.hw_tier().key(),
                     b.model_bytes,
@@ -510,6 +516,14 @@ fn budget(root: &Path, args: &[&str]) -> ExitCode {
         }
         if let Some(line) = trino_scene::budget::stereo_line(b) {
             println!("       {line}");
+        }
+        if let Some(line) = trino_scene::budget::outline_line(b) {
+            println!("       {line}");
+        }
+        if b.target.base() == Target::N64 {
+            for line in trino_scene::budget::water_palette_lines(b) {
+                println!("       {line}");
+            }
         }
         if b.target.base() == Target::N64 {
             println!(

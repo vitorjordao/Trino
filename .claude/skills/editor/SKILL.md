@@ -237,9 +237,11 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
   itself, so the panel (red) and the Console show the bake error.
 - The Platform budget's texture lines (`texture_memory()`) are project-wide: a console
   loads every texture at boot.
-- kittest: close a combo left open by `click_accesskit` by clicking a label no list
-  covers (the grid's "Memory"); clicking the combo again can land on the list's first
-  item. Budget line queries need exact prefixes (`"3DS {tris} tris"`), since the
+- kittest: pick a combo item with `ui_tests::pick` (accessibility actions only, then
+  `Popup::close_all`). Opening the combo with the pointer helper `click` is flaky in a
+  panel whose rows a worker re-lays out (the texture columns being measured): the click
+  lands beside the moved combo and the list never opens (1 run in 3 in CI and locally,
+  2026-10-30). Budget line queries need exact prefixes (`"3DS {tris} tris"`), since the
   texture line also starts with "3DS".
 
 ## Hardware tiers (issue #54, ADR 0020)

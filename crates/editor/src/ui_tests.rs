@@ -3309,14 +3309,6 @@ fn manifest_table<'a>(text: &'a str, header: &str) -> &'a str {
         .unwrap()
 }
 
-/// Close a combo's list left open by an accessibility click: a click on
-/// the grid's "Memory" label, which no list covers (one on the combo could
-/// land on the list's first item instead).
-fn close_popup(h: &mut Harness<'static, App>) {
-    h.get_by_label("Memory").click();
-    h.run_steps(3);
-}
-
 /// Step until `done` (a worker finishing, the watcher rebaking), 30 s at
 /// most.
 fn wait_for(h: &mut Harness<'static, App>, what: &str, done: impl Fn(&App) -> bool) {
@@ -3367,10 +3359,7 @@ fn texture_inspector_formats_quality_and_errors() {
     assert!(h.query_by_label_contains("Texture formats").is_some());
 
     // 3DS format: ETC1 from its combo.
-    click(&mut h, "3DS format");
-    h.get_by_label("ETC1").click_accesskit();
-    h.run_steps(3);
-    close_popup(&mut h);
+    pick(&mut h, "3DS format", "ETC1");
     let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
     let table = manifest_table(&text, TABLE);
     assert!(table.contains(r#"3ds = "ETC1""#), "{table}");
@@ -3398,10 +3387,7 @@ fn texture_inspector_formats_quality_and_errors() {
         "a format combo per platform"
     );
     // KTX2-UASTC from its combo: written as `web = ...`, measured again.
-    click(&mut h, "Web format");
-    h.get_by_label("KTX2-UASTC").click_accesskit();
-    h.run_steps(3);
-    close_popup(&mut h);
+    pick(&mut h, "Web format", "KTX2-UASTC");
     let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
     assert!(
         manifest_table(&text, TABLE).contains(r#"web = "KTX2-UASTC""#),
@@ -3420,10 +3406,7 @@ fn texture_inspector_formats_quality_and_errors() {
     );
 
     // Quality: high, from its combo; `auto` on the PC must keep 40 dB.
-    click(&mut h, "Texture quality");
-    h.get_by_label("high (40 dB)").click_accesskit();
-    h.run_steps(3);
-    close_popup(&mut h);
+    pick(&mut h, "Texture quality", "high (40 dB)");
     let text = std::fs::read_to_string("assets/manifest.toml").unwrap();
     assert!(manifest_table(&text, TABLE).contains(r#"quality = "high""#));
     wait_for(&mut h, "the quality to apply", |a| {

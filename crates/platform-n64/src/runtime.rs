@@ -75,7 +75,9 @@ pub fn now_us() -> u32 {
 /// `trino-core/trace` (`cargo xtask test n64 --trace`).
 pub fn trace_start() -> bool {
     use trino_core::trace::{self, GlobalRing, TracePlatform};
-    if !trace::ENABLED {
+    // A sampled build (`--prof sample`, issue #79) records no zones: the
+    // recorder would be in its samples.
+    if !trace::ENABLED || cfg!(feature = "prof-sample") {
         return false;
     }
     if trace::is_on() {
@@ -98,15 +100,40 @@ pub fn trace_flush(session: &str, seq: &mut u32) -> bool {
     trino_core::trace::flush(session, seq, &mut |l| log(l))
 }
 
+/// Print what the ring holds like [`trace_flush`] and time it: the
+/// lines printed and the µs they took (ISViewer's cost per line, issue
+/// #79 / #105 item 2).
+pub fn trace_flush_timed(session: &str, seq: &mut u32) -> (u32, u32) {
+    let mut lines = 0u32;
+    let t0 = now_us();
+    trino_core::trace::flush(session, seq, &mut |l| {
+        lines += 1;
+        log(l)
+    });
+    (lines, now_us().wrapping_sub(t0))
+}
+
 /// The play loop's trace (`run n64 --trace`, issue #62): the engine's
-/// zones flushed as `session` every 60 frames. No code at all without
-/// `trino-core/trace`.
+/// zones as `session`, encoded every 60 frames and printed a few lines per
+/// frame over the next 60. No code at all without `trino-core/trace`.
+///
+/// Printing all of a ring's lines at once cost ~115 ms in ares (~40 lines
+/// over ISViewer): a 7× spike every second (#105 item 2). Spread, each
+/// frame pays its share (a `trace flush` zone of a line or so) and no
+/// frame stands out.
 pub struct TraceLoop {
     on: bool,
     seq: u32,
     frames: u32,
     session: &'static str,
+    /// Encoded lines waiting to be printed, and how many go per frame.
+    pending: alloc::collections::VecDeque<alloc::string::String>,
+    per_frame: usize,
 }
+
+/// Frames between two encodes of the ring (and over which its lines are
+/// printed).
+const TRACE_PERIOD: u32 = 60;
 
 impl TraceLoop {
     pub fn start(session: &'static str) -> TraceLoop {
@@ -115,6 +142,8 @@ impl TraceLoop {
             seq: 0,
             frames: 0,
             session,
+            pending: alloc::collections::VecDeque::new(),
+            per_frame: 1,
         }
     }
 
@@ -123,22 +152,47 @@ impl TraceLoop {
         if !trino_core::trace::ENABLED || !self.on {
             return;
         }
+        self.frame_out();
+    }
+
+    #[inline(never)]
+    fn frame_out(&mut self) {
+        use trino_core::trace;
         self.frames += 1;
-        if self.frames.is_multiple_of(60) {
-            // Printing is slow (ISViewer: ~0.1 s for 60 frames' events): the
-            // flush shows on the timeline as its own zone, so its frame's
-            // spike reads as the trace's, not the game's.
-            let t0 = trino_core::trace::now();
-            trace_flush(self.session, &mut self.seq);
-            let t1 = trino_core::trace::now();
-            trino_core::trace::record_zone(
-                "trace flush",
-                trino_core::trace::track::CPU,
+        if self.frames.is_multiple_of(TRACE_PERIOD) {
+            // Whatever is still waiting goes first (lines stay in order).
+            for l in self.pending.drain(..) {
+                log(&l);
+            }
+            let t0 = trace::now();
+            let pending = &mut self.pending;
+            trace::flush(self.session, &mut self.seq, &mut |l| {
+                pending.push_back(alloc::string::String::from(l))
+            });
+            self.per_frame = self.pending.len().div_ceil(TRACE_PERIOD as usize).max(1);
+            let t1 = trace::now();
+            trace::record_zone(
+                "trace encode",
+                trace::track::CPU,
                 0,
                 t0,
                 t1.wrapping_sub(t0),
             );
         }
+        if self.pending.is_empty() {
+            return;
+        }
+        // The flush shows on the timeline as its own zone, so its share of
+        // the frame reads as the trace's, not the game's.
+        let t0 = trace::now();
+        for _ in 0..self.per_frame {
+            match self.pending.pop_front() {
+                Some(l) => log(&l),
+                None => break,
+            }
+        }
+        let t1 = trace::now();
+        trace::record_zone("trace flush", trace::track::CPU, 0, t0, t1.wrapping_sub(t0));
     }
 }
 

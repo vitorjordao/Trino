@@ -396,6 +396,10 @@ impl Platform for PcPlatform {
         self.second_screen
     }
 
+    fn trace_hooks(&self) -> Option<trino_core::trace::TraceAttach> {
+        crate::trace_attach::attach()
+    }
+
     fn set_display(&mut self, settings: DisplaySettings) {
         if self.display.is_some() {
             self.display_request = Some(settings);

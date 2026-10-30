@@ -5,6 +5,25 @@ description: Measure and improve Trino's frame cost on the N64 — the TRINO_PER
 
 # n64-performance
 
+## How to measure (the tools, ADR 0038)
+
+Before writing a timer, a hit counter or a sampler by hand (#69 did all three and deleted
+them), use what is in the engine:
+
+| Question | Tool |
+|---|---|
+| Is the change faster, or is it layout? | `cargo xtask perf ab --base origin/main --control` (8 paddings, each arm in its own worktree; the control is the base + a no-op patch) |
+| Which part of a draw costs CPU? | `cargo xtask test n64 --trace`: zones `memo`, `eligible`, `rsp cmd`, `cpu tnl`, `rsp submit`, `water frame`, `water rings` per scene (`target/perf/n64-<scene>.json`) |
+| Is the memo hitting? Uploads? Overlay switches? | the same run's counters (`memo_hit`, `memo_evict`, `tex_upload`, `ovl_switch`, `rspq_words`, …) on each `TRINO_PERF_SCENE` line |
+| Where does the CPU spend time in general? | `cargo xtask test n64 --prof sample` (top functions per scene, its own cost printed) |
+| How long does each RSP command take? | `cargo xtask test n64 --prof rsp` (µs per command, vertex, triangle, per overlay) |
+| How many RSP instructions does a path run? | `cargo xtask rsp count --blocks` (pinned in `tests/perf/rsp_counts.toml`) |
+| Read any of it again, or in the editor | `cargo xtask perf report <json>`; Profiler › Reports / A/B |
+
+The `profiling` skill has the details (what each counter means, what the sampler charges
+where). Instrumented ROMs (`--trace`, `--prof`) are other binaries: never judge a gated
+number on them, and never bless from them.
+
 ## The numbers that count
 
 `cargo xtask test n64` runs every `castle64::perf::SCENES` scene (hub, green-hills,
@@ -595,8 +614,9 @@ frame, p95 19.0 ms, one 132 ms spike on the first frame.
 
 ## Workflow for a perf change
 
-1. Baseline on the base commit in a `git worktree` (never `git stash`), over a few
-   `TRINO_N64_TEXT_PAD` paddings (see "Code layout" above).
+1. Baseline and change over the same paddings: `cargo xtask perf ab --base <base>
+   --control` does the worktrees, the eight paddings and the control arm (see "Code
+   layout" above); `--reuse` re-reads a finished sweep's logs.
 2. Fast loop first: the PC work counters (`perf_budget`, seconds) tell you whether
    the change removes work; `TRINO_PERF_MODEL` says where the time is.
 3. Hold the pixels: PC goldens and `tests/golden/n64/showcase.png` byte-identical,

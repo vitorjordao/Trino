@@ -4597,6 +4597,7 @@ dependencies = [
 name = "trino-trace"
 version = "0.2.0-dev.1"
 dependencies = [
+ "serde",
  "serde_json",
  "trino-core",
 ]

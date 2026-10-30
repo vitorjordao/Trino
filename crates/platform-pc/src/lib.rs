@@ -17,6 +17,7 @@ pub mod language;
 pub mod replay_host;
 pub mod system;
 pub mod tnl_oracle;
+pub mod trace_attach;
 
 #[cfg(feature = "tracy")]
 pub use trino_render_wgpu::tracy;

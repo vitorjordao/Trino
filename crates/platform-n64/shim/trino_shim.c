@@ -22,6 +22,38 @@
 #include <libdragon.h>
 
 // ---------------------------------------------------------------------------
+// Backend counters (issue #79, ADR 0038). Only an instrumented build
+// (`--trace`/`--prof`, compiled as shim_prof.o with -DTRINO_PROF) counts:
+// without it every TRINO_PROF_* below expands to nothing, so shim.o is
+// byte-for-byte what it was. trino_prof_read (end of file) hands them over.
+#ifdef TRINO_PROF
+enum {
+    TP_RSPQ_WORDS, TP_RSP_CMDS, TP_OVL_SWITCH, TP_RSP_FLUSH,
+    TP_TEX_UPLOAD, TP_TEX_RESIDENT, TP_CPU_TRIS, TP_COUNT
+};
+static uint32_t trino_prof[TP_COUNT];
+// The overlay that ran last: rspq loads another one's code and data
+// (a DMA and a wait) whenever consecutive commands change it. rdpq's own
+// commands (the CPU triangles) are overlay 0xFF here.
+static uint32_t trino_prof_ovl = 0xFFFFFFFEu;
+#define TRINO_PROF_ADD(i, n) (trino_prof[(i)] += (n))
+#define TRINO_PROF_OVL(id) do { if (trino_prof_ovl != (uint32_t)(id)) { \
+    trino_prof[TP_OVL_SWITCH]++; trino_prof_ovl = (uint32_t)(id); } } while (0)
+// Words the CPU wrote into the rspq buffer around a statement (a buffer
+// switch in between jumps the pointer: such a delta is dropped).
+#define TRINO_PROF_WORDS(stmt) do { volatile uint32_t* trino_p0 = rspq_cur_pointer; stmt; \
+    int trino_d = rspq_cur_pointer - trino_p0; \
+    if (trino_d > 0 && trino_d < 1024) trino_prof[TP_RSPQ_WORDS] += trino_d; } while (0)
+#define TRINO_PROF_CMD(id, words) do { TRINO_PROF_ADD(TP_RSP_CMDS, 1); \
+    TRINO_PROF_ADD(TP_RSPQ_WORDS, (words)); TRINO_PROF_OVL(id); } while (0)
+#else
+#define TRINO_PROF_ADD(i, n) ((void)0)
+#define TRINO_PROF_OVL(id) ((void)0)
+#define TRINO_PROF_WORDS(stmt) stmt
+#define TRINO_PROF_CMD(id, words) ((void)0)
+#endif
+
+// ---------------------------------------------------------------------------
 // Boot + logging
 
 static void trino_check_trifmt(void);
@@ -335,7 +367,9 @@ void trino_sprite_blit(void* sprite, const trino_blit_t* p)
         .flip_x = p->flip_x != 0,
         .flip_y = p->flip_y != 0,
     };
-    rdpq_sprite_blit((sprite_t*)sprite, p->x, p->y, &parms);
+    TRINO_PROF_ADD(TP_TEX_UPLOAD, 1);
+    TRINO_PROF_WORDS(rdpq_sprite_blit((sprite_t*)sprite, p->x, p->y, &parms));
+    TRINO_PROF_OVL(0xFF);
 }
 
 // Solid rectangle (fill_rect): flat PRIM combiner, alpha-blended when
@@ -389,6 +423,7 @@ uint32_t trino_text_begin(void* sprite, uint32_t tint)
     }
     trino_2d_setup(tint);
     if (trino_tmem_owner != sprite) {
+        TRINO_PROF_ADD(TP_TEX_UPLOAD, 1);
         rdpq_sprite_upload(TILE0, sp, NULL);
         trino_tmem_owner = sprite;
         trino_t3_sp = NULL;
@@ -450,6 +485,7 @@ void trino_3d_begin(void)
 void trino_rsp_draw(const uint32_t* w)
 {
     if (!trino_mode_3d) trino_3d_begin();
+    TRINO_PROF_CMD(trino_rsp_id, TRINO_RSP_DRAW_WORDS);
     rspq_write_t c = rspq_write_begin(trino_rsp_id, 0x1, TRINO_RSP_DRAW_WORDS);
     rspq_write_arg(&c, w[0] & 0xFFFFFF);
     for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&c, w[i]);
@@ -528,7 +564,9 @@ static __attribute__((noinline)) void trino_tri_body(const float* pts, const uin
         v[i][TRIFMT_ZBUF_SHADE.shade_offset + 2] = colors[i * 4 + 2] / 255.0f;
         v[i][TRIFMT_ZBUF_SHADE.shade_offset + 3] = colors[i * 4 + 3] / 255.0f;
     }
-    rdpq_triangle(&TRIFMT_ZBUF_SHADE, v[0], v[1], v[2]);
+    TRINO_PROF_WORDS(rdpq_triangle(&TRIFMT_ZBUF_SHADE, v[0], v[1], v[2]));
+    TRINO_PROF_ADD(TP_CPU_TRIS, 1);
+    TRINO_PROF_OVL(0xFF);
 }
 
 // RSP overlay milestone 1: one fixed triangle assembled by the overlay
@@ -576,6 +614,7 @@ void trino_3d_texture(void* sprite, uint32_t clamp)
         .s.repeats = repeats,
         .t.repeats = repeats,
     };
+    TRINO_PROF_ADD(TP_TEX_UPLOAD, 1);
     rdpq_sprite_upload(TILE0, sp, &parms);
     trino_tex_w = (float)sp->width;
     trino_tex_h = (float)sp->height;
@@ -634,6 +673,7 @@ static __attribute__((noinline)) uint32_t trino_3d_texture_ex_body(void* sprite,
         if (a < 0 || b < 0 || a + b > 4096) dt = NULL;
     }
     int resident = TRINO_T3_CACHE && trino_t3_sp == sp && trino_t3_dt == dt && trino_t3_flags == flags;
+    if (resident) TRINO_PROF_ADD(TP_TEX_RESIDENT, 1);
     if (resident && trino_t3_mode) return dt != NULL;
     if (resident) {
         // Same texels, another mode in between (an untextured RSP draw):
@@ -650,6 +690,7 @@ static __attribute__((noinline)) uint32_t trino_3d_texture_ex_body(void* sprite,
     trino_t3_sp = sp;
     trino_t3_dt = dt;
     trino_t3_flags = flags;
+    TRINO_PROF_ADD(TP_TEX_UPLOAD, 1);
     float repeats = clamp ? 1.0f : REPEAT_INFINITE;
     rdpq_texparms_t parms = {
         .s.repeats = repeats,
@@ -720,6 +761,7 @@ static __attribute__((noinline)) uint32_t trino_3d_water_body(void* sprite, void
         trino_w_mode = 1;
     }
     if (resident) {
+        TRINO_PROF_ADD(TP_TEX_RESIDENT, 1);
         // Same layers in TMEM: move the detail tile's origin only, as the
         // upload below sets it (tex_loader's s0fx = translate * 4; the
         // repeats are infinite, so the end moves by as much). The RSP's
@@ -732,6 +774,7 @@ static __attribute__((noinline)) uint32_t trino_3d_water_body(void* sprite, void
         }
         return dt != NULL;
     }
+    TRINO_PROF_ADD(TP_TEX_UPLOAD, 1);
     rdpq_texparms_t parms = {
         .s.repeats = REPEAT_INFINITE,
         .t.repeats = REPEAT_INFINITE,
@@ -786,6 +829,7 @@ void trino_3d_shadow(const void* texels, uint32_t size)
     rdpq_mode_filter(FILTER_BILINEAR);
     // Clamped (no repeats): the falloff's outer texels are 0.
     surface_t surf = surface_make_linear((void*)texels, FMT_I8, size, size);
+    TRINO_PROF_ADD(TP_TEX_UPLOAD, 1);
     rdpq_tex_upload(TILE0, &surf, NULL);
     trino_tex_w = (float)size;
     trino_tex_h = (float)size;
@@ -811,7 +855,9 @@ void trino_tri_tex(const float* in)
         v[i][fmt->shade_offset + 2] = s[8];
         v[i][fmt->shade_offset + 3] = s[9];
     }
-    rdpq_triangle(fmt, v[0], v[1], v[2]);
+    TRINO_PROF_WORDS(rdpq_triangle(fmt, v[0], v[1], v[2]));
+    TRINO_PROF_ADD(TP_CPU_TRIS, 1);
+    TRINO_PROF_OVL(0xFF);
 }
 
 // Test hook: RGBA8888 of the last frame at (x, y); 0 if unavailable. Waits
@@ -1234,6 +1280,7 @@ static void trino_register_color_overlay(void)
 void trino_rsp_draw_colored(const uint32_t* w, const uint32_t* c)
 {
     if (!trino_mode_3d) trino_3d_begin();
+    TRINO_PROF_CMD(trino_rsp_color_id, TRINO_RSP_DRAW_WORDS + TRINO_RSP_COLOR_WORDS);
     rspq_write_t q = rspq_write_begin(trino_rsp_color_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_COLOR_WORDS);
     rspq_write_arg(&q, w[0] & 0xFF);
     for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
@@ -1259,6 +1306,7 @@ static void trino_register_tex_overlay(void)
 
 void trino_rsp_draw_textured(const uint32_t* w, const uint32_t* c)
 {
+    TRINO_PROF_CMD(trino_rsp_tex_id, TRINO_RSP_DRAW_WORDS + TRINO_RSP_TEX_WORDS);
     rspq_write_t q = rspq_write_begin(trino_rsp_tex_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_TEX_WORDS);
     rspq_write_arg(&q, w[0] & 0xFF);
     for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
@@ -1285,6 +1333,7 @@ static void trino_register_water_overlay(void)
 #define TRINO_RSP_WATER_WORDS 19
 void trino_rsp_draw_water(const uint32_t* w, const uint32_t* c)
 {
+    TRINO_PROF_CMD(trino_rsp_water_id, TRINO_RSP_DRAW_WORDS + TRINO_RSP_WATER_WORDS);
     rspq_write_t q = rspq_write_begin(trino_rsp_water_id, 0x1, TRINO_RSP_DRAW_WORDS + TRINO_RSP_WATER_WORDS);
     rspq_write_arg(&q, w[0] & 0xFF);
     for (int i = 1; i < TRINO_RSP_DRAW_WORDS; i++) rspq_write_arg(&q, w[i]);
@@ -1367,6 +1416,7 @@ void trino_save_write(const uint8_t* src, uint32_t start, uint32_t len)
 // starts an idle RSP on a flush.
 void trino_rsp_flush(void)
 {
+    TRINO_PROF_ADD(TP_RSP_FLUSH, 1);
     rspq_flush();
 }
 
@@ -1397,6 +1447,7 @@ static __attribute__((noinline)) void trino_rsp_draw_palette_body(const uint32_t
     int tex = (w[0] & 0x200) != 0;
     int n = tex ? TRINO_RSP_TEX_WORDS : TRINO_RSP_COLOR_WORDS;
     if (!tex && !trino_mode_3d) trino_3d_begin();
+    TRINO_PROF_CMD(tex ? trino_rsp_tex_id : trino_rsp_color_id, TRINO_RSP_DRAW_WORDS + n + TRINO_RSP_PAL_WORDS);
     rspq_write_t q = rspq_write_begin(tex ? trino_rsp_tex_id : trino_rsp_color_id, 0x2,
                                       TRINO_RSP_DRAW_WORDS + n + TRINO_RSP_PAL_WORDS);
     rspq_write_arg(&q, w[0] & 0xFF);
@@ -1412,4 +1463,71 @@ void trino_rsp_draw_palette(const uint32_t* w, const uint32_t* c, const uint32_t
 {
     trino_rsp_draw_palette_body(w, c, p);
     TRINO_NOT_A_TAIL_CALL();
+}
+
+// ---------------------------------------------------------------------------
+// Instrumented builds only (issue #79, ADR 0038): the backend counters and
+// the PC sampler. Last in this file so no other shim symbol moves; a build
+// without TRINO_PROF never references them (--gc-sections drops them).
+
+// Copy the counters into out[0..n] (TP_* order) and zero them. Without
+// TRINO_PROF: zeros.
+void trino_prof_read(uint32_t* out, uint32_t n)
+{
+#ifdef TRINO_PROF
+    for (uint32_t i = 0; i < n; i++) {
+        out[i] = i < TP_COUNT ? trino_prof[i] : 0;
+        if (i < TP_COUNT) trino_prof[i] = 0;
+    }
+#else
+    for (uint32_t i = 0; i < n; i++) out[i] = 0;
+#endif
+}
+
+// The sampling profiler (TRINO_PROF=sample): a continuous libdragon timer
+// whose callback stores the interrupted PC (COP0 EPC: the handler runs
+// with interrupts off, so nothing has overwritten it) into `buf`, a caller
+// array of `cap` words. trino_prof_sample_stop returns how many it took and
+// how many found the buffer full. The sampler's own cost is measured by the
+// caller (the same frames with and without it).
+#ifdef TRINO_PROF
+static uint32_t* trino_sample_buf;
+static uint32_t trino_sample_cap, trino_sample_n, trino_sample_lost;
+static timer_link_t* trino_sample_timer;
+static void trino_sample_tick(int ovfl)
+{
+    (void)ovfl;
+    uint32_t pc = C0_EPC();
+    if (trino_sample_n < trino_sample_cap) trino_sample_buf[trino_sample_n++] = pc;
+    else trino_sample_lost++;
+}
+#endif
+
+void trino_prof_sample_start(uint32_t* buf, uint32_t cap, uint32_t period_us)
+{
+#ifdef TRINO_PROF
+    trino_sample_buf = buf;
+    trino_sample_cap = cap;
+    trino_sample_n = 0;
+    trino_sample_lost = 0;
+    trino_sample_timer = new_timer(TIMER_TICKS(period_us), TF_CONTINUOUS, trino_sample_tick);
+#else
+    (void)buf; (void)cap; (void)period_us;
+#endif
+}
+
+// Stop sampling: the samples taken; *lost = those past the buffer.
+uint32_t trino_prof_sample_stop(uint32_t* lost)
+{
+#ifdef TRINO_PROF
+    if (trino_sample_timer) {
+        delete_timer(trino_sample_timer);
+        trino_sample_timer = NULL;
+    }
+    *lost = trino_sample_lost;
+    return trino_sample_n;
+#else
+    *lost = 0;
+    return 0;
+#endif
 }

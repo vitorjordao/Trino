@@ -65,6 +65,11 @@ macro_rules! export_game {
             audio: &mut dyn ::trino_core::Audio,
             dt: f32,
         ) {
+            // A traced host records this dylib's zones too (its own copy
+            // of trino-core has no ring; issue #79).
+            if ::trino_core::trace::ENABLED {
+                ::trino_core::trace::adopt(platform.trace_hooks());
+            }
             ::trino_core::Game::update_with(state, platform, input, audio, dt)
         }
 

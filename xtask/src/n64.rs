@@ -40,6 +40,14 @@ fn docker_volume_path(root: &Path) -> String {
 /// script goes through a file, never through the command line: on Windows,
 /// wsl.exe re-interprets arguments with its own shell, which would expand
 /// `$VARS` outside the container.
+/// [`docker_sh`] in the engine's tree (`/engine`).
+pub(crate) fn docker_engine_sh(
+    p: &Project,
+    script: &str,
+) -> std::io::Result<std::process::ExitStatus> {
+    docker_sh(p, false, script)
+}
+
 fn docker_sh(
     p: &Project,
     in_project: bool,
@@ -97,7 +105,7 @@ fn image_exists() -> bool {
         .unwrap_or(false)
 }
 
-fn ensure_image(root: &Path) -> Result<(), String> {
+pub(crate) fn ensure_image(root: &Path) -> Result<(), String> {
     if image_exists() {
         return Ok(());
     }
@@ -138,20 +146,25 @@ fn up_to_date(obj: &Path, sources: &[std::path::PathBuf]) -> bool {
 /// RSP ucode: assemble against `rsp.ld`, cut `.text`/`.data` to binaries,
 /// wrap each in an object exposing `<name>_{text,data}_{start,end}` (what
 /// `DEFINE_RSP_UCODE` expects).
-fn compile_shim(p: &Project) -> Result<(), String> {
+pub(crate) fn compile_shim(p: &Project) -> Result<(), String> {
     let root = &p.engine;
     let shim_dir = root.join("crates/platform-n64/shim");
     let shim_src = shim_dir.join("trino_shim.c");
     let rsp_src = shim_dir.join("rsp_trino.S");
     let opus_src = shim_dir.join("trino_opus.c");
-    if !up_to_date(&root.join("target/n64/shim.o"), &[shim_src])
+    if !up_to_date(
+        &root.join("target/n64/shim.o"),
+        std::slice::from_ref(&shim_src),
+    ) || !up_to_date(&root.join("target/n64/shim_prof.o"), &[shim_src])
         || !up_to_date(&root.join("target/n64/rsp_trino.o"), &[rsp_src])
         || !up_to_date(&root.join("target/n64/opus.o"), &[opus_src])
     {
         println!("[n64] compiling C shim + RSP overlay...");
-        // The two C files and the four overlays build at the same time,
-        // up to the build's thread budget (issue #101): `run` starts a job
-        // in the background and waits for the batch once `$J` are running.
+        // The C files (the shim twice: plain, and counting with
+        // `-DTRINO_PROF` for instrumented builds, issue #79) and the four
+        // overlays build at the same time, up to the build's thread budget
+        // (issue #101): `run` starts a job in the background and waits for
+        // the batch once `$J` are running.
         let script = format!(
             "set -e\n\
             J={jobs}; pids=; n=0\n\
@@ -179,6 +192,10 @@ fn compile_shim(p: &Project) -> Result<(), String> {
             -ffunction-sections -fdata-sections -DN64 \
             -I$N64_INST/mips64-elf/include \
             crates/platform-n64/shim/trino_shim.c -o target/n64/shim.o\n\
+            run mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
+            -ffunction-sections -fdata-sections -DN64 -DTRINO_PROF \
+            -I$N64_INST/mips64-elf/include \
+            crates/platform-n64/shim/trino_shim.c -o target/n64/shim_prof.o\n\
             run mips64-elf-gcc -c -std=gnu17 -march=vr4300 -mtune=vr4300 -mabi=o64 -O2 -G0 \
             -ffunction-sections -fdata-sections -DN64 \
             -I$N64_INST/mips64-elf/include \
@@ -658,10 +675,13 @@ fn pack_rom(p: &Project) -> Result<(), String> {
     } else {
         ""
     };
+    // An instrumented build (`--trace`, `--prof`) links the shim that counts
+    // (issue #79); every other build the plain one, unchanged.
+    let shim = if p.trace { "shim_prof.o" } else { "shim.o" };
     let script = format!(
         "set -e\n\
          {pad_step}\
-         mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/shim.o /engine/target/n64/rsp_trino.o {pad_obj} \
+         mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/{shim} /engine/target/n64/rsp_trino.o {pad_obj} \
          -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
          {staticlib} {opus_obj} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
@@ -1044,6 +1064,17 @@ pub fn test(p: &Project, bless: bool, pak: crate::hwtier::Mode) -> ExitCode {
     if code != ExitCode::SUCCESS {
         return code;
     }
+    // The overlays' static instruction counts against their pin (issue
+    // #79): a change to rsp_trino.S shows its cost in review.
+    if p.is_engine && crate::rsp_count::pinned(&p.engine) {
+        match crate::rsp_count::gate(p, bless) {
+            Ok(msg) => println!("[n64] {msg}"),
+            Err(e) => {
+                eprintln!("[n64] TEST FAIL: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     for &on in pak.runs() {
         let code = boot_test(p, bless, on);
         if code != ExitCode::SUCCESS {
@@ -1114,6 +1145,10 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     let mut watchdog = crate::emulators::Watchdog::new();
     let mut fb = crate::fbgolden::FbCapture::default();
     let mut traces = crate::trace::Capture::default();
+    // The perf reports (issue #79): target/perf/n64-<scene>.json.
+    let mut reports = trino_trace::perf::Collector::default();
+    let build_name = crate::perf_cmd::build_name(p);
+    let pad = crate::perf_cmd::text_pad();
     let mut frames: Vec<crate::fbgolden::FbCapture> = Vec::new();
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
@@ -1146,6 +1181,10 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                 }
                 // The replay step's re-recording (issue #67).
                 if rerecord.feed(&line) {
+                    continue;
+                }
+                // `--prof`'s lines go to the reports, not the log.
+                if reports.feed("n64", build_name, pad, &line) && line.contains("TRINO_PROF_") {
                     continue;
                 }
                 println!("[ares] {line}");
@@ -1229,6 +1268,23 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
         println!("[n64] trace: {msg}");
         Ok(())
     });
+    // Every run's perf scenes as reports (an instrumented build's tables
+    // printed), whatever the verdict.
+    {
+        let syms = std::fs::read_to_string(root.join(format!("target/n64/{}.syms", p.name))).ok();
+        let trace = traces.trace();
+        match crate::perf_cmd::write_reports(
+            root,
+            "n64",
+            reports,
+            trace.as_ref(),
+            syms.as_deref(),
+            p.trace,
+        ) {
+            Ok(msg) => println!("[n64] perf reports: {msg}"),
+            Err(e) => eprintln!("[n64] perf reports: {e}"),
+        }
+    }
     let verdict = if p.is_engine && p.trace {
         // An instrumented ROM is not the gated one: report, never gate.
         verdict.map(|()| {

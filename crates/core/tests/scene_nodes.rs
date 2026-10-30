@@ -34,8 +34,7 @@ const fn node(name: &'static str, tags: &'static [&'static str], x: f32, z: f32)
         vis: None,
         glow: None,
         character: None,
-        semantic: [0; 4],
-        outline: None,
+        access: None,
     }
 }
 
@@ -491,21 +490,30 @@ fn draw_nodes_with_swaps_semantic_slots_and_rings_outlined_nodes() {
     let n = data::encode(&[(id, [red, pro, pro, red, red])], &[], &[], None, &mut buf).unwrap();
     let blob: &'static [u8] = Box::leak(buf[..n].to_vec().into_boxed_slice());
     let colors = AccessData::parse(blob).unwrap();
+    // Slot 1 semantic, slot 4 a name the data lacks (keeps its base).
+    let outline = NodeOutline {
+        color: Color::rgb(255, 230, 0),
+        center: Vec3::ZERO,
+        radius: 0.5,
+        pixels: 2.0,
+    };
+    let block: &'static [u8; scene::NODE_ACCESS_BYTES] = Box::leak(Box::new(scene::node_access(
+        [id, 0, 0, trino_core::asset_id("not.there")],
+        Some(outline),
+    )));
     let node = SceneNode {
         params: trino_core::ModelParams {
             palette: Some([red, Color::rgb(1, 2, 3), Color::WHITE, red]),
             ..trino_core::ModelParams::DEFAULT
         },
-        // Slot 1 semantic, slot 4 a name the data lacks (keeps its base).
-        semantic: [id, 0, 0, trino_core::asset_id("not.there")],
-        outline: Some(NodeOutline {
-            color: Color::rgb(255, 230, 0),
-            center: Vec3::ZERO,
-            radius: 0.5,
-            pixels: 2.0,
-        }),
+        access: Some(block),
         ..node("player", &[], 0.0, 0.0)
     };
+    assert_eq!(
+        node.semantic(),
+        [id, 0, 0, trino_core::asset_id("not.there")]
+    );
+    assert_eq!(node.outline(), Some(outline));
     let camera = Camera3 {
         eye: Vec3::new(0.0, 0.0, -5.0),
         ..Camera3::default()

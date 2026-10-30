@@ -36,8 +36,7 @@ const LAMP: SceneNode = SceneNode {
     vis: None,
     glow: None,
     character: None,
-    semantic: [0; 4],
-    outline: None,
+    access: None,
 };
 
 fn at(z: f32) -> Vec3 {

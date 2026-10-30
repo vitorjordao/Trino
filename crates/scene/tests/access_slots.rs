@@ -69,9 +69,11 @@ fn slot_colors_and_outlines_resolve_export_and_bake() {
     for needle in [
         "palette: Some([Color::rgba(200, 30, 30, 255), Color::rgba(255, 255, 255, 255), \
          Color::rgba(10, 20, 30, 255), Color::rgba(255, 255, 255, 255)]),",
-        &format!("semantic: [{home:#010x} /* team.home */, 0, 0, 0],"),
-        "outline: Some(NodeOutline { color: Color::rgba(255, 230, 0, 255), center: \
-         Vec3::new(0.0, 0.5, 0.0),",
+        &format!(
+            "access: Some(&node_access([{home:#010x} /* team.home */, 0, 0, 0], \
+                  Some(NodeOutline {{ color: Color::rgba(255, 230, 0, 255), center: \
+                  Vec3::new(0.0, 0.5, 0.0),"
+        ),
     ] {
         assert!(code.contains(needle), "missing `{needle}` in:\n{code}");
     }
@@ -80,9 +82,9 @@ fn slot_colors_and_outlines_resolve_export_and_bake() {
     let blob = bake::to_tscn(&scene, &lib).0;
     let baked = BakedScene::parse(Box::leak(blob.into_boxed_slice())).unwrap();
     let n = baked.node(0);
-    assert_eq!(n.semantic, item.semantic);
+    assert_eq!(n.semantic(), item.semantic);
     assert_eq!(n.params.palette, item.params.palette);
-    assert_eq!(n.outline, item.outline);
+    assert_eq!(n.outline(), item.outline);
     // Without either, the node reads none back.
     let (mut plain, _) = fixture();
     plain.entities[0].outline = None;
@@ -90,10 +92,7 @@ fn slot_colors_and_outlines_resolve_export_and_bake() {
     let blob = bake::to_tscn(&plain, &lib).0;
     let baked = BakedScene::parse(Box::leak(blob.into_boxed_slice())).unwrap();
     let n = baked.node(0);
-    assert_eq!(
-        (n.semantic, n.params.palette, n.outline),
-        ([0; 4], None, None)
-    );
+    assert_eq!((n.access, n.params.palette), (None, None));
 }
 
 #[test]

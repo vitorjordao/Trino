@@ -1610,6 +1610,12 @@ cargo test --workspace
 - **An N64 failure only CI sees can be the data layout:** CI's toolchain path (in the
   ROM's panic strings) differs from yours. Rebuild with `--remap-path-prefix` to CI's
   path (the `ci` skill › Debugging) before calling it flaky.
+- **`SceneNode` bytes are paid per node and per `EntityStore` slot, in console RAM.** Two
+  decoded fields (44 bytes) for #96's slot colors and outline left the 4 MB N64 ~22 KB
+  short. Its 79 200-byte batch reserve then failed after `castle64 golden frame`, which
+  read as a stall. Optional per-node data goes behind a reference (`access:
+  Option<&'static [u8; 56]>`, decoded on use, like `Tags::Packed`). Run `test n64
+  --expansion-pak both`.
 - **The editor's views skip a render when `viewport::RenderKey` is unchanged.** Anything
   that changes what they draw without a content edit (`rev`) must be in the key: the
   accessibility simulation's mode and high contrast are (issue #96), or the semantic slot

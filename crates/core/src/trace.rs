@@ -79,6 +79,10 @@ impl EventKind {
 }
 
 /// Where an event ran: one timeline row per track in a viewer.
+///
+/// A track byte is a kind (its low 3 bits: [`CPU`], [`GPU`], ..) and an
+/// instance (the high 5 bits, [`on`]): the PC's T&L workers are `worker 1`
+/// .. `worker 8`, each a track of its own (issue #130).
 pub mod track {
     /// The main thread: the game loop, the renderer's CPU work.
     pub const CPU: u8 = 0;
@@ -90,16 +94,62 @@ pub mod track {
     pub const AUDIO: u8 = 3;
     /// Another worker (the 3DS's second core, the PC's T&L workers).
     pub const WORKER: u8 = 4;
+    /// The asset-group loader's decode workers (the PC's `GroupLoader`).
+    pub const LOADER: u8 = 5;
+    /// Instances a kind can have (`0..MAX_INSTANCE`).
+    pub const MAX_INSTANCE: u8 = 32;
 
-    /// A track's display name.
+    /// Instance `n` of `kind` (`n` past [`MAX_INSTANCE`] shares the last).
+    pub const fn on(kind: u8, n: u8) -> u8 {
+        let n = if n >= MAX_INSTANCE {
+            MAX_INSTANCE - 1
+        } else {
+            n
+        };
+        (kind & 7) | (n << 3)
+    }
+
+    /// A track's kind ([`CPU`] .. [`LOADER`]).
+    pub const fn kind(track: u8) -> u8 {
+        track & 7
+    }
+
+    /// A track's instance (0 for the first, unnumbered one).
+    pub const fn instance(track: u8) -> u8 {
+        track >> 3
+    }
+
+    /// A track kind's display name (`worker` for every worker; see
+    /// [`label`] for `worker 3`).
     pub fn name(track: u8) -> &'static str {
-        match track {
+        match kind(track) {
             CPU => "cpu",
             GPU => "gpu",
             RSP => "rsp",
             AUDIO => "audio",
             WORKER => "worker",
+            LOADER => "loader",
             _ => "other",
+        }
+    }
+
+    /// A track's display label: its kind's name, and its instance after it
+    /// when it has one (`cpu`, `worker`, `worker 3`).
+    pub fn label(track: u8) -> Label {
+        Label(track)
+    }
+
+    /// See [`label`].
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct Label(pub u8);
+
+    impl core::fmt::Display for Label {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str(name(self.0))?;
+            match instance(self.0) {
+                0 => Ok(()),
+                n => write!(f, " {n}"),
+            }
         }
     }
 }
@@ -924,14 +974,16 @@ pub fn is_on() -> bool {
 }
 
 /// Run `f` on the installed ring (`None` when nothing is installed, or it is
-/// busy on another thread).
+/// busy on another thread), after merging the other threads' lanes into it.
 #[allow(unused_variables)]
 pub fn with_ring<R>(f: impl FnOnce(&mut GlobalRing, TracePlatform) -> R) -> Option<R> {
     #[cfg(feature = "trace")]
     {
         global::with(|g| {
             let p = g.platform;
-            f(g.ring_mut(), p)
+            let r = g.ring_mut();
+            global::drain_lanes(r);
+            f(r, p)
         })
     }
     #[cfg(not(feature = "trace"))]
@@ -1053,13 +1105,325 @@ pub fn install_hooks_clock(clock: fn() -> u32) {
     global::set_clock(clock);
 }
 
+// --- Other threads (issue #130): a lane per thread, merged by the main one. ---
+
+/// Events a [`Lane`] holds between two drains (the main thread drains every
+/// lane at each [`frame_mark`], [`flush`] and [`with_ring`]).
+pub const LANE_EVENTS: usize = 512;
+/// Lanes the registry holds ([`add_lane`]). A thread that finds none free
+/// records on the global ring as before (its events can be refused there
+/// and counted in [`TraceRing::dropped`]).
+pub const MAX_LANES: usize = 32;
+
+#[derive(Clone, Copy)]
+struct LaneEvent {
+    name: &'static str,
+    kind: u8,
+    track: u8,
+    depth: u8,
+    ts: u32,
+    value: u32,
+}
+
+const NO_EVENT: LaneEvent = LaneEvent {
+    name: "",
+    kind: 0,
+    track: 0,
+    depth: 0,
+    ts: 0,
+    value: 0,
+};
+
+/// One thread's events until the main thread merges them into the global
+/// ring: one writer (the thread bound to it, [`bind_thread`]) and one
+/// reader (whoever holds the global ring), so recording never waits and
+/// never contends. Names stay `&'static str` until the merge interns them.
+/// A full lane refuses events and counts them in the next packet's
+/// `dropped`.
+pub struct Lane {
+    events: core::cell::UnsafeCell<[LaneEvent; LANE_EVENTS]>,
+    /// Next slot written (the owner's), and next slot read (the reader's).
+    head: core::sync::atomic::AtomicU32,
+    tail: core::sync::atomic::AtomicU32,
+    lost: core::sync::atomic::AtomicU32,
+    claimed: core::sync::atomic::AtomicBool,
+    /// The owner's track and open zones.
+    track: core::cell::UnsafeCell<u8>,
+    depth: core::cell::UnsafeCell<u8>,
+}
+
+// SAFETY: `events` slots are written only by the claiming thread between
+// `tail` and `head`, read only by the ring's holder below `head` (published
+// with Release/Acquire); `track` and `depth` only by the claiming thread,
+// handed over through `claimed` (Release on release, Acquire on claim).
+unsafe impl Sync for Lane {}
+
+impl Default for Lane {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Lane {
+    pub const fn new() -> Lane {
+        use core::sync::atomic::{AtomicBool, AtomicU32};
+        Lane {
+            events: core::cell::UnsafeCell::new([NO_EVENT; LANE_EVENTS]),
+            head: AtomicU32::new(0),
+            tail: AtomicU32::new(0),
+            lost: AtomicU32::new(0),
+            claimed: AtomicBool::new(false),
+            track: core::cell::UnsafeCell::new(0),
+            depth: core::cell::UnsafeCell::new(0),
+        }
+    }
+
+    /// Events waiting for the next merge.
+    pub fn pending(&self) -> usize {
+        use core::sync::atomic::Ordering;
+        let h = self.head.load(Ordering::Acquire);
+        h.wrapping_sub(self.tail.load(Ordering::Acquire)) as usize
+    }
+
+    /// A thread is bound to it.
+    pub fn is_claimed(&self) -> bool {
+        self.claimed.load(core::sync::atomic::Ordering::Acquire)
+    }
+
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn claim(&self, track: u8) -> bool {
+        use core::sync::atomic::Ordering;
+        if self
+            .claimed
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return false;
+        }
+        // SAFETY: the claim makes this thread the owner.
+        unsafe {
+            *self.track.get() = track;
+            *self.depth.get() = 0;
+        }
+        true
+    }
+
+    /// Owner only. Its events stay for the next merge.
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn release(&self) {
+        // SAFETY: still the owner until the store below.
+        unsafe { *self.depth.get() = 0 };
+        self.claimed
+            .store(false, core::sync::atomic::Ordering::Release);
+    }
+
+    /// Owner only.
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn track(&self) -> u8 {
+        // SAFETY: owner only.
+        unsafe { *self.track.get() }
+    }
+
+    /// Owner only: a zone opens (zones inside it nest one deeper).
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn open(&self) {
+        // SAFETY: owner only.
+        unsafe {
+            let d = &mut *self.depth.get();
+            *d = d.saturating_add(1);
+        }
+    }
+
+    /// Owner only: the innermost zone closes; returns its depth.
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn close(&self) -> u8 {
+        // SAFETY: owner only.
+        unsafe {
+            let d = &mut *self.depth.get();
+            *d = d.saturating_sub(1);
+            *d
+        }
+    }
+
+    /// Owner only: append, or count it lost when full.
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn push(&self, kind: EventKind, name: &'static str, depth: u8, ts: u32, value: u32) {
+        use core::sync::atomic::Ordering;
+        let h = self.head.load(Ordering::Relaxed);
+        let t = self.tail.load(Ordering::Acquire);
+        if h.wrapping_sub(t) as usize >= LANE_EVENTS {
+            self.lost.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let e = LaneEvent {
+            name,
+            kind: kind as u8,
+            track: self.track(),
+            depth,
+            ts,
+            value,
+        };
+        // SAFETY: slot `h` is outside `tail..head`, so the reader isn't on
+        // it; a raw write never borrows the rest of the array.
+        unsafe {
+            self.events
+                .get()
+                .cast::<LaneEvent>()
+                .add(h as usize % LANE_EVENTS)
+                .write(e)
+        };
+        self.head.store(h.wrapping_add(1), Ordering::Release);
+    }
+
+    /// Reader only (the global ring's holder): move the events into `ring`,
+    /// oldest first, and the lost count into its `dropped`.
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn drain_into<const N: usize>(&self, ring: &mut TraceRing<N>) {
+        use core::sync::atomic::Ordering;
+        let h = self.head.load(Ordering::Acquire);
+        let mut t = self.tail.load(Ordering::Relaxed);
+        while t != h {
+            // SAFETY: slots below `head` are published and the owner
+            // doesn't touch them until `tail` passes them.
+            let e = unsafe {
+                self.events
+                    .get()
+                    .cast::<LaneEvent>()
+                    .add(t as usize % LANE_EVENTS)
+                    .read()
+            };
+            match EventKind::from_u8(e.kind) {
+                Some(EventKind::Zone) => ring.zone_at(e.name, e.track, e.depth, e.ts, e.value),
+                Some(EventKind::Counter) => ring.counter(e.name, e.track, e.ts, e.value),
+                Some(EventKind::Frame) => ring.frame(e.ts, e.value),
+                None => {}
+            }
+            t = t.wrapping_add(1);
+        }
+        self.tail.store(h, Ordering::Release);
+        ring.add_dropped(self.lost.swap(0, Ordering::Relaxed));
+    }
+
+    /// Reader only: forget what it holds (a new session).
+    #[cfg_attr(not(feature = "trace"), allow(dead_code))]
+    fn discard(&self) {
+        use core::sync::atomic::Ordering;
+        self.tail
+            .store(self.head.load(Ordering::Acquire), Ordering::Release);
+        self.lost.store(0, Ordering::Relaxed);
+    }
+}
+
+/// How the trace finds the calling thread's [`Lane`]. `trino-core` has no
+/// threads of its own: the PC keeps the lane in a `thread_local!`
+/// (`trino_render_wgpu::trace_host`), the 3DS keys it by the thread's TLS
+/// register. Without hooks every thread records on the global ring.
+#[derive(Clone, Copy)]
+pub struct ThreadHooks {
+    /// The calling thread's lane (`None`: the main thread, or not bound).
+    pub get: fn() -> Option<&'static Lane>,
+    /// Bind the calling thread to a lane, or unbind it.
+    pub set: fn(Option<&'static Lane>),
+    /// A new lane when every registered one is taken (the PC leaks one;
+    /// `None`: the 3DS's static lanes are all there is).
+    pub grow: fn() -> Option<&'static Lane>,
+}
+
+/// Set (or clear) the thread hooks. A no-op without the `trace` feature.
+#[allow(unused_variables)]
+pub fn set_thread_hooks(hooks: Option<ThreadHooks>) {
+    #[cfg(feature = "trace")]
+    global::set_thread_hooks(hooks);
+}
+
+/// Register `lane` for [`bind_thread`] to claim and the main thread to
+/// merge. `false` without the `trace` feature or with [`MAX_LANES`] taken.
+#[allow(unused_variables)]
+pub fn add_lane(lane: &'static Lane) -> bool {
+    #[cfg(feature = "trace")]
+    {
+        global::add_lane(lane)
+    }
+    #[cfg(not(feature = "trace"))]
+    {
+        false
+    }
+}
+
+/// Lanes registered.
+pub fn lane_count() -> usize {
+    #[cfg(feature = "trace")]
+    {
+        global::lane_count()
+    }
+    #[cfg(not(feature = "trace"))]
+    {
+        0
+    }
+}
+
+/// Record the calling thread's zones, counters and frame marks on a track
+/// of their own (`track::on(track::WORKER, 2)`) until the guard drops: in a
+/// [`Lane`] it alone writes, merged into the global ring by the main thread.
+/// Unbound (zones go to the global ring, as before) without the `trace`
+/// feature, without [`ThreadHooks`], when the thread is already bound (the
+/// first binding stays), or with every lane taken. Zero-sized without the
+/// feature.
+#[must_use = "the thread is unbound when the guard drops"]
+#[allow(unused_variables)]
+pub fn bind_thread(track: u8) -> ThreadLane {
+    #[cfg(feature = "trace")]
+    {
+        ThreadLane {
+            lane: global::bind(track),
+            _thread: core::marker::PhantomData,
+        }
+    }
+    #[cfg(not(feature = "trace"))]
+    {
+        ThreadLane {
+            _thread: core::marker::PhantomData,
+        }
+    }
+}
+
+/// See [`bind_thread`]. Not `Send`: it unbinds the thread that bound it.
+pub struct ThreadLane {
+    #[cfg(feature = "trace")]
+    lane: Option<&'static Lane>,
+    _thread: core::marker::PhantomData<*const ()>,
+}
+
+impl ThreadLane {
+    /// This guard bound the thread to a lane.
+    pub fn is_bound(&self) -> bool {
+        #[cfg(feature = "trace")]
+        {
+            self.lane.is_some()
+        }
+        #[cfg(not(feature = "trace"))]
+        {
+            false
+        }
+    }
+}
+
+#[cfg(feature = "trace")]
+impl Drop for ThreadLane {
+    fn drop(&mut self) {
+        if let Some(lane) = self.lane {
+            global::unbind(lane);
+        }
+    }
+}
+
 #[cfg(feature = "trace")]
 mod global {
     use super::*;
     use core::cell::UnsafeCell;
     #[cfg(not(target_os = "none"))]
     use core::sync::atomic::AtomicU32;
-    use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
     pub(super) struct State {
         ring: *mut GlobalRing,
@@ -1092,6 +1456,12 @@ mod global {
     static HOOK_END: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
     static HOOK_COUNTER: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
     static HOOK_FRAME: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+    static THREAD_GET: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+    static THREAD_SET: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+    static THREAD_GROW: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+    static LANES: [AtomicPtr<Lane>; MAX_LANES] =
+        [const { AtomicPtr::new(core::ptr::null_mut()) }; MAX_LANES];
+    static LANE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     /// Take the ring. The N64 has one thread and no zone in an interrupt:
     /// a plain flag (no read-modify-write atomics on the VR4300 path).
@@ -1144,6 +1514,8 @@ mod global {
         let s = unsafe { &mut *STATE.0.get() };
         s.ring = ring;
         s.platform = p;
+        // A new session: what lanes kept from an earlier one is stale.
+        for_lanes(Lane::discard);
         unlock();
         ON.store(true, Ordering::Release);
     }
@@ -1163,6 +1535,127 @@ mod global {
 
     pub(super) fn is_on() -> bool {
         ON.load(Ordering::Acquire)
+    }
+
+    fn for_lanes(mut f: impl FnMut(&Lane)) {
+        let n = LANE_COUNT.load(Ordering::Acquire).min(MAX_LANES);
+        for slot in &LANES[..n] {
+            let p = slot.load(Ordering::Acquire);
+            if !p.is_null() {
+                // SAFETY: only `&'static Lane`s are stored.
+                f(unsafe { &*p });
+            }
+        }
+    }
+
+    /// Merge every lane into `ring` (its holder only).
+    pub(super) fn drain_lanes(ring: &mut GlobalRing) {
+        for_lanes(|l| l.drain_into(ring));
+    }
+
+    pub(super) fn add_lane(lane: &'static Lane) -> bool {
+        let mut known = false;
+        for_lanes(|l| known |= core::ptr::eq(l, lane));
+        if known {
+            return true;
+        }
+        let mut n = LANE_COUNT.load(Ordering::Relaxed);
+        loop {
+            if n >= MAX_LANES {
+                return false;
+            }
+            match LANE_COUNT.compare_exchange(n, n + 1, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(now) => n = now,
+            }
+        }
+        // A reader between the count and this store skips the empty slot.
+        LANES[n].store(lane as *const Lane as *mut Lane, Ordering::Release);
+        true
+    }
+
+    pub(super) fn lane_count() -> usize {
+        LANE_COUNT.load(Ordering::Acquire).min(MAX_LANES)
+    }
+
+    pub(super) fn set_thread_hooks(h: Option<ThreadHooks>) {
+        let null = core::ptr::null_mut();
+        let (g, s, w) = match h {
+            Some(h) => (h.get as *mut (), h.set as *mut (), h.grow as *mut ()),
+            None => (null, null, null),
+        };
+        THREAD_SET.store(s, Ordering::Release);
+        THREAD_GROW.store(w, Ordering::Release);
+        THREAD_GET.store(g, Ordering::Release);
+    }
+
+    /// The calling thread's lane. The N64 has one thread: never one there,
+    /// and no hook load on its zones.
+    #[cfg(target_os = "none")]
+    #[inline(always)]
+    fn current_lane() -> Option<&'static Lane> {
+        None
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[inline(always)]
+    fn current_lane() -> Option<&'static Lane> {
+        let g = THREAD_GET.load(Ordering::Acquire);
+        if g.is_null() {
+            return None;
+        }
+        // SAFETY: only `ThreadHooks::get` pointers are stored there.
+        let f: fn() -> Option<&'static Lane> = unsafe { core::mem::transmute(g) };
+        f()
+    }
+
+    fn thread_set() -> Option<fn(Option<&'static Lane>)> {
+        let s = THREAD_SET.load(Ordering::Acquire);
+        // SAFETY: only `ThreadHooks::set` pointers are stored there.
+        (!s.is_null()).then(|| unsafe { core::mem::transmute(s) })
+    }
+
+    pub(super) fn bind(track: u8) -> Option<&'static Lane> {
+        let set = thread_set()?;
+        if current_lane().is_some() || THREAD_GET.load(Ordering::Acquire).is_null() {
+            return None;
+        }
+        let mut found = None;
+        for_lanes(|l| {
+            if found.is_none() && l.claim(track) {
+                // SAFETY: `for_lanes` only hands out registered `'static` lanes.
+                found = Some(unsafe { &*(l as *const Lane) });
+            }
+        });
+        let lane = match found {
+            Some(l) => l,
+            None => {
+                let g = THREAD_GROW.load(Ordering::Acquire);
+                if g.is_null() {
+                    return None;
+                }
+                // SAFETY: only `ThreadHooks::grow` pointers are stored there.
+                let grow: fn() -> Option<&'static Lane> = unsafe { core::mem::transmute(g) };
+                let l = grow()?;
+                if !l.claim(track) {
+                    return None;
+                }
+                if !add_lane(l) {
+                    l.release();
+                    return None;
+                }
+                l
+            }
+        };
+        set(Some(lane));
+        Some(lane)
+    }
+
+    pub(super) fn unbind(lane: &'static Lane) {
+        if let Some(set) = thread_set() {
+            set(None);
+        }
+        lane.release();
     }
 
     pub(super) fn set_clock(clock: fn() -> u32) {
@@ -1206,7 +1699,9 @@ mod global {
         if !on && !hooked() {
             return None;
         }
-        if on {
+        if let Some(l) = current_lane() {
+            l.open();
+        } else if on {
             with(|s| s.ring_mut().open(track));
         }
         let b = HOOK_BEGIN.load(Ordering::Acquire);
@@ -1221,11 +1716,18 @@ mod global {
     #[inline(never)]
     pub(super) fn end(name: &'static str, track: u8, start: u32) {
         let end = now();
-        with(|s| {
-            let r = s.ring_mut();
-            r.close(track);
-            r.zone(name, track, start, end);
-        });
+        if let Some(l) = current_lane() {
+            let depth = l.close();
+            if is_on() {
+                l.push(EventKind::Zone, name, depth, start, end.wrapping_sub(start));
+            }
+        } else {
+            with(|s| {
+                let r = s.ring_mut();
+                r.close(track);
+                r.zone(name, track, start, end);
+            });
+        }
         let e = HOOK_END.load(Ordering::Acquire);
         if !e.is_null() {
             // SAFETY: only `Hooks::end` pointers are stored there.
@@ -1246,6 +1748,10 @@ mod global {
             return;
         }
         let t = now();
+        if let Some(l) = current_lane() {
+            l.push(EventKind::Counter, name, 0, t, value);
+            return;
+        }
         with(|s| s.ring_mut().counter(name, track::CPU, t, value));
     }
 
@@ -1261,7 +1767,16 @@ mod global {
             return;
         }
         let t = now();
-        with(|s| s.ring_mut().frame(t, n));
+        if let Some(l) = current_lane() {
+            l.push(EventKind::Frame, "frame", 0, t, n);
+            return;
+        }
+        // The main thread's frame: the other threads' events go in first.
+        with(|s| {
+            let r = s.ring_mut();
+            drain_lanes(r);
+            r.frame(t, n);
+        });
     }
 }
 

@@ -157,8 +157,8 @@ they change. Play started while the tab shows builds the game with `trino-core/t
   flushed). `cargo xtask watch pc --trace` builds the app and every reload with the zones.
 - **Item 5, attach to Play.** §9.
 - **Item 1 (traces from real consoles)** needs the hardware: it runs with #123.
-- **Item 3 (zones on other threads)** is filed as its own issue: a per-thread buffer merged
-  at flush, or a track per thread, changes the ring's single-writer design.
+- **Item 3 (zones on other threads)** was filed as #130 and done there: a lane per thread,
+  merged by the main thread (ADR 0030 §7).
 
 ## Consequences
 

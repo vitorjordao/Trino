@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
+use trino_core::trace::track;
 use trino_trace::{Diff, SessionStats, Trace, chrome, stats::pair_sessions};
 
 const USAGE: &str = "\
@@ -308,6 +309,47 @@ impl Capture {
     }
 }
 
+/// The 3DS worker check's `--trace` session (`apps/3ds`, issue #130).
+pub const WORKER_SESSION: &str = "3ds-worker";
+
+/// Every job the worker check queued (`queued=` of its `TRINO_STEP:worker`
+/// line) is a `job` zone on the worker track of the [`WORKER_SESSION`], and
+/// none of the session's events was lost.
+pub fn check_worker_session(trace: &Trace, step: Option<&str>) -> Result<String, String> {
+    let queued: usize = step
+        .and_then(|l| l.split_whitespace().find_map(|w| w.strip_prefix("queued=")))
+        .and_then(|n| n.parse().ok())
+        .ok_or("worker trace: no `queued=` on the worker step")?;
+    let s = trace
+        .session(WORKER_SESSION)
+        .ok_or_else(|| format!("worker trace: no `{WORKER_SESSION}` session"))?;
+    let jobs: Vec<_> = s
+        .zones
+        .iter()
+        .filter(|z| s.name_of(z.name) == "job")
+        .collect();
+    if s.dropped > 0 {
+        return Err(format!("worker trace: {} events lost", s.dropped));
+    }
+    if let Some(z) = jobs
+        .iter()
+        .find(|z| track::kind(z.track) != track::WORKER || z.depth != 0)
+    {
+        return Err(format!(
+            "worker trace: a job on track `{}` at depth {}, not the worker's",
+            track::label(z.track),
+            z.depth
+        ));
+    }
+    if jobs.len() != queued {
+        return Err(format!(
+            "worker trace: {} job zones for {queued} queued jobs",
+            jobs.len()
+        ));
+    }
+    Ok(format!("{queued} jobs on the `worker` track"))
+}
+
 /// The self-test's `trace` session decoded on the host too, with every name
 /// the step records.
 pub fn check_selftest(trace: &Trace) -> Result<(), String> {
@@ -358,6 +400,28 @@ mod tests {
     fn the_selftest_names_are_castle64s() {
         assert_eq!(SELFTEST_NAMES, castle64::selftest::TRACE_NAMES);
         assert_eq!(SELFTEST_SESSION, castle64::selftest::TRACE_SESSION);
+    }
+
+    #[test]
+    fn the_worker_session_wants_every_queued_job_on_the_worker_track() {
+        let session = |tracks: &[u8]| {
+            let mut r = TraceRing::<16>::new();
+            for (i, &t) in tracks.iter().enumerate() {
+                r.zone_at("job", t, 0, i as u32 * 10, 5);
+            }
+            let mut text = String::new();
+            r.write_lines(TracePlatform::N3ds, WORKER_SESSION, &mut 0, &mut text)
+                .unwrap();
+            trino_trace::collect(&text).unwrap()
+        };
+        let step = Some("TRINO_STEP:worker core=2 queued=2 us=900");
+        let ok = check_worker_session(&session(&[track::WORKER, track::WORKER]), step);
+        assert_eq!(ok.unwrap(), "2 jobs on the `worker` track");
+        let on_cpu = check_worker_session(&session(&[track::WORKER, track::CPU]), step);
+        assert!(on_cpu.unwrap_err().contains("track `cpu`"));
+        let short = check_worker_session(&session(&[track::WORKER]), step);
+        assert!(short.unwrap_err().contains("1 job zones for 2"));
+        assert!(check_worker_session(&session(&[]), None).is_err());
     }
 
     #[test]

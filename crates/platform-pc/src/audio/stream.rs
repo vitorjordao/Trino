@@ -375,6 +375,8 @@ impl Streamer {
         let thread = std::thread::Builder::new()
             .name("trino-audio-stream".into())
             .spawn(move || {
+                // The fills on the trace's audio track (issue #130).
+                let _lane = trino_core::trace::bind_thread(trino_core::trace::track::AUDIO);
                 let mut jobs: Vec<Job> = Vec::new();
                 loop {
                     let next = if jobs.is_empty() {
@@ -391,7 +393,11 @@ impl Streamer {
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Err(mpsc::RecvTimeoutError::Disconnected) => return,
                     }
-                    jobs.retain_mut(Job::fill);
+                    trino_core::zone!("stream fill");
+                    jobs.retain_mut(|j| {
+                        trino_core::zone!("stream job");
+                        j.fill()
+                    });
                 }
             })
             .ok();

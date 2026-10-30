@@ -1468,6 +1468,14 @@ fn boot_test(
         println!("[3ds] trace: {msg}");
         // Each timed scene as a perf report (issue #79): the editor's
         // Profiler and `cargo xtask perf report` read them.
+        // The worker core's jobs on their own track (issue #130).
+        if p.trace
+            && p.is_engine
+            && let Some(t) = traces.trace()
+        {
+            let msg = crate::trace::check_worker_session(&t, worker_step.as_deref())?;
+            println!("[3ds] worker trace: {msg}");
+        }
         if p.trace
             && let Some(t) = traces.trace()
         {

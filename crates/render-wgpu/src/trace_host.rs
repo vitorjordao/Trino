@@ -8,8 +8,14 @@
 //! `TRINO_TRACE:` lines (a file on the PC, the console on the Web) before it
 //! fills, and [`TraceHost::finish`] the rest. `cargo xtask trace collect`
 //! reads them like any console's.
+//!
+//! Other threads (the T&L workers, the audio stream, the group loader's
+//! decoders) record on tracks of their own through [`thread_hooks`]: a
+//! thread that calls [`trace::bind_thread`] gets a lane of its own, kept in
+//! a `thread_local!` here (issue #130).
 
-use trino_core::trace::{self, GLOBAL_EVENTS, GlobalRing, TracePlatform};
+use std::cell::Cell;
+use trino_core::trace::{self, GLOBAL_EVENTS, GlobalRing, Lane, ThreadHooks, TracePlatform};
 use web_time::Instant;
 
 /// Microseconds since the first call: the ring's clock on the PC and the
@@ -18,6 +24,25 @@ pub fn clock() -> u32 {
     use std::sync::OnceLock;
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_micros() as u32
+}
+
+thread_local! {
+    /// The calling thread's lane ([`trace::bind_thread`]).
+    static LANE: Cell<Option<&'static Lane>> = const { Cell::new(None) };
+}
+
+/// The PC's and the Web's [`ThreadHooks`]: a `thread_local!` per thread,
+/// a lane leaked for the process when every registered one is taken
+/// (16 KB each, at most [`trace::MAX_LANES`]).
+pub fn thread_hooks() -> ThreadHooks {
+    ThreadHooks {
+        // `try_with`: a thread's zones may end while it tears down.
+        get: || LANE.try_with(Cell::get).ok().flatten(),
+        set: |l| {
+            let _ = LANE.try_with(|c| c.set(l));
+        },
+        grow: || Some(Box::leak(Box::new(Lane::new()))),
+    }
 }
 
 /// The global ring's owner on a PC or Web host.
@@ -43,6 +68,7 @@ impl TraceHost {
             return None;
         }
         let ring: &'static mut GlobalRing = Box::leak(Box::new(GlobalRing::new()));
+        trace::set_thread_hooks(Some(thread_hooks()));
         trace::install(ring, clock, platform).then(|| TraceHost {
             session: session.chars().filter(|c| !c.is_whitespace()).collect(),
             seq: 0,

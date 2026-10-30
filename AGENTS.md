@@ -1770,6 +1770,12 @@ cargo test --workspace
 - **`cargo fuzz run` rebuilds when a source changes**, and three at once wait on one lock:
   build once (`cargo +nightly fuzz build -O -a`), then run the binaries in
   `fuzz/target/x86_64-unknown-linux-gnu/release/` with `-artifact_prefix=artifacts/<t>/`.
+- **A zone on a thread other than the main one needs `trace::bind_thread`** (issue #130).
+  Unbound, it shares the global ring's CPU-track depth with the main thread (nested
+  zones from two threads corrupt each other's depths) and loses events to the ring's
+  try-lock. Bind at the top of the thread with a track instance from the worker's index;
+  on a console, never bind a job that may run inline on the main thread.
+
 - **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
   is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a
   pointer (ADR 0005 §6).

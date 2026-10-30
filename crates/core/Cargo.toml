@@ -19,3 +19,9 @@ trace = []
 # panics with its name, because their bits and arithmetic differ between
 # the PC, the N64 and the 3DS. Off by default (no code in release builds).
 strict-determinism = []
+
+# Zones on other threads (issue #130): the global ring is process-wide, so
+# this test is a binary of its own.
+[[test]]
+name = "trace_threads"
+required-features = ["trace"]

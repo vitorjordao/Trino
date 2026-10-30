@@ -156,7 +156,7 @@ impl SessionStats {
                 "max_us": self.frames.max_us,
             },
             "zones": self.zones.iter().map(|z| json!({
-                "name": z.name, "track": track::name(z.track), "count": z.count,
+                "name": z.name, "track": track::label(z.track).to_string(), "count": z.count,
                 "total_us": z.total_us, "mean_us": round1(z.mean_us), "p50_us": z.p50_us,
                 "p95_us": z.p95_us, "max_us": z.max_us, "per_frame_us": round1(z.per_frame_us),
             })).collect::<Vec<_>>(),
@@ -186,15 +186,15 @@ impl SessionStats {
         );
         let _ = writeln!(
             out,
-            "  {:<24} {:<6} {:>7} {:>10} {:>9} {:>8} {:>8} {:>10}",
+            "  {:<24} {:<9} {:>7} {:>10} {:>9} {:>8} {:>8} {:>10}",
             "zone", "track", "count", "mean_us", "p95_us", "max_us", "total", "per_frame"
         );
         for z in &self.zones {
             let _ = writeln!(
                 out,
-                "  {:<24} {:<6} {:>7} {:>10.1} {:>9} {:>8} {:>8} {:>10.1}",
+                "  {:<24} {:<9} {:>7} {:>10.1} {:>9} {:>8} {:>8} {:>10.1}",
                 z.name,
-                track::name(z.track),
+                track::label(z.track).to_string(),
                 z.count,
                 z.mean_us,
                 z.p95_us,
@@ -299,7 +299,7 @@ impl Diff {
             "frame_mean_delta_us": round1(self.b.frames.mean_us - self.a.frames.mean_us),
             "frame_p95_delta_us": self.b.frames.p95_us as i64 - self.a.frames.p95_us as i64,
             "zones": self.zones.iter().map(|z| json!({
-                "name": z.name, "track": track::name(z.track),
+                "name": z.name, "track": track::label(z.track).to_string(),
                 "a_mean_us": z.a.as_ref().map(|s| round1(s.mean_us)),
                 "b_mean_us": z.b.as_ref().map(|s| round1(s.mean_us)),
                 "mean_delta_us": round1(z.mean_delta()),
@@ -333,16 +333,16 @@ impl Diff {
         );
         let _ = writeln!(
             out,
-            "  {:<24} {:<6} {:>10} {:>10} {:>9} {:>8} {:>8} {:>8} {:>10}",
+            "  {:<24} {:<9} {:>10} {:>10} {:>9} {:>8} {:>8} {:>8} {:>10}",
             "zone", "track", "A mean", "B mean", "delta", "%", "A p95", "B p95", "frame dlt"
         );
         let opt = |v: Option<f64>| v.map_or("-".to_string(), |v| format!("{v:.1}"));
         for z in &self.zones {
             let _ = writeln!(
                 out,
-                "  {:<24} {:<6} {:>10} {:>10} {:>+9.1} {:>8} {:>8} {:>8} {:>+10.1}",
+                "  {:<24} {:<9} {:>10} {:>10} {:>+9.1} {:>8} {:>8} {:>8} {:>+10.1}",
                 z.name,
-                track::name(z.track),
+                track::label(z.track).to_string(),
                 opt(z.a.as_ref().map(|s| s.mean_us)),
                 opt(z.b.as_ref().map(|s| s.mean_us)),
                 z.mean_delta(),

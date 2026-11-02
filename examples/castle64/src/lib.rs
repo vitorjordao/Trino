@@ -29,6 +29,7 @@
 #![cfg_attr(any(target_os = "none", target_os = "horizon"), no_std)]
 
 pub mod bot;
+pub mod graph_crowd;
 mod levels;
 pub mod perf;
 pub mod progress;

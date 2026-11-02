@@ -84,7 +84,21 @@ pub struct CostModel {
     /// One ray through a [`crate::physics::StaticWorld`] grid on a dense
     /// level (the 500-solid venue's mean).
     pub us_per_grid_ray: f32,
+    /// One animation graph update of a crowd member (issue #138): a
+    /// `GraphInstance` over decoded tables ([`crate::anim::GraphTables`]),
+    /// a base blend space and two layers, 12 transitions (Solid Eleven's
+    /// player graph, the `graph crowd` step's `micro-graph` lines). The
+    /// same graph read from its blob costs ~3× ([`GRAPH_BLOB_FACTOR`]).
+    pub us_per_graph_update: f32,
+    /// That instance's [`pose`](crate::anim::GraphInstance::pose) (three
+    /// layers' clips into an `AnimPose`; drawing it is the draw's cost).
+    pub us_per_graph_pose: f32,
 }
+
+/// How much more an update costs read from the `TANG` blob
+/// ([`crate::anim::AnimGraph`]) than from its tables: what every graph paid
+/// before issue #138 (the `graph crowd` step's `blob` vs `crowd` lines).
+pub const GRAPH_BLOB_FACTOR: f32 = 3.3;
 
 /// The N64's RSP work in a frame ([`CostModel::split_us`]): every RSP draw
 /// and triangle, and how many of them are water surfaces.
@@ -170,7 +184,17 @@ pub const N64_COST: CostModel = CostModel {
     // 42–49 µs per extra clip sample per joint (ANMC tracks: a binary search
     // and a dequantized lerp per channel). The base N64 never pays it.
     us_per_layer_sample: 45.0,
+    // ares, 2026-11-02 (issue #138, the self-test's `graph crowd` step,
+    // `TRINO_GRAPH_COST: scene=micro-graph variant=crowd`, Expansion Pak):
+    // 22 `GraphInstance<3, 0, 0>` of Solid Eleven's player graph over its
+    // tables for 120 updates; mean over 8 `TRINO_N64_TEXT_PAD` layouts.
+    us_per_graph_update: GRAPH_UPDATE_US,
+    us_per_graph_pose: GRAPH_POSE_US,
 };
+
+/// [`N64_COST`]'s graph terms, µs per crowd member.
+const GRAPH_UPDATE_US: f32 = 86.0;
+const GRAPH_POSE_US: f32 = 46.0;
 
 /// [`N64_COST`]'s foot IK term, µs per draw.
 const IK_US: f32 = 550.0;
@@ -185,6 +209,18 @@ const AUDIO_SAMPLE: f32 = 0.2615;
 const AUDIO_OPUS: f32 = 276_256.0;
 
 impl CostModel {
+    /// µs of a crowd of `n` graph instances a frame, each updated and
+    /// posed ([`Self::us_per_graph_update`] + [`Self::us_per_graph_pose`]);
+    /// `blob`: read from the `TANG` blob instead of its tables.
+    pub fn graph_us(&self, n: u32, blob: bool) -> u32 {
+        let update = if blob {
+            self.us_per_graph_update * GRAPH_BLOB_FACTOR
+        } else {
+            self.us_per_graph_update
+        };
+        ((update + self.us_per_graph_pose) * n as f32) as u32
+    }
+
     /// Estimated microseconds of `draws` draw calls doing `tnl` work (T&L
     /// plus sort and submit).
     pub fn estimate_us(&self, tnl: &TnlStats, draws: u32) -> u32 {
@@ -596,6 +632,20 @@ mod tests {
             model,
             "TRINO_PERF_MODEL:hub model=00001234 calls=0 us=1000 verts=100 tris_in=0 emitted=20 splits=0"
         );
+    }
+
+    /// The graph terms (issue #138): a football match's 22 players fit a
+    /// 30 fps frame's spare few milliseconds over the tables, not over the
+    /// blob (what broke the template's gate in #136).
+    #[test]
+    fn a_crowd_of_graphs_costs_what_the_step_measured() {
+        let m = N64_COST;
+        let tables = m.graph_us(22, false);
+        let blob = m.graph_us(22, true);
+        assert_eq!(tables, ((GRAPH_UPDATE_US + GRAPH_POSE_US) * 22.0) as u32);
+        assert!(tables < 3_500, "{tables}");
+        assert!(blob > 2 * tables, "{blob} vs {tables}");
+        assert_eq!(m.graph_us(0, true), 0);
     }
 
     /// The audio terms reproduce the `audio cost` step's measurements

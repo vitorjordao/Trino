@@ -1,27 +1,35 @@
 //! Kicks on graph layers (issue #136): `assets/anim/player.anim.ron` holds
 //! the `strike` layer (hips, legs, torso, head) and the `arms` layer, each
-//! a state per kick clip; the game reads them as data from the baked blob
-//! ([`PLAYER_TANG`]) and lays the kick over whatever its own clip picking
-//! shows (`pick_clip`): a shot at a sprint keeps the run's arm swing, one
-//! from a standstill swings the arms with it.
+//! a state per kick clip; the game reads them as data from the graph's
+//! exported tables ([`PLAYER_GRAPH`], issue #138: static data, so no build
+//! links the blob parser) and lays the kick over whatever its own clip
+//! picking shows (`pick_clip`): a shot at a sprint keeps the run's arm
+//! swing, one from a standstill swings the arms with it.
 //!
-//! No graph instance runs per player: on the N64 one instance's update
-//! costs ~400 µs (the runtime decodes the blob byte by byte), and 22 of
-//! them took the football template's match from 30.4 to 39.9 ms against a
-//! 33.3 ms gate. The layers' masks and clips are what the game needs; the
-//! weights are its own (the strike eases in and out over a crossfade, the
-//! arms follow it only while slow).
+//! No graph instance runs per player: the layers' masks and clips are what
+//! the game needs, and the weights are its own (the strike eases in and out
+//! over a crossfade, the arms follow it only while slow). When a player had
+//! one (issue #136), an update cost ~400 µs on the N64 and 22 of them broke
+//! the football template's frame gate; over the decoded tables a crowd
+//! instance costs ~150 µs with its pose (issue #138, `castle64::graph_crowd`).
 
 use super::anim::{self, AnimState, Pose, joint};
 use super::clips_gen::{CLIPS, ClipName, JOINTS};
 use trino_core::ClipId;
-use trino_core::anim::AnimGraph;
+use trino_core::anim::GraphSource;
 
 /// `assets/anim/player.anim.ron` baked against the PC-only QA rig
 /// (`cargo xtask anim export player --dir examples/solid-eleven --out
 /// examples/solid-eleven/src/render/player.tang`; `solid_eleven_layers`
-/// fails on a stale copy).
+/// fails on a stale copy). The tools and tests read it; the game plays
+/// [`PLAYER_GRAPH`].
 pub static PLAYER_TANG: &[u8] = include_bytes!("player.tang");
+
+// The same graph's decoded tables, `PLAYER_GRAPH` (`cargo xtask anim
+// export player --dir examples/solid-eleven --rust
+// examples/solid-eleven/src/render/player_graph.rs --static PLAYER_GRAPH`;
+// `solid_eleven_layers` fails on a stale copy).
+include!("player_graph.rs");
 
 /// The QA rig's joints (`models/se_player_rig`, TMDL order: what the
 /// graph's masks count) and this game's joint for each.
@@ -78,19 +86,16 @@ impl KickLayers {
         clips: 0,
     };
 
-    /// Read the layers from [`PLAYER_TANG`] (once a match).
+    /// Read the layers from [`PLAYER_GRAPH`] (once a match).
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn load() -> KickLayers {
-        AnimGraph::parse(PLAYER_TANG)
-            .ok()
-            .and_then(|g| KickLayers::of(&g))
-            .unwrap_or(KickLayers::NONE)
+        KickLayers::of(&PLAYER_GRAPH).unwrap_or(KickLayers::NONE)
     }
 
     /// The `strike` and `arms` layers of `g`: their masks and the kicks
     /// they both have a state for.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn of(g: &AnimGraph) -> Option<KickLayers> {
+    pub fn of(g: &impl GraphSource) -> Option<KickLayers> {
         let (s, a) = (g.layer_named("strike")?, g.layer_named("arms")?);
         let clips_of = |l: usize| {
             let (lo, hi) = g.layer(l).states;

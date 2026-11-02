@@ -122,6 +122,17 @@ pub struct EventTrack<'a> {
 impl<'a> EventTrack<'a> {
     pub const EMPTY: EventTrack<'static> = EventTrack { records: &[] };
 
+    /// A track over records [`parse`](Self::parse) validated before (the
+    /// static tables `cargo xtask anim export --rust` writes, issue #138).
+    pub const fn from_records(records: &'a [u8]) -> EventTrack<'a> {
+        EventTrack { records }
+    }
+
+    /// Its records (`EVENT_BYTES` each), for the static export.
+    pub fn records(&self) -> &'a [u8] {
+        self.records
+    }
+
     /// `bytes` = `u32 count` then the records. `None` when truncated.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn parse(bytes: &'a [u8]) -> Option<(EventTrack<'a>, usize)> {
@@ -395,6 +406,32 @@ impl<'a> RootTrack<'a> {
 
     pub fn frames(&self) -> usize {
         self.frames
+    }
+
+    /// No track: no frames (a graph table's clip without root motion).
+    pub const EMPTY: RootTrack<'static> = RootTrack {
+        fps: 0.0,
+        frames: 0,
+        records: &[],
+    };
+
+    /// A track [`parse`](Self::parse) validated before, from its parts (the
+    /// static tables `cargo xtask anim export --rust` writes, issue #138).
+    pub const fn from_parts(fps: f32, frames: usize, records: &'a [u8]) -> RootTrack<'a> {
+        RootTrack {
+            fps,
+            frames,
+            records,
+        }
+    }
+
+    pub fn fps(&self) -> f32 {
+        self.fps
+    }
+
+    /// Its records (`ROOT_BYTES` a frame), for the static export.
+    pub fn records(&self) -> &'a [u8] {
+        self.records
     }
 
     /// A track [`parse`](Self::parse) validated before: the header only.

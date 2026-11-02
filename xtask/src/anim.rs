@@ -27,6 +27,7 @@ const USAGE: &str = "xtask: usage:
   cargo xtask anim simulate <name> --script <file.ron> [--out trace.json] [--sample N] [--platform p] [--json]
   cargo xtask anim new <name> --model models/x
   cargo xtask anim export <name> --out <file.tang> [--platform p]   # the baked blob, for a game that embeds it
+  cargo xtask anim export <name> --rust <file.rs> [--static NAME] [--platform p]   # its decoded tables as static Rust (no parser linked)
   (every command takes --dir <project> for another project's assets/)";
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
@@ -36,6 +37,8 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     let mut platform = None;
     let mut script = None;
     let mut out = None;
+    let mut rust = None;
+    let mut static_name = None;
     let mut model = None;
     let mut sample = 6usize;
     let mut it = args.iter().skip(1);
@@ -49,6 +52,8 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
             "--script" => script = it.next().map(|s| s.to_string()),
             "--dir" => dir = it.next().map(std::path::PathBuf::from),
             "--out" => out = it.next().map(|s| s.to_string()),
+            "--rust" => rust = it.next().map(|s| s.to_string()),
+            "--static" => static_name = it.next().map(|s| s.to_string()),
             "--model" => model = it.next().map(|s| s.to_string()),
             "--sample" => match it.next().and_then(|v| v.parse().ok()) {
                 Some(n) => sample = n,
@@ -82,6 +87,26 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
                 &script,
                 out.as_deref(),
                 sample,
+                platform.unwrap_or(Platform::Pc),
+                json,
+            )
+        }
+        Some("export") if rust.is_some() => {
+            let (Some(name), Some(rs)) = (names.first(), rust) else {
+                return fail(
+                    &format!("export needs <name> --rust <file.rs>\n{USAGE}"),
+                    json,
+                );
+            };
+            let ident = static_name.unwrap_or_else(|| {
+                format!("{}_GRAPH", name.to_uppercase().replace(['-', ' '], "_"))
+            });
+            export_rust(
+                root,
+                &manifest,
+                name,
+                Path::new(&rs),
+                &ident,
                 platform.unwrap_or(Platform::Pc),
                 json,
             )
@@ -150,6 +175,50 @@ fn export(
         );
     } else {
         println!("anim/{name}: {} bytes -> {}", bytes.len(), out.display());
+    }
+    ExitCode::SUCCESS
+}
+
+/// Write graph `name`'s decoded tables for `platform` to `out` as static
+/// Rust (issue #138): `pub static <ident>: GraphTables<'static>`.
+fn export_rust(
+    root: &Path,
+    manifest: &Manifest,
+    name: &str,
+    out: &Path,
+    ident: &str,
+    platform: Platform,
+    json: bool,
+) -> ExitCode {
+    let file = anim::graph_file(root, name);
+    let def = match AnimGraphDef::load(&file) {
+        Ok(d) => d,
+        Err(e) => return fail(&format!("{}: {e}", file.display()), json),
+    };
+    let bytes = match anim_graph::bake(root, manifest, platform, &def) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return fail(
+                &format!("anim/{name}: its model is not baked for {}", platform.key()),
+                json,
+            );
+        }
+        Err(e) => return fail(&format!("anim/{name}: {e}"), json),
+    };
+    let code = match anim::tables_to_rust(&bytes, ident, name) {
+        Ok(c) => c,
+        Err(e) => return fail(&format!("anim/{name}: {e}"), json),
+    };
+    if let Err(e) = std::fs::write(out, &code) {
+        return fail(&format!("{}: {e}", out.display()), json);
+    }
+    if json {
+        println!(
+            "{}",
+            json!({ "ok": true, "graph": format!("anim/{name}"), "out": out.display().to_string(), "static": ident, "bytes": code.len() })
+        );
+    } else {
+        println!("anim/{name}: static {ident} -> {}", out.display());
     }
     ExitCode::SUCCESS
 }
@@ -277,16 +346,15 @@ fn check(
                 anim_graph::has_sound(manifest, s)
             });
             let errors = issues.iter().filter(|i| i.level == Level::Error).count();
-            let bytes = clips
-                .as_ref()
-                .filter(|_| errors == 0)
-                .and_then(|c| {
-                    anim::to_tang_with(&def, c, joints.as_deref(), &|s| {
-                        anim_graph::has_sound(manifest, s)
-                    })
-                    .ok()
+            let bytes = clips.as_ref().filter(|_| errors == 0).and_then(|c| {
+                anim::to_tang_with(&def, c, joints.as_deref(), &|s| {
+                    anim_graph::has_sound(manifest, s)
                 })
-                .map(|b| b.len());
+                .ok()
+            });
+            // What it costs at run time (issue #138).
+            let runtime = bytes.as_deref().and_then(|b| anim::runtime_bytes(b).ok());
+            let bytes = bytes.map(|b| b.len());
             // What each of the platform's tiers folds (issue #112).
             let folds: Vec<serde_json::Value> = tiers(p)
                 .into_iter()
@@ -308,6 +376,12 @@ fn check(
                     p.key(),
                     bytes.map_or(String::new(), |b| format!(" — TANG {b} bytes"))
                 );
+                if let Some((t, full, crowd)) = runtime {
+                    println!(
+                        "  run time (host): tables {t} B, AnimGraphInstance {full} B, \
+                         a crowd GraphInstance {crowd} B"
+                    );
+                }
                 for i in &issues {
                     println!("  {i}");
                 }
@@ -336,6 +410,11 @@ fn check(
                 "platform": p.key(),
                 "ok": errors == 0,
                 "bytes": bytes,
+                "runtime": runtime.map(|(t, full, crowd)| json!({
+                    "tables_bytes": t,
+                    "instance_bytes": full,
+                    "crowd_instance_bytes": crowd,
+                })),
                 "issues": issues,
                 "folds": folds,
             }));

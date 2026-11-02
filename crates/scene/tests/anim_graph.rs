@@ -448,9 +448,9 @@ fn broken_blobs_are_refused_never_played() {
         AnimGraph::parse(&tang[..20]).unwrap_err(),
         GraphError::Truncated
     );
-    let mut v3 = tang.clone();
-    v3[4] = 3;
-    assert_eq!(AnimGraph::parse(&v3).unwrap_err(), GraphError::Version(3));
+    let mut v4 = tang.clone();
+    v4[4] = 4;
+    assert_eq!(AnimGraph::parse(&v4).unwrap_err(), GraphError::Version(4));
     // Every truncation and every single-byte change either parses (and then
     // plays without a panic) or is refused.
     for cut in 0..tang.len() {

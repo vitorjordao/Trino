@@ -480,6 +480,57 @@ pub fn micro_report(scenes: &[SceneLine]) -> Result<String, String> {
     Ok(out)
 }
 
+/// The `graph crowd` step's `TRINO_GRAPH_COST: scene=micro-graph` lines
+/// (issue #138): a table of its three variants, and a gate on the crowd
+/// instance (over the tables) at twice `N64_COST`'s graph terms, which a
+/// return to reading the blob per update (~3×) would break. Ungated
+/// elsewhere: the line prints on every target.
+pub fn graph_report(lines: &[String], gate: bool) -> Result<String, String> {
+    use trino_core::perf::N64_COST;
+    let field = |l: &str, k: &str| -> Option<String> {
+        l.split_whitespace()
+            .find_map(|w| w.strip_prefix(&format!("{k}=")).map(str::to_string))
+    };
+    let mut out = String::new();
+    let mut crowd = None;
+    for l in lines {
+        let (Some(v), Some(u), Some(p), Some(b)) = (
+            field(l, "variant"),
+            field(l, "update_us"),
+            field(l, "pose_us"),
+            field(l, "instance_bytes"),
+        ) else {
+            continue;
+        };
+        let _ = writeln!(
+            out,
+            "  {v:<8} update {u:>8} us  pose {p:>8} us  instance {b:>4} B"
+        );
+        if v == "crowd" {
+            crowd = Some((
+                u.parse::<f32>().unwrap_or(f32::MAX),
+                p.parse::<f32>().unwrap_or(f32::MAX),
+            ));
+        }
+    }
+    let Some((u, p)) = crowd else {
+        return Err("no `TRINO_GRAPH_COST: ... variant=crowd` line (the graph crowd step)".into());
+    };
+    let _ = writeln!(
+        out,
+        "  N64_COST: update {:.0} us, pose {:.0} us",
+        N64_COST.us_per_graph_update, N64_COST.us_per_graph_pose
+    );
+    if gate && (u > 2.0 * N64_COST.us_per_graph_update || p > 2.0 * N64_COST.us_per_graph_pose) {
+        return Err(format!(
+            "the crowd's graph update ({u} us) or pose ({p} us) is past twice N64_COST's \
+             ({} / {} us):\n{out}",
+            N64_COST.us_per_graph_update, N64_COST.us_per_graph_pose
+        ));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,5 +721,27 @@ mod tests {
         )
         .unwrap();
         assert!(drift.contains("recalibrate"), "{drift}");
+    }
+
+    #[test]
+    fn the_graph_report_gates_the_crowd_line() {
+        let line = |v: &str, u: f32| {
+            format!(
+                "[ares] TRINO_GRAPH_COST: scene=micro-graph variant={v} instances=22 \
+                 frames=120 update_us={u:.2} pose_us=40.00 instance_bytes=220"
+            )
+        };
+        let ok = [
+            line("blob", 280.0),
+            line("tables", 100.0),
+            line("crowd", 85.0),
+        ];
+        let t = super::graph_report(&ok, true).unwrap();
+        assert!(t.contains("crowd") && t.contains("N64_COST"), "{t}");
+        // A crowd back at the blob's cost fails; without the gate it reports.
+        let slow = [line("crowd", 280.0)];
+        assert!(super::graph_report(&slow, true).is_err());
+        assert!(super::graph_report(&slow, false).is_ok());
+        assert!(super::graph_report(&[], false).is_err());
     }
 }

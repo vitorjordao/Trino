@@ -978,7 +978,28 @@ since #122.
     - Solid Eleven's kicks are graph layers read as data (`assets/anim/player.anim.ron`,
       `KickLayers`, `AnimGraph::layer_named`/`state_clip`): a shot at a sprint keeps the
       run's arm swing; embedded with `cargo xtask anim export`. A graph instance per
-      character is too heavy for a crowd on the N64 (~400 µs an update).
+      character was too heavy for a crowd on the N64 (~400 µs an update; #138 below).
+
+- **Graph runtime for crowds (2026-11-02, ADR 0040, GitHub #138, the `animation` skill):**
+  - **Tables:** `trino_core::anim::GraphTables` (states, points, triangles, clips,
+    transitions, layers, conditions flattened into `CondNode`s whose `And`/`Or` skip what
+    can't change the result or the triggers consumed), decoded once from a parsed blob into
+    an `Arena` (`GraphTables::decode_in`, `bytes_for`) or written as static Rust by `cargo
+    xtask anim export <name> --rust` (no parser linked: Solid Eleven's `PLAYER_GRAPH`).
+  - **One playback, two sources:** every instance method takes `impl Into<GraphRef>`
+    (`&AnimGraph` or `&GraphTables`), non-generic code over slices (one copy on the N64);
+    blob and tables give the same digests, poses, events and root motion
+    (`trino_scene::anim::compare_tables`, the fuzz target, the self-test).
+  - **Sized instances:** `GraphInstance<L, I, E>` (machines, inertia slots, 0/1 event
+    buffer; `AnimGraphInstance` = `<4, 4, 1>`, 808 B host); a crowd member
+    `GraphInstance<3, 0, 0>` is 224 B (220 on the N64).
+  - **TANG v3** (written only when used): a layer's `sync: true` lands its looping states on
+    the base's cycle; `models: [..]` resolves each layer mask by joint name per extra rig
+    (`AnimGraph::for_model`); `GraphInstance::seek_layer`.
+  - **Measured:** the `graph crowd` self-test step (22 players of Solid Eleven's graph,
+    blob / tables / crowd variants, `CROWD_HASH` on every target; `TRINO_GRAPH_COST:
+    scene=micro-graph`, gated on the N64 at twice `N64_COST.us_per_graph_update`/`_pose`).
+    Numbers in ADR 0040 §6; evidence `xtask/tests/graph_crowd_shots.rs`.
 
 - **Physics 2.0 (2026-10-25, ADR 0035, GitHub #66):** `trino_core::physics`, core-only
   and the same bits on every target.
@@ -1334,6 +1355,7 @@ cargo xtask anim list|check [name] [--platform p] [--json]          # animation 
 cargo xtask anim simulate <name> --script s.ron [--out trace.json] [--json]   # a script of parameter changes through the runtime: states, events, root motion
 cargo xtask anim new <name> --model models/x                       # a starter graph, one state per clip
 cargo xtask anim export <name> --out x.tang [--dir <project>]     # a graph's baked TANG for a game that embeds it (Solid Eleven, #136)
+cargo xtask anim export <name> --rust x.rs [--static NAME] [--dir <project>]   # its decoded tables as static Rust: no parser linked (#138)
 cargo xtask model inspect models/x --anim --compressed [--json]    # + root motion, events, ANMC bytes and errors per clip
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
@@ -1950,6 +1972,12 @@ cargo test --workspace
 - **A new draw path that poses a mesh reads the pose cache too** (#136): build it with
   `.with_poses(..).with_pose_cache(cache.entries())` and call `prepare_growing` at the
   draw's entry (a miss only costs time: the pose is the same).
+- **Instance methods take `impl Into<GraphRef>`, never `G: GraphSource`** (#138): a generic
+  playback was a copy per source, per instance size and per crate (anim code 27 → 70 KB of
+  N64 text). Keep the `GraphInstance<L, I, E>` wrappers thin over the non-generic core.
+- **A float `Option` in a graph table is a trap on the N64:** `ClipRec` keeps empty
+  `RootTrack`/`FeetTrack`s (no frames) instead, and `LayerPlay`/`Inertia` keep a flag beside
+  always-initialized floats (#138).
 - **A grouped model's animation graph is grouped too on the consoles** (#112): `platform.blob`
   misses it; read it with `platform.group_blob` once the group is loaded.
 - **Measure the N64 ROM's text against main for any core feature:** #112's first build

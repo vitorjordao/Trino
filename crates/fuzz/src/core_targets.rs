@@ -564,6 +564,49 @@ pub fn tang(data: &[u8]) {
     for l in 1..=g.layer_count() {
         keep(g.layer(l));
     }
+    // v3 binds: each bound model's view (issue #138).
+    for b in 0..g.bind_count() {
+        if let Some(v) = g.for_model(g.bind_model(b)) {
+            for l in 1..=v.layer_count() {
+                keep(v.layer(l).mask);
+            }
+        }
+    }
+    // The decoded tables play what the blob plays (issue #138): a
+    // differential target, it panics where they part.
+    use trino_core::anim::{GraphInstance, GraphTables};
+    let mut memory = vec![core::mem::MaybeUninit::<u8>::uninit(); GraphTables::bytes_for(&g)];
+    let arena = trino_core::mem::Arena::new(&mut memory);
+    let t = GraphTables::decode_in(&g, &arena).expect("bytes_for is enough");
+    let mut a = AnimGraphInstance::new(&g);
+    let mut b = AnimGraphInstance::new(&t);
+    let mut c = GraphInstance::<2, 0, 0>::new(&t);
+    for step in 0..48 {
+        for p in 0..g.param_count() {
+            let v = match (step + p) % 5 {
+                0 => 1.0,
+                1 => 0.0,
+                2 => 0.6,
+                3 => -2.5,
+                _ => continue,
+            };
+            a.set_float(p, v);
+            b.set_float(p, v);
+            c.set_float(p, v);
+        }
+        let dt = if step % 7 == 0 { 0.2 } else { 1.0 / 60.0 };
+        a.update(&g, dt);
+        b.update(&t, dt);
+        c.update(&t, dt);
+        assert_eq!(a.digest(), b.digest(), "tables vs blob, update {step}");
+        assert_eq!(
+            a.pose(&g).digest(),
+            b.pose(&t).digest(),
+            "tables vs blob pose, update {step}"
+        );
+        assert_eq!(a.events().as_slice(), b.events().as_slice());
+        keep((c.digest(), c.pose(&t).digest()));
+    }
 }
 
 /// TLUT: the grade, applied to a few colors.

@@ -10,11 +10,18 @@
 //! pose is an [`AnimRef`] (up to three clips), which every backend already
 //! draws.
 //!
-//! ## `TANG` v2 (little-endian; offsets from the blob's start)
+//! Playback reads a blob byte by byte, or the tables it decodes to once
+//! ([`GraphTables`](crate::anim::GraphTables), issue #138): see
+//! [`crate::anim::tables`].
+//!
+//! ## `TANG` v3 (little-endian; offsets from the blob's start)
 //!
 //! v2 (issue #112) is v1 plus layers, 2D blend spaces and inertialized
 //! transitions; a v1 blob is a v2 blob with none of them (its reserved
-//! header bytes are 0) and plays exactly as before.
+//! header bytes are 0) and plays exactly as before. v3 (issue #138) is v2
+//! plus a flags byte per layer (bit 0: synced to the base's cycle) and the
+//! binds after the layer records (other models the graph serves, each with
+//! its own masks); the bake writes v3 only for a graph that uses them.
 //!
 //! ```text
 //! header (32 B): "TANG" u32 version, u32 model id, u16 params, u16 clips,
@@ -36,10 +43,13 @@
 //!                          (bit 15: inertialized), f32 blend seconds,
 //!                          u32 condition offset
 //! layers      (28 B each, at the layers offset): u32 name id, u32 joint mask,
-//!                          u8 mode (0 override, 1 additive), u8 0, u16 weight
+//!                          u8 mode (0 override, 1 additive), u8 flags (v3;
+//!                          0 before), u16 weight
 //!                          param (NONE = none), f32 weight, u16 first state,
 //!                          u16 states, u16 first transition, u16 transitions,
 //!                          u16 start state, u16 0
+//! binds       (v3, right after the layer records): u16 count, u16 0, then
+//!                          per model u32 model id and a u32 mask per layer
 //! data: points (8 B: f32 value, u16 clip, u16 0; 2D: 12 B, f32 x, f32 y,
 //!       u16 clip, u16 0), triangles (3 × u8 point), event tracks
 //!       ([`EventTrack`]: u32 n + records), root tracks ([`RootTrack`]),
@@ -51,12 +61,16 @@
 //! Names are hashes ([`ParamId`]/[`StateId`] via `from_name`); the RON keeps
 //! them for tools.
 
-use super::clip::{EventBuf, EventTrack, RootDelta, RootTrack, floor};
+use super::clip::{EventTrack, RootTrack};
 use super::{rd_f32, rd_u8, rd_u16, rd_u32};
-use crate::render::{AnimBlend, AnimRef, ClipId};
+use crate::render::ClipId;
+
+pub use super::instance::{AnimGraphInstance, Contribution, GraphInstance};
 
 pub const TANG_MAGIC: &[u8; 4] = b"TANG";
-pub const TANG_VERSION: u32 = 2;
+pub const TANG_VERSION: u32 = 3;
+/// Layer record flags (v3, at +9).
+pub const LAYER_SYNC: u8 = 1;
 /// Parameters one graph may declare (the instance keeps them inline).
 pub const MAX_PARAMS: usize = 16;
 /// Points of one blend space (eight directions and the middle, and more).
@@ -169,6 +183,11 @@ pub struct AnimGraph<'a> {
     layers_at: usize,
     base_states: usize,
     base_transitions: usize,
+    /// v3: other models the graph serves, each with its own layer masks.
+    binds: usize,
+    /// The model this view's masks are for: `NONE16` = the header's, else
+    /// a bind (`for_model`).
+    bind: u16,
 }
 
 /// One layer over a graph's base (v2): its own state machine, playing on
@@ -184,6 +203,10 @@ pub struct GraphLayer {
     pub states: (usize, usize),
     pub transitions: (usize, usize),
     pub start: usize,
+    /// Its clock follows the base's cycle (v3, issue #138): a looping
+    /// state of the layer lands where the base's looping state is, as a
+    /// fraction of its cycle, every update.
+    pub sync: bool,
 }
 
 /// One clip a graph plays, as the bake copied it from the model.
@@ -231,6 +254,36 @@ impl<'a> FeetTrack<'a> {
         })
     }
 
+    /// No track (a graph table's clip without IK feet).
+    pub const EMPTY: FeetTrack<'static> = FeetTrack {
+        fps: 0.0,
+        frames: 0,
+        records: &[],
+    };
+
+    /// A track [`parse`](Self::parse) validated before, from its parts (the
+    /// static tables `cargo xtask anim export --rust` writes, issue #138).
+    pub const fn from_parts(fps: f32, frames: usize, records: &'a [u8]) -> FeetTrack<'a> {
+        FeetTrack {
+            fps,
+            frames,
+            records,
+        }
+    }
+
+    pub fn fps(&self) -> f32 {
+        self.fps
+    }
+
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    /// Its records (24 bytes a frame), for the static export.
+    pub fn records(&self) -> &'a [u8] {
+        self.records
+    }
+
     /// A track [`parse`](Self::parse) validated before: the header only.
     fn view(bytes: &'a [u8]) -> Option<FeetTrack<'a>> {
         let frames = rd_u32(bytes, 4) as usize;
@@ -275,7 +328,9 @@ pub struct GraphState<'a> {
     pub param_y: Option<usize>,
     /// Triangles of a 2D blend space.
     pub triangles: usize,
-    tris_at: usize,
+    /// Where its triangles start: a byte offset in a blob, an index in a
+    /// [`GraphTables`](crate::anim::GraphTables)' triangle table.
+    pub tris_at: usize,
     pub points: usize,
     pub speed: f32,
     pub speed_param: Option<usize>,
@@ -283,7 +338,8 @@ pub struct GraphState<'a> {
     pub root_motion: bool,
     /// The graph's own loop setting for a clip state (`None`: the clip's).
     pub looping: Option<bool>,
-    points_at: usize,
+    /// Where its points start (as [`tris_at`](Self::tris_at)).
+    pub points_at: usize,
     pub events: EventTrack<'a>,
 }
 
@@ -303,7 +359,7 @@ impl<'a> AnimGraph<'a> {
             return Err(GraphError::BadMagic);
         }
         let version = rd_u32(bytes, 4);
-        if version != 1 && version != TANG_VERSION {
+        if !(1..=TANG_VERSION).contains(&version) {
             return Err(GraphError::Version(version));
         }
         let states = rd_u16(bytes, 16) as usize;
@@ -329,6 +385,8 @@ impl<'a> AnimGraph<'a> {
             layers_at,
             base_states: if bs == 0 { states } else { bs },
             base_transitions: if bs == 0 && bt == 0 { transitions } else { bt },
+            binds: 0,
+            bind: NONE16,
         };
         if g.params > MAX_PARAMS || g.states > MAX_STATES || g.layers > MAX_LAYERS {
             return Err(GraphError::TooBig);
@@ -344,6 +402,19 @@ impl<'a> AnimGraph<'a> {
             || (g.layers > 0 && bytes.len() < g.layers_at + g.layers * LAYER_BYTES)
         {
             return Err(GraphError::Truncated);
+        }
+        // v3: the binds after the layer records (`u16 count, u16 0`, then
+        // per model `u32 id` and a mask per layer).
+        let mut g = g;
+        if version >= 3 && g.layers > 0 {
+            let at = g.layers_at + g.layers * LAYER_BYTES;
+            if bytes.len() < at + 4 {
+                return Err(GraphError::Truncated);
+            }
+            g.binds = rd_u16(bytes, at) as usize;
+            if bytes.len() < at + 4 + g.binds * g.bind_bytes() {
+                return Err(GraphError::Truncated);
+            }
         }
         let track = |off: u32| -> Result<(), GraphError> {
             if off != NONE32 {
@@ -401,7 +472,9 @@ impl<'a> AnimGraph<'a> {
                 rd_u16(bytes, at + 22) as usize,
             );
             let start = rd_u16(bytes, at + 24) as usize;
-            if rd_u8(bytes, at + 8) > 1
+            // The flags byte: 0 before v3 (ignored there).
+            if (version >= 3 && rd_u8(bytes, at + 9) & !LAYER_SYNC != 0)
+                || rd_u8(bytes, at + 8) > 1
                 || (wp != NONE16 && wp as usize >= g.params)
                 || !(0.0..=1.0).contains(&rd_f32(bytes, at + 12))
                 || s0 != next_s
@@ -554,9 +627,17 @@ impl<'a> AnimGraph<'a> {
         let at = self.layers_at + (l.max(1) - 1) * LAYER_BYTES;
         let b = self.bytes;
         let wp = rd_u16(b, at + 10);
+        let mask = if self.bind == NONE16 {
+            rd_u32(b, at + 4)
+        } else {
+            rd_u32(
+                b,
+                self.binds_at() + self.bind as usize * self.bind_bytes() + 4 * l.max(1),
+            )
+        };
         GraphLayer {
             id: rd_u32(b, at),
-            mask: crate::anim::JointMask(rd_u32(b, at + 4)),
+            mask: crate::anim::JointMask(mask),
             mode: if rd_u8(b, at + 8) == 1 {
                 crate::anim::LayerMode::Additive
             } else {
@@ -567,7 +648,54 @@ impl<'a> AnimGraph<'a> {
             states: self.states_of(l),
             transitions: self.transitions_of(l),
             start: rd_u16(b, at + 24) as usize,
+            sync: self.version() >= 3 && rd_u8(b, at + 9) & LAYER_SYNC != 0,
         }
+    }
+
+    /// The blob's `TANG` version (1, 2 or 3).
+    pub fn version(&self) -> u32 {
+        rd_u32(self.bytes, 4)
+    }
+
+    /// Where the binds start (v3: past their 4-byte count).
+    fn binds_at(&self) -> usize {
+        self.layers_at + self.layers * LAYER_BYTES + 4
+    }
+
+    /// One bind's bytes: its model id and a mask per layer.
+    fn bind_bytes(&self) -> usize {
+        4 + 4 * self.layers
+    }
+
+    /// Models besides [`model`](Self::model)'s own the graph serves (v3,
+    /// issue #138): rigs that differ by joints a mask doesn't name (a prop,
+    /// a tool), each with its layer masks resolved by joint name at the
+    /// bake.
+    pub fn bind_count(&self) -> usize {
+        self.binds
+    }
+
+    /// Bind `i`'s model id.
+    pub fn bind_model(&self, i: usize) -> u32 {
+        rd_u32(self.bytes, self.binds_at() + i * self.bind_bytes())
+    }
+
+    /// This graph for `model` (`ModelId(id)`): the same graph whose layer
+    /// masks are that model's, `None` when the graph doesn't serve it.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn for_model(&self, model: u32) -> Option<AnimGraph<'a>> {
+        if rd_u32(self.bytes, 8) == model {
+            return Some(AnimGraph {
+                bind: NONE16,
+                ..*self
+            });
+        }
+        (0..self.binds)
+            .find(|&i| self.bind_model(i) == model)
+            .map(|i| AnimGraph {
+                bind: i as u16,
+                ..*self
+            })
     }
 
     /// The layer named `name` (`1..=layer_count()`), for a game that reads
@@ -647,9 +775,14 @@ impl<'a> AnimGraph<'a> {
         }
     }
 
-    /// The model the graph animates (`ModelId(id)`).
+    /// The model the graph animates (`ModelId(id)`): the one
+    /// [`for_model`](Self::for_model) chose, else the graph's own.
     pub fn model(&self) -> u32 {
-        rd_u32(self.bytes, 8)
+        if self.bind == NONE16 {
+            rd_u32(self.bytes, 8)
+        } else {
+            self.bind_model(self.bind as usize)
+        }
     }
 
     pub fn param_count(&self) -> usize {
@@ -714,6 +847,16 @@ impl<'a> AnimGraph<'a> {
             root: track(rd_u32(b, at + 16)).and_then(RootTrack::view),
             feet: track(rd_u32(b, at + 20)).and_then(FeetTrack::view),
         }
+    }
+
+    /// Clip `i`'s seconds.
+    pub fn clip_duration(&self, i: usize) -> f32 {
+        rd_f32(self.bytes, self.clips_at() + i * CLIP_BYTES + 4)
+    }
+
+    /// Whether clip `i` loops.
+    pub fn clip_looping(&self, i: usize) -> bool {
+        rd_u8(self.bytes, self.clips_at() + i * CLIP_BYTES + 8) != 0
     }
 
     /// State `i` (`i < state_count()`).
@@ -858,871 +1001,64 @@ impl<'a> AnimGraph<'a> {
     }
 }
 
-struct EvalCtx<'p> {
-    params: &'p [f32; MAX_PARAMS],
-    finished: bool,
-    elapsed: f32,
+pub(crate) struct EvalCtx<'p> {
+    pub(crate) params: &'p [f32; MAX_PARAMS],
+    pub(crate) finished: bool,
+    pub(crate) elapsed: f32,
 }
 
-/// One state being played: its index, its clock (a clip state's seconds,
-/// unwrapped; a blend space's cycles of its effective duration, whole
-/// cycles dropped) and how long it has been on.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Playing {
-    state: u16,
-    phase: f32,
-    elapsed: f32,
-    /// Completed cycles (saturating), for `Finished` on a loop.
-    cycles: u16,
-    /// The next update starts the state (events at time 0 fire).
-    first: bool,
+/// One condition node's code, read from the blob (the decoder's view).
+pub(crate) struct CondCode {
+    pub(crate) op: u8,
+    pub(crate) param: u16,
+    pub(crate) children: u8,
+    pub(crate) value: f32,
+    /// Bytes of its own code (its children follow).
+    pub(crate) len: usize,
 }
 
-impl Playing {
-    fn new(state: usize) -> Playing {
-        Playing {
-            state: state as u16,
-            phase: 0.0,
-            elapsed: 0.0,
-            cycles: 0,
-            first: true,
-        }
-    }
-}
-
-/// A clip's share of the pose.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Contribution {
-    pub clip: usize,
-    /// Its time in seconds (what [`AnimRef`] samples).
-    pub time: f32,
-    pub weight: f32,
-}
-
-impl Contribution {
-    pub const NONE: Contribution = Contribution {
-        clip: 0,
-        time: 0.0,
-        weight: 0.0,
-    };
-}
-
-/// One layer's state machine being played: the current state and the one
-/// it fades from.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct LayerPlay {
-    cur: Playing,
-    prev: Option<Playing>,
-    fade: f32,
-    fade_len: f32,
-}
-
-impl LayerPlay {
-    fn new(state: usize) -> LayerPlay {
-        LayerPlay {
-            cur: Playing::new(state),
-            prev: None,
-            fade: 0.0,
-            fade_len: 0.0,
-        }
-    }
-
-    fn fade_k(&self) -> f32 {
-        if self.fade_len > 0.0 {
-            (self.fade / self.fade_len).clamp(0.0, 1.0)
-        } else {
-            1.0
-        }
-    }
-}
-
-/// An inertialized transition (v2): where the layer's pose was when it
-/// fired (`From`, at most three clips) and where its destination started
-/// (`To`), frozen; the pose adds their difference, decaying over `len`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Inertia {
-    snaps: [Contribution; 6],
-    from: u8,
-    to: u8,
-    elapsed: f32,
-    len: f32,
-}
-
-/// A state's clips now: up to three (a 2D space's triangle), their
-/// weights (summing to 1) and the cycle length in seconds.
-#[derive(Clone, Copy, Debug)]
-struct Shape {
-    clip: [usize; 3],
-    w: [f32; 3],
-    n: usize,
-    dur: f32,
-}
-
-/// A graph being played: parameters, the current state (and the one it is
-/// fading from) of its base and of each layer, this update's events and
-/// root motion. `Copy`, fixed size, no allocation; the same updates give
-/// the same poses on every target.
-#[derive(Clone, Copy, Debug)]
-pub struct AnimGraphInstance {
-    params: [f32; MAX_PARAMS],
-    /// The base (0) and each layer's machine.
-    play: [LayerPlay; MAX_LAYERS + 1],
-    inertia: [Option<Inertia>; MAX_LAYERS + 1],
-    layers: u8,
-    events: EventBuf,
-    root: RootDelta,
-    /// Transitions taken since the instance started (a test reads it).
-    pub transitions: u32,
-}
-
-impl AnimGraphInstance {
-    /// An instance at the graph's start state (each layer at its own), its
-    /// parameters at their defaults.
-    pub fn new(graph: &AnimGraph) -> AnimGraphInstance {
-        let mut params = [0.0; MAX_PARAMS];
-        for (i, p) in params.iter_mut().enumerate().take(graph.param_count()) {
-            let (_, kind, default) = graph.param_info(i);
-            *p = if kind == ParamKind::Trigger {
-                0.0
-            } else {
-                default
-            };
-        }
-        let mut play = [LayerPlay::new(graph.start()); MAX_LAYERS + 1];
-        let layers = graph.layer_count().min(MAX_LAYERS);
-        for (l, p) in play.iter_mut().enumerate().take(layers + 1).skip(1) {
-            *p = LayerPlay::new(graph.layer(l).start);
-        }
-        AnimGraphInstance {
-            params,
-            play,
-            inertia: [None; MAX_LAYERS + 1],
-            layers: layers as u8,
-            events: EventBuf::new(),
-            root: RootDelta::ZERO,
-            transitions: 0,
-        }
-    }
-
-    /// An instance starting in state `state` (an index, or the start when
-    /// out of range): several entities sharing one graph, each mid-action.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn new_in(graph: &AnimGraph, state: usize) -> AnimGraphInstance {
-        let mut i = AnimGraphInstance::new(graph);
-        if state < graph.states_of(0).1 {
-            i.play[0].cur = Playing::new(state);
-        }
-        i
-    }
-
-    /// Set a float parameter (by index, [`AnimGraph::param`]).
-    pub fn set_float(&mut self, param: usize, v: f32) {
-        if let Some(p) = self.params.get_mut(param) {
-            *p = v;
-        }
-    }
-
-    pub fn set_bool(&mut self, param: usize, v: bool) {
-        self.set_float(param, if v { 1.0 } else { 0.0 });
-    }
-
-    /// Fire a trigger for the next update.
-    pub fn set_trigger(&mut self, param: usize) {
-        self.set_float(param, 1.0);
-    }
-
-    /// Set a parameter by name (`inst.set(&graph, "speed", 2.0)`; bools and
-    /// triggers take 0 / 1). `false` when the graph has no such parameter.
-    pub fn set(&mut self, graph: &AnimGraph, name: &str, v: f32) -> bool {
-        match graph.param_named(name) {
-            Some(i) => {
-                self.set_float(i, v);
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub fn param(&self, param: usize) -> f32 {
-        self.params.get(param).copied().unwrap_or(0.0)
-    }
-
-    /// The base layer's current state (the one being faded to,
-    /// mid-transition).
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn state(&self) -> usize {
-        self.play[0].cur.state as usize
-    }
-
-    /// Layer `l`'s current state (0 = the base).
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn layer_state(&self, l: usize) -> usize {
-        self.play.get(l).map_or(0, |p| p.cur.state as usize)
-    }
-
-    /// Layers over the base this instance plays.
-    pub fn layer_count(&self) -> usize {
-        self.layers as usize
-    }
-
-    /// The base mid-transition: (from state, 0..1 progress).
-    pub fn transition(&self) -> Option<(usize, f32)> {
-        self.layer_transition(0)
-    }
-
-    /// Layer `l` mid-crossfade: (from state, 0..1 progress).
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn layer_transition(&self, l: usize) -> Option<(usize, f32)> {
-        let p = self.play.get(l)?;
-        p.prev.map(|x| (x.state as usize, p.fade_k()))
-    }
-
-    /// Layer `l`'s inertialized transition: how much of its offset is left
-    /// (1 → 0), `None` when none runs.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn inertia(&self, l: usize) -> Option<f32> {
-        let i = self.inertia.get(l).copied().flatten()?;
-        let k = if i.len > 0.0 { i.elapsed / i.len } else { 1.0 };
-        Some(crate::anim::inertial_decay(k))
-    }
-
-    /// Seconds in the current state.
-    pub fn elapsed(&self) -> f32 {
-        self.play[0].cur.elapsed
-    }
-
-    /// The current state's clock: a clip state's seconds, a blend space's
-    /// cycle (0..1).
-    pub fn clock(&self) -> f32 {
-        self.play[0].cur.phase
-    }
-
-    /// The events the last update crossed, in timeline order.
-    pub fn events(&self) -> &EventBuf {
-        &self.events
-    }
-
-    /// The root motion of the last update (model units, in the
-    /// character's frame at its start): move the entity by it. Only the
-    /// base layer moves the root.
-    pub fn root_motion(&self) -> RootDelta {
-        self.root
-    }
-
-    /// Force a state (a respawn, a cutscene), with an optional crossfade.
-    pub fn play(&mut self, state: usize, blend: f32) {
-        self.start_transition(None, 0, state, blend, false);
-    }
-
-    /// A layer's weight now: its constant times its parameter (0..1).
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn layer_weight(&self, graph: &AnimGraph, l: usize) -> f32 {
-        if l == 0 {
-            return 1.0;
-        }
-        let g = graph.layer(l);
-        let p = g
-            .weight_param
-            .map_or(1.0, |i| self.params[i].clamp(0.0, 1.0));
-        g.weight * p
-    }
-
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn start_transition(
-        &mut self,
-        graph: Option<&AnimGraph>,
-        l: usize,
-        to: usize,
-        blend: f32,
-        inertial: bool,
-    ) {
-        match graph {
-            Some(g) if inertial && blend > 0.0 => {
-                let mut snaps = [Contribution::NONE; 6];
-                let mut from = [Contribution::NONE; MAX_CONTRIBUTIONS];
-                let n = self.layer_contributions(g, l, &mut from);
-                // The three heaviest, renormalized.
-                let mut keep = n.min(3);
-                let mut total = 0.0;
-                for k in 0..keep {
-                    let mut best = k;
-                    for j in k + 1..n {
-                        if from[j].weight > from[best].weight {
-                            best = j;
-                        }
-                    }
-                    from.swap(k, best);
-                    total += from[k].weight;
-                }
-                if total <= 0.0 {
-                    keep = 0;
-                }
-                for k in 0..keep {
-                    snaps[k] = Contribution {
-                        weight: from[k].weight / total,
-                        ..from[k]
-                    };
-                }
-                let p = &mut self.play[l];
-                p.prev = None;
-                p.cur = Playing::new(to);
-                p.fade = 0.0;
-                p.fade_len = 0.0;
-                let mut dest = [Contribution::NONE; MAX_CONTRIBUTIONS];
-                let m = self.layer_contributions(g, l, &mut dest).min(3);
-                snaps[keep..keep + m].copy_from_slice(&dest[..m]);
-                self.inertia[l] = (keep > 0 && m > 0).then_some(Inertia {
-                    snaps,
-                    from: keep as u8,
-                    to: m as u8,
-                    elapsed: 0.0,
-                    len: blend,
-                });
-            }
-            _ => {
-                let p = &mut self.play[l];
-                p.prev = (blend > 0.0).then_some(p.cur);
-                p.cur = Playing::new(to);
-                p.fade = 0.0;
-                p.fade_len = blend;
-            }
-        }
-        self.transitions = self.transitions.wrapping_add(1);
-    }
-
-    /// A blend space's two clips and the weight of the second.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn blend_pair(graph: &AnimGraph, s: &GraphState, v: f32) -> (usize, usize, f32) {
-        let first = graph.point(s, 0);
-        if s.points == 1 {
-            return (first.1, first.1, 0.0);
-        }
-        let last = graph.point(s, s.points - 1);
-        let mut v = v;
-        if s.wrap > 0.0 {
-            // Circular (an angle): between the last point and the first
-            // across the seam.
-            v -= floor((v - first.0) / s.wrap) * s.wrap;
-            if v > last.0 {
-                let span = first.0 + s.wrap - last.0;
-                let w = if span > 0.0 { (v - last.0) / span } else { 0.0 };
-                return (last.1, first.1, w);
-            }
-        }
-        if v <= first.0 {
-            return (first.1, first.1, 0.0);
-        }
-        for p in 0..s.points - 1 {
-            let (a, b) = (graph.point(s, p), graph.point(s, p + 1));
-            if v <= b.0 {
-                let span = b.0 - a.0;
-                let w = if span > 0.0 { (v - a.0) / span } else { 1.0 };
-                return (a.1, b.1, w);
-            }
-        }
-        (last.1, last.1, 0.0)
-    }
-
-    /// A 2D blend space's clips at `(x, y)`: the barycentric weights of
-    /// the baked triangle holding it, else of the nearest point on the
-    /// triangles' edges (outside the hull). Continuous across edges.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn blend_tri(
-        graph: &AnimGraph,
-        s: &GraphState,
-        x: f32,
-        y: f32,
-    ) -> ([usize; 3], [f32; 3], usize) {
-        let pt = |i: usize| graph.point2(s, i);
-        if s.triangles == 0 {
-            return ([pt(0).2, 0, 0], [1.0, 0.0, 0.0], 1);
-        }
-        let mut best = (f32::MAX, [0usize; 3], [0.0f32; 3]);
-        for t in 0..s.triangles {
-            let [i, j, k] = graph.triangle(s, t);
-            let (a, b, c) = (pt(i), pt(j), pt(k));
-            let (v0x, v0y, v1x, v1y) = (b.0 - a.0, b.1 - a.1, c.0 - a.0, c.1 - a.1);
-            let (v2x, v2y) = (x - a.0, y - a.1);
-            let den = v0x * v1y - v1x * v0y;
-            if den.abs() > 1e-12 {
-                let v = (v2x * v1y - v1x * v2y) / den;
-                let w = (v0x * v2y - v2x * v0y) / den;
-                let u = 1.0 - v - w;
-                if u >= -1e-6 && v >= -1e-6 && w >= -1e-6 {
-                    let (u, v, w) = (u.max(0.0), v.max(0.0), w.max(0.0));
-                    let sum = u + v + w;
-                    return ([a.2, b.2, c.2], [u / sum, v / sum, w / sum], 3);
-                }
-            }
-            for (p, q) in [(a, b), (b, c), (c, a)] {
-                let (ex, ey) = (q.0 - p.0, q.1 - p.1);
-                let len2 = ex * ex + ey * ey;
-                let k = if len2 > 0.0 {
-                    (((x - p.0) * ex + (y - p.1) * ey) / len2).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let (dx, dy) = (x - (p.0 + ex * k), y - (p.1 + ey * k));
-                let d = dx * dx + dy * dy;
-                if d < best.0 {
-                    best = (d, [p.2, q.2, 0], [1.0 - k, k, 0.0]);
-                }
-            }
-        }
-        (best.1, best.2, 2)
-    }
-
-    /// A state's clips now, their weights and its cycle length in seconds.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn shape(&self, graph: &AnimGraph, s: &GraphState) -> Shape {
-        let dur = |c: usize| graph.clip(c).duration;
-        if let (Some(px), Some(py)) = (s.param, s.param_y) {
-            let (mut clip, mut w, mut n) =
-                Self::blend_tri(graph, s, self.params[px], self.params[py]);
-            // One share per clip (two points may play the same clip).
-            let mut i = 0;
-            while i < n {
-                let mut j = i + 1;
-                while j < n {
-                    if clip[j] == clip[i] {
-                        w[i] += w[j];
-                        clip[j] = clip[n - 1];
-                        w[j] = w[n - 1];
-                        n -= 1;
-                    } else {
-                        j += 1;
-                    }
-                }
-                i += 1;
-            }
-            let mut d = 0.0;
-            for k in 0..n {
-                d += dur(clip[k]) * w[k];
-            }
-            return Shape { clip, w, n, dur: d };
-        }
-        let v = s.param.map_or(0.0, |p| self.params[p]);
-        let (a, b, w) = Self::blend_pair(graph, s, v);
-        let (da, db) = (dur(a), dur(b));
-        let n = if a == b { 1 } else { 2 };
-        Shape {
-            clip: [a, b, b],
-            w: if n == 1 {
-                [1.0, 0.0, 0.0]
-            } else {
-                [1.0 - w, w, 0.0]
-            },
-            n,
-            dur: da + (db - da) * w,
-        }
-    }
-
-    fn looping(graph: &AnimGraph, s: &GraphState, clip: usize) -> bool {
-        s.looping.unwrap_or(graph.clip(clip).looping)
-    }
-
-    /// A clip's time in seconds at a state's clock.
-    fn clip_time(graph: &AnimGraph, s: &GraphState, clip: usize, clock: f32) -> f32 {
-        let c = graph.clip(clip);
-        if s.param.is_none() {
-            // The seconds as played: the pose wraps a looping clip itself.
-            match s.looping {
-                Some(true) if !c.looping && c.duration > 0.0 => {
-                    clock - floor(clock / c.duration) * c.duration
-                }
-                Some(false) if c.looping => clock.min(c.duration),
-                _ => clock,
-            }
-        } else if Self::looping(graph, s, clip) {
-            (clock - floor(clock)) * c.duration
-        } else {
-            clock.clamp(0.0, 1.0) * c.duration
-        }
-    }
-
-    /// Advance one playing state by `dt`; fire its events into
-    /// `self.events` when `fire`, and return its root motion.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn advance(
-        &mut self,
-        graph: &AnimGraph,
-        p: &mut Playing,
-        dt: f32,
-        fire: bool,
-        weight: f32,
-    ) -> RootDelta {
-        let s = graph.state(p.state as usize);
-        let sh = self.shape(graph, &s);
-        let dur = sh.dur;
-        let rate = s.speed * s.speed_param.map_or(1.0, |i| self.params[i]);
-        let looping = Self::looping(graph, &s, sh.clip[0]);
-        p.elapsed += dt;
-        let step = if dt * rate > 0.0 { dt * rate } else { 0.0 };
-        // The clock: a clip state's seconds (unwrapped, like a game's own
-        // `time` it replaces: the same additions give the same pose), a
-        // blend space's cycles.
-        let c0 = p.phase;
-        let (c1, unit) = if s.param.is_none() {
-            // Not clamped even for a one-shot clip: the pose clamps it, and
-            // the time stays the game's own (events and root motion clamp).
-            (c0 + step, dur)
-        } else {
-            let mut ph = if dur > 0.0 { c0 + step / dur } else { 1.0 };
-            if !looping {
-                ph = ph.min(1.0);
-            }
-            (ph, 1.0)
-        };
-        let mut root = RootDelta::ZERO;
-        // Each clip of the shape: its share of root motion; the heaviest
-        // one fires its events (a walk and a run blended don't both step).
-        let mut heavy = 0;
-        for k in 1..sh.n {
-            if sh.w[k] > sh.w[heavy] {
-                heavy = k;
-            }
-        }
-        for k in 0..sh.n {
-            let (clip, wk) = (sh.clip[k], sh.w[k]);
-            if wk <= 0.0 {
-                continue;
-            }
-            let c = graph.clip(clip);
-            let lp = Self::looping(graph, &s, clip);
-            let (t0, t1) = if s.param.is_none() {
-                (c0, c1)
-            } else {
-                (c0 * c.duration, c1 * c.duration)
-            };
-            if s.root_motion
-                && let Some(track) = c.root
-            {
-                root = root.then(track.delta(t0, t1, c.duration, lp).scaled(wk));
-            }
-            if fire && k == heavy {
-                let ew = weight * wk;
-                c.events
-                    .fire(t0, t1, p.first, c.duration, lp, c.id, ew, &mut self.events);
-                if s.param.is_none() {
-                    s.events
-                        .fire(t0, t1, p.first, c.duration, lp, c.id, ew, &mut self.events);
-                }
-            }
-        }
-        // Cycles done (`Finished`).
-        if unit <= 0.0 {
-            p.cycles = p.cycles.max(1);
-        } else if looping {
-            let done = floor(c1 / unit) - floor(c0 / unit);
-            p.cycles = p.cycles.saturating_add(done as u16);
-        } else if c1 >= unit && c0 < unit {
-            p.cycles = p.cycles.saturating_add(1);
-        }
-        // A blend space's clock keeps only its fraction (its clips' times
-        // come from it); a clip state's stays the seconds it played.
-        p.phase = if s.param.is_some() && looping {
-            c1 - floor(c1)
-        } else {
-            c1
-        };
-        p.first = false;
-        root
-    }
-
-    /// Advance layer `l`'s clocks; fire its events (scaled by the layer's
-    /// weight `lw`); its root motion.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn advance_layer(&mut self, graph: &AnimGraph, l: usize, dt: f32, lw: f32) -> RootDelta {
-        let mut lp = self.play[l];
-        let k = if lp.prev.is_some() {
-            lp.fade += dt;
-            lp.fade_k()
-        } else {
-            1.0
-        };
-        let fire = lw > 0.0;
-        let mut cur = lp.cur;
-        let mut root = self.advance(graph, &mut cur, dt, fire, k * lw);
-        lp.cur = cur;
-        if let Some(mut prev) = lp.prev {
-            let from = self.advance(graph, &mut prev, dt, false, 1.0 - k);
-            root = root.scaled(k).then(from.scaled(1.0 - k));
-            lp.prev = if k >= 1.0 { None } else { Some(prev) };
-        }
-        self.play[l] = lp;
-        if let Some(i) = &mut self.inertia[l] {
-            i.elapsed += dt;
-            if i.elapsed >= i.len {
-                self.inertia[l] = None;
-            }
-        }
-        root
-    }
-
-    /// One step: advance the clocks by `dt` seconds, collect events and
-    /// root motion, then take the first transition whose condition holds
-    /// (in the graph's order; transitions from any state skip the state
-    /// they lead to), the base first, then each layer. Triggers nothing
-    /// consumed are cleared.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn update(&mut self, graph: &AnimGraph, dt: f32) {
-        self.events.clear();
-        let dt = if dt > 0.0 { dt } else { 0.0 };
-        let layers = (self.layers as usize).min(graph.layer_count());
-        self.root = self.advance_layer(graph, 0, dt, 1.0);
-        for l in 1..=layers {
-            let lw = self.layer_weight(graph, l);
-            self.advance_layer(graph, l, dt, lw);
-        }
-
-        // Transitions, evaluated after the clocks moved.
-        for l in 0..=layers {
-            let cur = self.play[l].cur;
-            let mut fired = None;
-            {
-                let ctx = EvalCtx {
-                    params: &self.params,
-                    finished: cur.cycles > 0,
-                    elapsed: cur.elapsed,
-                };
-                let (lo, hi) = graph.transitions_of(l);
-                for t in lo..hi {
-                    let (from, to, blend, cond) = graph.transition(t);
-                    match from {
-                        Some(f) if f != cur.state as usize => continue,
-                        None if to == cur.state as usize => continue,
-                        _ => {}
-                    }
-                    let mut used = 0u16;
-                    if graph.eval(cond, &ctx, &mut used).0 {
-                        fired = Some((to, blend, used, graph.transition_inertial(t)));
-                        break;
-                    }
-                }
-            }
-            if let Some((to, blend, used, inertial)) = fired {
-                for (i, p) in self.params.iter_mut().enumerate() {
-                    if used & (1 << i) != 0 {
-                        *p = 0.0;
-                    }
-                }
-                self.start_transition(Some(graph), l, to, blend, inertial);
-            }
-        }
-        // A trigger lives one update.
-        for i in 0..graph.param_count() {
-            if graph.param_info(i).1 == ParamKind::Trigger {
-                self.params[i] = 0.0;
-            }
-        }
-    }
-
-    /// Each clip's share of the base layer's pose (two states of up to
-    /// three clips), fading-from state first; weights sum to 1.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn contributions(&self, graph: &AnimGraph, out: &mut [Contribution]) -> usize {
-        self.layer_contributions(graph, 0, out)
-    }
-
-    /// [`contributions`](Self::contributions) of layer `l`.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn layer_contributions(
+impl AnimGraph<'_> {
+    /// [`eval`](Self::eval) of the condition at byte `at`.
+    pub(crate) fn eval_at(
         &self,
-        graph: &AnimGraph,
-        l: usize,
-        out: &mut [Contribution],
-    ) -> usize {
-        let Some(lp) = self.play.get(l) else {
-            return 0;
+        at: usize,
+        params: &[f32; MAX_PARAMS],
+        finished: bool,
+        elapsed: f32,
+        used: &mut u16,
+    ) -> bool {
+        let ctx = EvalCtx {
+            params,
+            finished,
+            elapsed,
         };
-        let mut n = 0;
-        let k = if lp.prev.is_some() { lp.fade_k() } else { 1.0 };
-        let mut push = |p: &Playing, scale: f32| {
-            let s = graph.state(p.state as usize);
-            let sh = self.shape(graph, &s);
-            for i in 0..sh.n {
-                let weight = sh.w[i] * scale;
-                if weight > 0.0 && n < out.len() {
-                    out[n] = Contribution {
-                        clip: sh.clip[i],
-                        time: Self::clip_time(graph, &s, sh.clip[i], p.phase),
-                        weight,
-                    };
-                    n += 1;
-                }
-            }
+        self.eval(at, &ctx, used).0
+    }
+
+    /// The node at byte `at` (validated by `parse`).
+    pub(crate) fn cond_code(&self, at: usize) -> CondCode {
+        let b = self.bytes;
+        let op = rd_u8(b, at);
+        let (param, children, value, len) = match op {
+            op::TRIGGER | op::PARAM => (rd_u16(b, at + 1), 0, 0.0, 3),
+            op::GREATER | op::LESS => (rd_u16(b, at + 1), 0, rd_f32(b, at + 3), 7),
+            op::AFTER => (0, 0, rd_f32(b, at + 1), 5),
+            op::NOT => (0, 1, 0.0, 1),
+            op::AND | op::OR => (0, rd_u8(b, at + 1), 0.0, 2),
+            _ => (0, 0, 0.0, 1),
         };
-        if let Some(prev) = &lp.prev {
-            push(prev, 1.0 - k);
+        CondCode {
+            op,
+            param,
+            children,
+            value,
+            len,
         }
-        push(&lp.cur, k);
-        n
     }
 
-    /// Where the model's IK feet are in this pose (model space; the
-    /// clips' feet tracks blended by their weights): where a game casts
-    /// for the ground ([`crate::anim::FootIk::pose`]). `None` for a model
-    /// without IK chains.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn feet(&self, graph: &AnimGraph) -> Option<[crate::math::Vec3; 2]> {
-        let mut c = [Contribution::NONE; MAX_CONTRIBUTIONS];
-        let n = self.contributions(graph, &mut c);
-        let mut out = [crate::math::Vec3::ZERO; 2];
-        for x in &c[..n] {
-            let clip = graph.clip(x.clip);
-            let track = clip.feet?;
-            // A clip state's time is its unwrapped clock.
-            let t = if clip.looping && clip.duration > 0.0 {
-                x.time - floor(x.time / clip.duration) * clip.duration
-            } else {
-                crate::math::clamp_or(x.time, 0.0, clip.duration)
-            };
-            let f = track.at(t);
-            out[0] += f[0] * x.weight;
-            out[1] += f[1] * x.weight;
-        }
-        (n > 0).then_some(out)
-    }
-
-    /// Whether the pose needs more than an `AnimRef`'s model: layers or an
-    /// inertialized transition.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn layered(&self) -> bool {
-        self.layers > 0 || self.inertia.iter().any(Option::is_some)
-    }
-
-    /// The pose to draw as an [`AnimRef`]: up to three clips (the lightest
-    /// dropped and the rest renormalized past three — only while a blend
-    /// space fades into another). A graph with layers or an inertialized
-    /// transition gives [`pose`](Self::pose) folded to the base N64's tier.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn anim(&self, graph: &AnimGraph) -> AnimRef {
-        if self.layered() {
-            return self.pose(graph).to_ref();
-        }
-        let mut c = [Contribution::NONE; MAX_CONTRIBUTIONS];
-        let mut n = self.contributions(graph, &mut c);
-        while n > 3 {
-            let mut min = 0;
-            for i in 1..n {
-                if c[i].weight < c[min].weight {
-                    min = i;
-                }
-            }
-            for i in min..n - 1 {
-                c[i] = c[i + 1];
-            }
-            n -= 1;
-        }
-        let total: f32 = c[..n].iter().map(|x| x.weight).sum();
-        let id = |x: &Contribution| graph.clip(x.clip).id;
-        let mut a = AnimRef::new(id(&c[0]), c[0].time);
-        if n >= 2 && total > 0.0 {
-            let w01 = c[0].weight + c[1].weight;
-            let k1 = if w01 > 0.0 { c[1].weight / w01 } else { 0.0 };
-            a = a.blend_to(id(&c[1]), c[1].time, k1);
-            if n == 3 {
-                a.over = AnimBlend {
-                    clip: id(&c[2]),
-                    time: c[2].time,
-                    weight: c[2].weight / total,
-                };
-            }
-        }
-        a
-    }
-
-    /// The whole pose (issue #112): every layer's clips with its mask,
-    /// mode and weight (a layer at weight 0 is left out), inertialized
-    /// offsets with their decay. Hand it to
-    /// [`Renderer::push_pose`](crate::Renderer::push_pose), which folds it
-    /// to the platform's tier.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn pose(&self, graph: &AnimGraph) -> crate::anim::AnimPose {
-        use crate::anim::{AnimPose, PoseLayer, SampleRole};
-        let mut p = AnimPose::EMPTY;
-        let layers = (self.layers as usize).min(graph.layer_count());
-        for l in 0..=layers {
-            let li = if l == 0 {
-                0
-            } else {
-                let w = self.layer_weight(graph, l);
-                if w <= 0.0 {
-                    continue;
-                }
-                let g = graph.layer(l);
-                match p.add_layer(PoseLayer {
-                    mask: g.mask,
-                    mode: g.mode,
-                    weight: w.min(1.0),
-                    decay: 0.0,
-                }) {
-                    Some(i) => i,
-                    None => break,
-                }
-            };
-            let mut c = [Contribution::NONE; MAX_CONTRIBUTIONS];
-            let n = self.layer_contributions(graph, l, &mut c);
-            for x in &c[..n] {
-                p.push(
-                    li,
-                    SampleRole::Pose,
-                    graph.clip(x.clip).id,
-                    x.time,
-                    x.weight,
-                );
-            }
-            if let (Some(i), Some(decay)) = (self.inertia[l], self.inertia(l))
-                && decay > 0.0
-            {
-                for (k, x) in i.snaps[..(i.from + i.to) as usize].iter().enumerate() {
-                    let role = if k < i.from as usize {
-                        SampleRole::From
-                    } else {
-                        SampleRole::To
-                    };
-                    p.push(li, role, graph.clip(x.clip).id, x.time, x.weight);
-                }
-                p.layers[li as usize].decay = decay;
-            }
-        }
-        p
-    }
-
-    /// A digest of the playback state (state, clocks quantized to 1/4096
-    /// of a cycle, fade, parameters; layers and inertia when the graph has
-    /// them): the self-test compares it across targets.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn digest(&self) -> u32 {
-        let mut h = Fnv::new();
-        let q = |v: f32| crate::math3d::to_i32(v * 4096.0) as u32;
-        let play = |h: &mut Fnv, lp: &LayerPlay| {
-            h.u32(lp.cur.state as u32);
-            h.u32(q(lp.cur.phase));
-            h.u32(lp.cur.cycles as u32);
-            match lp.prev {
-                Some(p) => {
-                    h.u32(p.state as u32 + 1);
-                    h.u32(q(p.phase));
-                    h.u32(q(lp.fade_k()));
-                }
-                None => h.u32(0),
-            }
-        };
-        play(&mut h, &self.play[0]);
-        for p in &self.params {
-            h.u32(q(*p));
-        }
-        h.u32(self.transitions);
-        if self.layered() {
-            for lp in &self.play[1..=self.layers as usize] {
-                play(&mut h, lp);
-            }
-            for i in &self.inertia {
-                h.u32(i.map_or(0, |i| q(i.elapsed) + 1));
-            }
-        }
-        h.0
+    /// The whole length of the condition at byte `at`, its children in.
+    pub(crate) fn cond_len(&self, at: usize) -> usize {
+        self.check_cond(at, 0).unwrap_or(1)
     }
 }
 

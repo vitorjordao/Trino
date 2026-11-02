@@ -1972,6 +1972,10 @@ cargo test --workspace
 - **A new draw path that poses a mesh reads the pose cache too** (#136): build it with
   `.with_poses(..).with_pose_cache(cache.entries())` and call `prepare_growing` at the
   draw's entry (a miss only costs time: the pose is the same).
+- **castle64's sources are copied into standalone projects** (the castle64 template): an
+  `include_bytes!`/`include!` there must stay inside `examples/castle64` (#138's graph crowd
+  reached into `examples/solid-eleven` and broke the template in CI; it keeps a copy held
+  equal by a test). Run `cargo test -p xtask --test standalone -- --ignored` for it.
 - **Instance methods take `impl Into<GraphRef>`, never `G: GraphSource`** (#138): a generic
   playback was a copy per source, per instance size and per crate (anim code 27 → 70 KB of
   N64 text). Keep the `GraphInstance<L, I, E>` wrappers thin over the non-generic core.

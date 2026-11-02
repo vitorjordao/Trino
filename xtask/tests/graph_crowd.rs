@@ -26,3 +26,14 @@ fn the_graph_crowd_plays_the_pinned_script() {
         "{c:?}"
     );
 }
+
+/// castle64's copy of Solid Eleven's player graph is the game's.
+#[test]
+fn the_crowds_graph_is_solid_elevens() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let game = std::fs::read(root.join("examples/solid-eleven/src/render/player.tang")).unwrap();
+    assert!(
+        graph_crowd::PLAYER_TANG == game.as_slice(),
+        "examples/castle64/src/player.tang is stale: copy examples/solid-eleven/src/render/player.tang"
+    );
+}

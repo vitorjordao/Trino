@@ -12,8 +12,11 @@ use trino_core::anim::{AnimGraph, GraphInstance, GraphRef, GraphTables};
 use trino_core::mem::Arena;
 use trino_core::{Platform, TextBuf};
 
-/// Solid Eleven's player graph, as the game embeds it.
-pub static PLAYER_TANG: &[u8] = include_bytes!("../../solid-eleven/src/render/player.tang");
+/// Solid Eleven's player graph, a copy of the blob the game embeds (this
+/// crate is copied into standalone projects by the castle64 template, so it
+/// can't reach into `examples/solid-eleven`; `xtask/tests/graph_crowd.rs`
+/// holds the copy equal to the game's).
+pub static PLAYER_TANG: &[u8] = include_bytes!("player.tang");
 
 /// Players on a pitch.
 pub const CROWD: usize = 22;

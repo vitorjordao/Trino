@@ -62,6 +62,8 @@ fields are errors.
 cargo xtask anim check [name] [--platform n64] [--json]   # names, kinds, limits, events past the end, unreachable, dead ends
 cargo xtask anim simulate strider --script s.ron --out trace.json [--json]   # states, transitions, events, root motion, pose samples
 cargo xtask anim new <name> --model models/x              # one state per clip
+cargo xtask anim export <name> --out x.tang [--platform p]  # the baked blob, for a game that embeds it
+# every anim command takes --dir <project> (another project's assets/, e.g. examples/solid-eleven)
 cargo xtask model inspect models/strider --anim --compressed [--json]   # stride, slide (constant vs carried), events, ANMC bytes and errors
 TRINO_SCENE=scenes/striders.scene.ron cargo run -p trino-app-pc         # entities play their graphs, carried by root motion
 ```
@@ -115,10 +117,12 @@ AnimGraph(
 )
 ```
 
-- **Masks name joints** (glTF node names, exactly; empty = every joint):
-  `cargo xtask model inspect models/x` lists them. The bake resolves them
-  against the model (`trino_asset_pipeline::joint_names`): without the
-  model's joints a mask is a `check` error, never a silent all-joints mask.
+- **Masks name joints** (glTF node names, exactly; empty = every joint), or
+  a subtree: `"torso/*"` is the torso and every joint under it (issue
+  #136; no other `*` form). `cargo xtask model inspect models/x` lists the
+  joints. The bake resolves them against the model's joints and parents
+  (`trino_asset_pipeline::joints`, TMDL order): without them a mask is a
+  `check` error, never a silent all-joints mask.
 - **Layers are machines** of their own (states, transitions, start, layout),
   evaluated bottom to top after the base; a trigger a lower machine consumed
   is gone for the layers above. Only the base moves the root and gives
@@ -132,6 +136,9 @@ AnimGraph(
   outside the hull, phase-synced like `Blend1D`.
 - **`mode: Inertial`**: the destination plays alone from frame one plus the
   offset from where the source was, decaying over `blend` (`blend` > 0).
+  The renderer stores the offsets once per transition (`PoseCache`, #136),
+  so it costs the destination's clips: cheaper than a crossfade where the
+  tier keeps inertia.
 - **Game code:** `let anim = renderer.push_pose(&inst.pose(&g).with_ik(ik));`
   after `begin_frame`, then `ModelParams { anim: Some(anim), .. }`. The
   renderer folds it to its `Caps::anim_layers` (base N64 1 layer / 3 clips,
@@ -149,6 +156,55 @@ AnimGraph(
   group is loaded (`GraphBlob` is the boot path).
 - `cargo xtask anim simulate` traces each layer (`layer` on segments and
   transitions, `layers` and the pose digest on samples, `inertial` marks).
+
+## The pose cache (issue #136)
+
+Each backend keeps a `render3d::PoseCache` across frames: a layer's
+inertial offsets (`From − To` per joint) and an additive clip's first
+frame, keyed by content (the mesh's clips, the layer, the frozen samples'
+bits; the clip). It is filled on the serial draw path
+(`PoseCache::prepare_growing`, at each draw entry, before shadows, the RSP
+command or the PC's CPU workers) and read through `Mesh::with_pose_cache`
+wherever a mesh is built with `with_poses`. A miss samples as before: the
+pose is bit for bit the same. A new backend draw path: `with_poses(..)
+.with_pose_cache(cache.entries())`, and prepare at its entry; clear the
+cache in `upload_mesh`/unload (an address can be reused). A clip's
+compressed track offsets are decoded once per clip in a pose
+(`Located::of`). Never on the base N64 (its fold leaves no layer or
+inertia to cache).
+`prepare` checks its keys before locating anything: its first version
+located every sample (decoding each clip's tracks) on every draw, hit or
+miss, and the N64 Expansion Pak's layered draw went 1 568 → 1 930 µs (8
+paddings) — the draw locates them again anyway. A cache in front of work
+must cost only its lookup on a hit.
+
+## Layers read as data (Solid Eleven, Plan & Party, #136)
+
+**A graph instance per character doesn't fit a crowd on the N64.** Measured
+in ares: one `AnimGraphInstance::update` of a three-machine graph ~400 µs
+(the runtime decodes the `TANG` blob byte by byte: ~1 000 reads an update),
+`pose()` ~110 µs, an instance 0.8–0.9 KB. Solid Eleven's 22 players took the
+football template from 30.4 to 39.9 ms (gate 33.3) and past the 60 KB stack
+gate. One or two instances (castle64's strider) are fine.
+
+For a crowd, or a game that poses its own rig, read the layers as data:
+`AnimGraph::layer_named("strike")` → `layer(l).mask` (rig joint bits) and
+`layer(l).states` → `state_clip(s)` (a clip state's clip), once (a match, a
+level), and lay the clip over the game's own picking with the game's own
+weights. Bake the graph against a QA rig with the same clips and joints (a
+PC-only model is enough), embed the blob (`anim export`, a test holding it to
+its bake) and map the rig's joints to the game's (a test holding the names).
+Solid Eleven: `render::graph::KickLayers`, `AnimState::pose_with` (a kick's
+`strike` layer over the gait, its `arms` layer only while slow). Plan &
+Party: a `carry` layer pushed with `Renderer::push_pose` over the walk, at the
+walk's clock. Notes:
+
+- A mask counts its model's joints: rigs that differ by a prop joint need a
+  graph each.
+- A layer machine has no seek or sync to the base: a layer that must stay in
+  step with the base's clock is read as data, not run.
+- `GraphBlob` links the parser where it is called: gate it out of a console
+  build that never has the blob.
 
 ## Root motion
 
@@ -184,6 +240,11 @@ pose bit for bit. `Caps::anim_ik` is on for PC/Web/3DS, off for the N64
 the ground casts without a mesh.
 
 ## Editor
+
+The layer mask is picked on the 2D skeleton or **in the 3D preview**
+(issue #136: "In the preview", or `TRINO_EDITOR_ANIM_SELECT=layer:upper,mask3d`):
+dots where the renderer posed each joint, click toggles one, Shift+click its
+subtree (`mask_toggle` keeps `"x/*"` entries as written).
 
 Animation tab › **Graph** (`TRINO_EDITOR_ANIM_GRAPH=strider:speed=1.4`,
 `TRINO_EDITOR_ANIM_SELECT=state:locomotion`): canvas (drag states: `layout`),
@@ -237,3 +298,8 @@ ares, Azahar and the browsers.
   `stats().tris == 0` on the N64.
 - Validate every float a blob feeds to `clamp` or a division at parse: a
   corrupt duration made `f32::clamp` panic (`min > max`) in the fuzz test.
+- **Never keep a float-carrying `Option<ClipSample>` in a hot pose path**
+  (#136): LLVM hoisted `f0 as f32 + k` of an absent blend above its test,
+  and the unset `k` (a denormal) trapped the VR4300 — "Generic floating
+  point exception" in `pose_world`, every padding, after an unrelated change
+  moved the inlining. Use `ClipSample::NONE` and a flag (`Samples`).

@@ -110,6 +110,9 @@ pub struct N3dsRenderer {
     /// This frame's layered poses (`push_pose`, issue #112): cleared at
     /// `begin_frame`, kept across both eyes' replays.
     poses: Vec<trino_core::anim::AnimPose>,
+    /// What layered poses keep across frames (issue #136): inertial
+    /// offsets, additive references. Empty until a pose needs it.
+    pose_cache: trino_core::render3d::PoseCache<Vec<trino_core::render3d::PoseCacheEntry>>,
     /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
     /// changes.
     tnl_ctx: TnlContext,
@@ -228,6 +231,7 @@ impl N3dsRenderer {
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
             poses: Vec::new(),
+            pose_cache: trino_core::render3d::PoseCache::new(Vec::new()),
             // The New 3DS's table when the boot turned its speedup on.
             caps: crate::runtime::hw().caps(),
             water_state: WaterState::NONE,
@@ -270,6 +274,7 @@ impl N3dsRenderer {
         if self.meshes.remove(&id).is_none() {
             return false;
         }
+        self.pose_cache.clear();
         self.gpu_mesh_rejects.remove(&id);
         let now = self.frame_no;
         if let Some((ptr, _)) = self.gpu_meshes.remove(&id) {
@@ -478,6 +483,17 @@ impl N3dsRenderer {
     /// A caster's shadow into the batch: a blob, or its mesh flattened
     /// onto the receiver: by the GPU T&L when the mesh has a copy there and
     /// the shadow lies wholly past the near plane, else by the CPU's.
+    /// Fill the pose cache for a layered draw (issue #136) before its
+    /// shadow or its T&L reads it. Out of line: only layered draws pay.
+    #[inline(never)]
+    #[cfg_attr(target_os = "horizon", optimize(size))]
+    fn prepare_pose(&mut self, model: ModelId, params: &ModelParams) {
+        if let Some((tmdl, layout)) = self.meshes.get(&model.0) {
+            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+            self.pose_cache.prepare_growing(&mesh, params.anim);
+        }
+    }
+
     fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
         if self.shadows.tier() == ShadowTier::None {
             return;
@@ -489,7 +505,9 @@ impl N3dsRenderer {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         let sphere = sh::caster_sphere(mesh.bounds(), matrix);
         let ctx = &self.tnl_ctx;
         match plan {
@@ -771,6 +789,7 @@ impl N3dsRenderer {
         }
         let layout = mesh.layout(&tmdl);
         self.meshes.insert(id, (tmdl, layout));
+        self.pose_cache.clear();
     }
 
     /// **Test hook**: the 3D slider at `slider` (0..=1) in place of the
@@ -1028,6 +1047,7 @@ impl Renderer for N3dsRenderer {
         let was_bottom = self.screen != 0;
         self.screen = 0;
         self.poses.clear();
+        self.pose_cache.begin_frame();
         let had_lights = self.locals.set(&[], 0);
         if was_bottom || had_lights {
             self.rebuild_tnl();
@@ -1189,6 +1209,7 @@ impl Renderer for N3dsRenderer {
         };
         Mesh::from_layout(tmdl, layout)
             .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries())
             .pose_world(Some(*anim), out)
     }
 
@@ -1257,6 +1278,9 @@ impl Renderer for N3dsRenderer {
             return;
         }
         trino_core::zone!("draw");
+        if params.anim.is_some_and(|a| a.pose != 0) {
+            self.prepare_pose(model, params);
+        }
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
         }
@@ -1264,7 +1288,9 @@ impl Renderer for N3dsRenderer {
             self.frame_stats.not_loaded += 1;
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         self.frame_stats.models += 1;
         let plan = match self.gpu_on {
             true => match self.gpu_plan(model, &mesh, matrix, params) {

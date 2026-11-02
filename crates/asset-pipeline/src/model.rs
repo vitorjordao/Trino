@@ -925,6 +925,37 @@ pub fn joint_names(path: &Path, opts: &ModelOptions) -> Result<Vec<String>, Stri
     Ok(load_gltf(path, opts)?.joint_names)
 }
 
+/// The skeleton's joints in TMDL joint order with their parents: what a
+/// layer mask's `"x/*"` (a joint and its subtree) resolves against. Empty
+/// for a model without a skeleton or a fake object.
+pub fn joints(path: &Path, opts: &ModelOptions) -> Result<Vec<trino_scene::anim::Joint>, String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    if name.ends_with(".prim.ron") {
+        return Ok(Vec::new());
+    }
+    let data = load_gltf(path, opts)?;
+    let Some(skel) = data.skeleton.as_ref() else {
+        return Ok(Vec::new());
+    };
+    Ok(data
+        .joint_names
+        .iter()
+        .enumerate()
+        .map(|(j, n)| trino_scene::anim::Joint {
+            name: n.clone(),
+            parent: skel
+                .joints
+                .get(j)
+                .map(|x| x.parent)
+                .filter(|&p| p >= 0 && (p as usize) < j)
+                .map(|p| p as usize),
+        })
+        .collect())
+}
+
 /// Interpolation-aware sample of a keyframed channel at time `t`.
 fn sample_channel<const N: usize>(
     times: &[f32],

@@ -29,7 +29,7 @@ AnimGraph(
     layers: [
         (
             name: "upper",
-            mask: ["torso", "head", "arm_l", "arm_r"],
+            mask: ["torso/*"],
             weight: "aiming",
             states: {
                 "aim": Blend2D(

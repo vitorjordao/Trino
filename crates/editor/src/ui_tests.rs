@@ -2115,7 +2115,51 @@ fn animation_layers_edit_preview_and_write() {
         click(&mut h, "head");
         h.run_steps(2);
         let def = trino_scene::anim::AnimGraphDef::load(file).unwrap();
+        // (The file wrote the upper body as `torso/*`: unticking a joint
+        // under it splits the entry into the joints it held.)
         assert_eq!(def.layers[0].mask, ["torso", "arm_l", "arm_r"]);
+        // The mask picked in the 3D preview (issue #136): a click on the
+        // head's dot ticks it again, a Shift+click on the left thigh adds
+        // its whole leg as one entry.
+        h.state_mut().anim.graph.as_mut().unwrap().mask_in_3d = true;
+        h.run_steps(3);
+        let at = |h: &Harness<'static, App>, j: usize| {
+            h.state().anim.graph.as_ref().unwrap().mask_points[j].expect("the joint is on screen")
+        };
+        let press = |h: &mut Harness<'static, App>, pos: egui::Pos2, shift: bool| {
+            let modifiers = if shift {
+                egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::NONE
+            };
+            h.hover_at(pos);
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                });
+                h.input_mut().modifiers = modifiers;
+                h.run_steps(1);
+            }
+            h.input_mut().modifiers = egui::Modifiers::NONE;
+            h.run_steps(2);
+        };
+        let head = at(&h, 2);
+        press(&mut h, head, false);
+        let def = trino_scene::anim::AnimGraphDef::load(file).unwrap();
+        assert_eq!(def.layers[0].mask, ["torso", "head", "arm_l", "arm_r"]);
+        let thigh = at(&h, 5);
+        press(&mut h, thigh, true);
+        let def = trino_scene::anim::AnimGraphDef::load(file).unwrap();
+        assert_eq!(
+            def.layers[0].mask,
+            ["torso", "head", "arm_l", "arm_r", "thigh_l/*"]
+        );
+        h.state_mut().anim.graph.as_mut().unwrap().mask_in_3d = false;
+        h.run_steps(2);
         // A layer added in the panel is in the file, and shown.
         click(&mut h, "Add a layer");
         h.run_steps(2);

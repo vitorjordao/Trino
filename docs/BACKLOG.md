@@ -313,6 +313,18 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — animation layers follow-ups: stored inertial offsets, mask subtrees, the 3D mask picker, games on layers (2026-11-02, branch `feat/136-anim-followups`, GitHub #136, ADR 0039 › Follow-ups)
+
+| Item | Evidence |
+|---|---|
+| Inertial offsets stored once and additive first frames kept (`render3d::PoseCache`, content-keyed, every backend's draw entry, `Mesh::with_pose_cache`), bit for bit the uncached pose | `render3d.rs::the_pose_cache_stores_offsets_once_and_poses_bit_for_bit` (incl. a poisoned cache proving the mesh reads it); the fuzz target; `ANIM_LAYERS_HASH`/`ANIM_LAYERS_JOINTS` unchanged on the PC (every profile and tier), ares (both tiers), Azahar (New and old), Chromium and Firefox |
+| Cheaper layered sampling: a clip's ANMC track offsets decoded once per pose; the cache's lookups before any locate | `TRINO_LAYER_COST:` N64 Expansion Pak 1 536 µs mean over 8 paddings (1 377–1 769) vs main 1 568 (1 419–1 695); New 3DS 254 → 233 µs, old 3DS 158 → 131 µs |
+| Mask subtrees (`"torso/*"`), resolved against joints and parents; `strider_layers` uses it and bakes the same bytes | `anim_layers.rs::a_subtree_mask_is_a_joint_and_everything_under_it`, `the_picker_toggles_joints_and_subtrees_keeping_what_was_written`; `anim_graph_bake.rs::mask_joints_follow_the_baked_skeleton` |
+| The mask picker in the 3D preview (click, Shift+click a subtree; `TRINO_EDITOR_ANIM_SELECT=…,mask3d`) | kittest `animation_layers_edit_preview_and_write` (clicks the joints' dots; layout audit at both sizes); `target/evidence/anim136/editor_mask3d.png` |
+| Games on layers, read as data: Solid Eleven's kicks (`assets/anim/player.anim.ron`, `KickLayers`, `anim export`), Plan & Party's carrying (its own branch); `AnimGraph::layer_named`, `state_clip` | `render/mod.rs::a_shot_at_a_sprint_keeps_the_runs_arm_swing`, the fit check over every kick on every gait, the match scenarios; the football template: N64 match 29.6 ms (main 30.4), stack 60 952 B (main 60 536, gate 61 440), N64 golden unchanged, 3DS goldens within tolerance |
+
+Not done: the cost on real hardware (#123). Found: `pose_world`'s `Option<ClipSample>` float payload hoisted by LLVM trapped the VR4300 once the inlining moved (fixed with `ClipSample::NONE`); an `AnimGraphInstance` per footballer costs ~400 µs an update on the N64 (the follow-up: a runtime decoding the graph once into tables).
+
 ## Done — animation layers: joint masks, additive layers, 2D blend spaces, inertialized transitions, tiered per platform (2026-10-30, branch `feat/112-anim-layers`, GitHub #112, ADR 0039)
 
 | Item | Evidence |

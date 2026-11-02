@@ -29,6 +29,7 @@ const FLICKER: u32 = 8;
 struct Stage {
     m: Match,
     anims: [AnimState; N + 3],
+    kicks: crate::render::graph::KickLayers,
     prev_officials: [(f32, f32); 3],
     seen: u32,
     log: Vec<Event>,
@@ -51,6 +52,7 @@ impl Stage {
             seen: m.event_seq,
             m,
             anims: [AnimState::new(ClipName::Idle); N + 3],
+            kicks: crate::render::graph::KickLayers::load(),
             prev_officials,
             log: Vec::new(),
             shown: (0..N + 3).map(|_| Vec::new()).collect(),
@@ -75,7 +77,7 @@ impl Stage {
         }
         self.seen = self.m.event_seq;
         for i in 0..N {
-            pick_clip(&self.m, i, DT, &mut self.anims[i]);
+            pick_clip(&self.m, i, DT, &self.kicks, &mut self.anims[i]);
         }
         for k in 0..3 {
             pick_official_clip(
@@ -91,8 +93,8 @@ impl Stage {
             );
         }
         for (i, a) in self.anims.iter().enumerate() {
-            if self.shown[i].last() != Some(&a.clip) {
-                self.shown[i].push(a.clip);
+            if self.shown[i].last() != Some(&a.shown()) {
+                self.shown[i].push(a.shown());
                 self.changes[i].push(self.m.tick);
             }
         }
@@ -140,9 +142,10 @@ impl Stage {
                 } else {
                     crate::render::anim::mask::LIMBS
                 };
-                let pose = a.pose_masked(mask);
+                let pose = a.pose_with(mask, &self.kicks);
                 for b in fit::pose_breaches(full, &pose, a.grounded(), label) {
-                    self.breaches.push(format!("body {i} ({:?}): {b}", a.clip));
+                    self.breaches
+                        .push(format!("body {i} ({:?}): {b}", a.shown()));
                 }
                 self.checked += 1;
             }
@@ -210,7 +213,11 @@ fn over_the_touchline_the_other_side_throws_it_in() {
     assert!(s.until(600, |m| matches!(m.phase, Phase::Ready { .. })));
     s.run(2);
     let taker = s.m.taker as usize;
-    assert_eq!(s.anims[taker].clip, ClipName::Throw, "the thrower's clip");
+    assert_eq!(
+        s.anims[taker].shown(),
+        ClipName::Throw,
+        "the thrower's clip"
+    );
     s.check_poses("throw-in wind-up");
     assert!(
         s.until(60 * 12, |m| m.phase == Phase::Play),
@@ -403,7 +410,7 @@ fn at_a_throw_in_the_thrower_and_the_others_walk_into_place() {
     let gap = (s.m.taker_stance(s.m.restart).0 - from).len().to_f32();
     assert!(gap > 1.0, "the thrower started at the line ({gap:.1} m)");
     assert!(walked + 0.2 >= gap, "walked {walked:.1} m of {gap:.1} m");
-    assert_eq!(s.anims[taker].clip, ClipName::Throw);
+    assert_eq!(s.anims[taker].shown(), ClipName::Throw);
 }
 
 #[test]

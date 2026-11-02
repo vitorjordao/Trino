@@ -1,0 +1,85 @@
+// Solid Eleven's kicks on graph layers (issue #136). The game picks the
+// body's clip itself (`render::pick_clip`: gait, falls, the get-up) and
+// reads this graph's two layers as data (`render::graph::KickLayers`): their
+// masks and the kick each plays. A kick goes over the gait in `strike`
+// (hips, legs, torso, head) and, while the player is slow, in `arms`: a shot
+// taken at a sprint keeps the run's arm swing. The weights are the game's
+// (`AnimState::strike`, eased over a crossfade; the arms' share falls with
+// the speed). The base below is a stand-in for the game's picking, so `anim
+// simulate` and the editor show the layers over a run.
+//
+// No graph instance runs per player: one update costs ~400 µs on the N64,
+// and 22 of them broke the football template's frame gate.
+//
+// Baked against the PC-only QA rig (`models/se_player_rig`: the same clips,
+// joints named `rig_*`) and embedded as `src/render/player.tang`:
+// `cargo xtask anim export player --dir examples/solid-eleven --out
+// examples/solid-eleven/src/render/player.tang` after an edit
+// (`solid_eleven_layers` fails on a stale blob).
+AnimGraph(
+    version: 2,
+    model: "models/se_player_rig",
+    params: {
+        // Ground speed (m/s).
+        "speed": Float(0.0),
+        // A kick: 1 pass, 2 lob, 3 shot, 4 power shot, 5 throw.
+        "kind": Float(0.0),
+        // The kick layers' weights.
+        "strike": Float(0.0),
+        "arms": Float(0.0),
+    },
+    states: {
+        "run": Blend1D(
+            param: "speed",
+            points: [(0.0, "idle"), (1.6, "walk"), (4.6, "jog"), (7.6, "sprint")],
+        ),
+    },
+    transitions: [],
+    layers: [
+        (
+            name: "strike",
+            mask: ["rig_pelvis", "rig_thigh_l/*", "rig_thigh_r/*", "rig_torso", "rig_head"],
+            weight: "strike",
+            start: "rest",
+            states: {
+                "rest": Clip(clip: "pass", speed: 0.0),
+                "pass": Clip(clip: "pass"),
+                "lob": Clip(clip: "lob"),
+                "shot": Clip(clip: "shot"),
+                "power_shot": Clip(clip: "power_shot"),
+                "throw": Clip(clip: "throw"),
+            },
+            transitions: [
+                (from: "*", to: "pass", when: And([Greater("kind", 0.5), Less("kind", 1.5)]), blend: 0.0),
+                (from: "*", to: "lob", when: And([Greater("kind", 1.5), Less("kind", 2.5)]), blend: 0.0),
+                (from: "*", to: "shot", when: And([Greater("kind", 2.5), Less("kind", 3.5)]), blend: 0.0),
+                (from: "*", to: "power_shot", when: And([Greater("kind", 3.5), Less("kind", 4.5)]), blend: 0.0),
+                (from: "*", to: "throw", when: Greater("kind", 4.5), blend: 0.0),
+                // Back to rest once the game has faded the layer out.
+                (from: "*", to: "rest", when: And([Less("kind", 0.5), Less("strike", 0.001)]), blend: 0.0),
+            ],
+        ),
+        (
+            name: "arms",
+            mask: ["rig_arm_l/*", "rig_arm_r/*"],
+            weight: "arms",
+            start: "rest",
+            states: {
+                "rest": Clip(clip: "pass", speed: 0.0),
+                "pass": Clip(clip: "pass"),
+                "lob": Clip(clip: "lob"),
+                "shot": Clip(clip: "shot"),
+                "power_shot": Clip(clip: "power_shot"),
+                "throw": Clip(clip: "throw"),
+            },
+            transitions: [
+                (from: "*", to: "pass", when: And([Greater("kind", 0.5), Less("kind", 1.5)]), blend: 0.0),
+                (from: "*", to: "lob", when: And([Greater("kind", 1.5), Less("kind", 2.5)]), blend: 0.0),
+                (from: "*", to: "shot", when: And([Greater("kind", 2.5), Less("kind", 3.5)]), blend: 0.0),
+                (from: "*", to: "power_shot", when: And([Greater("kind", 3.5), Less("kind", 4.5)]), blend: 0.0),
+                (from: "*", to: "throw", when: Greater("kind", 4.5), blend: 0.0),
+                (from: "*", to: "rest", when: And([Less("kind", 0.5), Less("strike", 0.001)]), blend: 0.0),
+            ],
+        ),
+    ],
+)

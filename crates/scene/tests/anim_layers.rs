@@ -35,13 +35,27 @@ fn clips() -> Vec<ClipFacts> {
     ]
 }
 
-fn joints() -> Vec<String> {
-    [
-        "hips", "torso", "head", "arm_l", "arm_r", "thigh_l", "shin_l", "foot_l", "thigh_r",
-        "shin_r", "foot_r",
-    ]
-    .map(String::from)
-    .to_vec()
+/// The strider's skeleton: hips → torso → head, arms; hips → legs.
+fn joints() -> Vec<anim::Joint> {
+    anim::Joint::list(
+        &[
+            "hips", "torso", "head", "arm_l", "arm_r", "thigh_l", "shin_l", "foot_l", "thigh_r",
+            "shin_r", "foot_r",
+        ],
+        &[
+            None,
+            Some(0),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(0),
+            Some(5),
+            Some(6),
+            Some(0),
+            Some(8),
+            Some(9),
+        ],
+    )
 }
 
 const GRAPH: &str = r#"
@@ -387,6 +401,74 @@ fn check_names_what_is_wrong_in_layers_and_2d_spaces() {
 }
 
 #[test]
+fn a_subtree_mask_is_a_joint_and_everything_under_it() {
+    let j = joints();
+    let m = |v: &[&str]| anim::mask_bits(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>(), &j);
+    // torso/* = torso, head, both arms: the upper body the strider's
+    // graph lists by hand.
+    assert_eq!(m(&["torso/*"]), m(&["torso", "head", "arm_l", "arm_r"]));
+    assert_eq!(m(&["torso/*"]).unwrap(), 0b1_1110);
+    // A leaf's subtree is itself; subtrees and names mix.
+    assert_eq!(m(&["head/*"]), m(&["head"]));
+    assert_eq!(
+        m(&["thigh_l/*", "arm_r"]).unwrap(),
+        1 << 5 | 1 << 6 | 1 << 7 | 1 << 4
+    );
+    assert_eq!(m(&["hips/*"]).unwrap(), (1 << 11) - 1);
+    // Unknown roots and other wildcards are errors that say so.
+    let e = m(&["neck/*"]).unwrap_err();
+    assert!(e.contains("no joint `neck`"), "{e}");
+    for bad in ["*", "torso/**", "to*so", "/*"] {
+        let e = m(&[bad]).unwrap_err();
+        assert!(e.contains("`<joint>/*`"), "{bad}: {e}");
+    }
+    // In a graph: the file keeps `torso/*` as written, and bakes the
+    // bits of the four joints.
+    let text = GRAPH.replace(
+        "mask: [\"torso\", \"head\", \"arm_l\", \"arm_r\"]",
+        "mask: [\"torso/*\"]",
+    );
+    assert_ne!(text, GRAPH, "the fixture lists the upper body by hand");
+    let def = AnimGraphDef::from_ron(&text).unwrap();
+    assert!(def.to_ron().contains("\"torso/*\""));
+    assert_eq!(AnimGraphDef::from_ron(&def.to_ron()).unwrap(), def);
+    let by_hand = AnimGraphDef::from_ron(GRAPH).unwrap();
+    assert_eq!(
+        anim::to_tang_with(&def, &clips(), Some(&j), &|_| true).unwrap(),
+        anim::to_tang_with(&by_hand, &clips(), Some(&j), &|_| true).unwrap()
+    );
+}
+
+#[test]
+fn the_picker_toggles_joints_and_subtrees_keeping_what_was_written() {
+    let j = joints();
+    let mut mask: Vec<String> = Vec::new();
+    // From every joint, a subtree off: the rest by name.
+    anim::mask_toggle(&mut mask, &j, 1, true);
+    assert_eq!(
+        mask,
+        [
+            "hips", "thigh_l", "shin_l", "foot_l", "thigh_r", "shin_r", "foot_r"
+        ]
+    );
+    // Back on: every joint again (an empty mask).
+    anim::mask_toggle(&mut mask, &j, 1, true);
+    assert!(mask.is_empty(), "{mask:?}");
+    // A subtree on, then one of its joints off: the entry splits.
+    let mut mask = vec!["torso/*".to_string()];
+    anim::mask_toggle(&mut mask, &j, 2, false);
+    assert_eq!(mask, ["torso", "arm_l", "arm_r"]);
+    // A joint on, then its subtree on: one entry.
+    anim::mask_toggle(&mut mask, &j, 1, true);
+    assert_eq!(mask, ["torso/*"]);
+    // A single joint on beside it, then off again.
+    anim::mask_toggle(&mut mask, &j, 5, false);
+    assert_eq!(mask, ["torso/*", "thigh_l"]);
+    anim::mask_toggle(&mut mask, &j, 5, false);
+    assert_eq!(mask, ["torso/*"]);
+}
+
+#[test]
 fn the_triangulation_is_delaunay_and_drops_crossings() {
     let pts = |v: &[(f32, f32)]| -> Vec<(f32, f32, String)> {
         v.iter().map(|(x, y)| (*x, *y, "c".to_string())).collect()
@@ -494,4 +576,22 @@ fn the_v1_fixture_still_loads_and_plays() {
         assert_eq!(i.pose(&g).to_ref().clip, i.anim(&g).clip);
     }
     assert_eq!(i.layer_count(), 0);
+}
+
+/// A game reading a layer as data (issue #136: Solid Eleven's kicks, Plan &
+/// Party's carrying) finds it by name and the clips its states play.
+#[test]
+fn a_layer_and_its_clips_are_found_by_name() {
+    let (_, tang) = graph();
+    let g = AnimGraph::parse(&tang).unwrap();
+    let up = g.layer_named("upper").expect("the upper layer");
+    let breath = g.layer_named("breath").expect("the breath layer");
+    assert_ne!(up, breath);
+    assert!(g.layer_named("nope").is_none());
+    let (lo, hi) = g.layer(breath).states;
+    let clips: Vec<_> = (lo..hi).filter_map(|s| g.state_clip(s)).collect();
+    assert_eq!(clips, [trino_core::ClipId::from_name("breathe")]);
+    // A blend space has no single clip; past the states, none.
+    assert!((0..g.state_count()).any(|s| g.state_clip(s).is_none()));
+    assert!(g.state_clip(g.state_count()).is_none());
 }

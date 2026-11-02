@@ -435,7 +435,8 @@ impl<'de> Deserialize<'de> for WeightDef {
 #[serde(deny_unknown_fields)]
 pub struct LayerDef {
     pub name: String,
-    /// The joints it moves, by name (the model's glTF nodes); empty: all.
+    /// The joints it moves, by name (the model's glTF nodes); `"torso/*"`
+    /// is a joint and every joint under it (issue #136); empty: all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mask: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -779,12 +780,34 @@ pub fn check(
     check_with(def, clips, None, sound)
 }
 
-/// [`check`] knowing the model's joint names (`joints`, glTF node order):
-/// layer masks are checked against them.
+/// A model's joint as layer masks see it: its glTF node name and its
+/// parent (an earlier joint: TMDL order, parents first).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Joint {
+    pub name: String,
+    pub parent: Option<usize>,
+}
+
+impl Joint {
+    /// Joints from names and parents (`parents[j]`, `None` for a root).
+    pub fn list(names: &[&str], parents: &[Option<usize>]) -> Vec<Joint> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(j, n)| Joint {
+                name: n.to_string(),
+                parent: parents.get(j).copied().flatten().filter(|&p| p < j),
+            })
+            .collect()
+    }
+}
+
+/// [`check`] knowing the model's joints (`joints`, TMDL order): layer
+/// masks are checked against them.
 pub fn check_with(
     def: &AnimGraphDef,
     clips: Option<&[ClipFacts]>,
-    joints: Option<&[String]>,
+    joints: Option<&[Joint]>,
     sound: &dyn Fn(&str) -> bool,
 ) -> Vec<Issue> {
     let mut out = Vec::new();
@@ -900,25 +923,122 @@ pub fn check_with(
     out
 }
 
-/// A layer mask's bits from joint names (empty: every joint).
-pub fn mask_bits(names: &[String], joints: &[String]) -> Result<u32, String> {
+/// A layer mask's bits from joint names (empty: every joint); `"x/*"` is
+/// joint `x` and everything under it.
+pub fn mask_bits(names: &[String], joints: &[Joint]) -> Result<u32, String> {
     if names.is_empty() {
         return Ok(u32::MAX);
     }
     let mut bits = 0u32;
     for n in names {
-        match joints.iter().position(|j| j == n) {
-            Some(i) if i < 32 => bits |= 1 << i,
-            Some(_) => return Err(format!("mask: joint `{n}` is past the 32 a mask holds")),
-            None => {
-                return Err(format!(
-                    "mask: no joint `{n}` in the model (joints: {})",
-                    joints.join(", ")
-                ));
+        bits |= entry_bits(n, joints)?;
+    }
+    Ok(bits)
+}
+
+/// One mask entry's bits: a joint, or (`"x/*"`) a joint and its subtree.
+fn entry_bits(entry: &str, joints: &[Joint]) -> Result<u32, String> {
+    let (name, subtree) = match entry.strip_suffix("/*") {
+        Some(root) => (root, true),
+        None => (entry, false),
+    };
+    if name.is_empty() || name.contains('*') {
+        return Err(format!(
+            "mask: `{entry}` is not a joint name or `<joint>/*` (a joint and every joint under it)"
+        ));
+    }
+    let Some(root) = joints.iter().position(|j| j.name == name) else {
+        let names: Vec<&str> = joints.iter().map(|j| j.name.as_str()).collect();
+        return Err(format!(
+            "mask: no joint `{name}` in the model (joints: {})",
+            names.join(", ")
+        ));
+    };
+    let mut set = vec![false; joints.len()];
+    set[root] = true;
+    if subtree {
+        // Parents come first: one pass finds every descendant.
+        for j in root + 1..joints.len() {
+            if let Some(p) = joints[j].parent
+                && p < j
+                && set[p]
+            {
+                set[j] = true;
             }
         }
     }
+    let mut bits = 0u32;
+    for (j, _) in set.iter().enumerate().filter(|(_, on)| **on) {
+        if j >= 32 {
+            return Err(format!(
+                "mask: joint `{}` (in `{entry}`) is past the 32 a mask holds",
+                joints[j].name
+            ));
+        }
+        bits |= 1 << j;
+    }
     Ok(bits)
+}
+
+/// Turn joint `j` on or off in a layer mask as the editor's picker does,
+/// keeping the entries as written where it can: `subtree` toggles `"x/*"`
+/// (the joint and everything under it). A joint covered only by a subtree
+/// entry it is turned off from splits that entry into the joints it held.
+/// An empty mask (every joint) becomes explicit first; a mask that comes
+/// to cover every joint becomes empty again.
+pub fn mask_toggle(mask: &mut Vec<String>, joints: &[Joint], j: usize, subtree: bool) {
+    let Some(name) = joints.get(j).map(|x| x.name.clone()) else {
+        return;
+    };
+    let n = joints.len().min(32);
+    let full = if n == 32 { u32::MAX } else { (1u32 << n) - 1 };
+    let bits = |m: &[String]| mask_bits(m, joints).unwrap_or(0) & full;
+    if mask.is_empty() {
+        *mask = joints.iter().take(32).map(|x| x.name.clone()).collect();
+    }
+    let target = if subtree {
+        entry_bits(&format!("{name}/*"), joints).unwrap_or(0)
+    } else {
+        1 << j.min(31)
+    };
+    let on = bits(mask) & target == target;
+    if on {
+        // Off: drop entries inside the target, split those that cover it.
+        let mut out = Vec::new();
+        for e in mask.iter() {
+            let eb = entry_bits(e, joints).unwrap_or(0);
+            if eb & !target == 0 {
+                continue;
+            }
+            if eb & target == 0 {
+                out.push(e.clone());
+                continue;
+            }
+            for (k, x) in joints.iter().enumerate().take(32) {
+                if eb & !target & (1 << k) != 0 {
+                    out.push(x.name.clone());
+                }
+            }
+        }
+        out.dedup();
+        *mask = out;
+    } else {
+        mask.retain(|e| entry_bits(e, joints).is_ok_and(|eb| eb & !target != 0));
+        mask.push(if subtree { format!("{name}/*") } else { name });
+    }
+    // Joint order (subtree entries at their root), as the file reads best.
+    let key = |e: &String| {
+        let root = e.strip_suffix("/*").unwrap_or(e);
+        joints
+            .iter()
+            .position(|x| x.name == root)
+            .unwrap_or(usize::MAX)
+    };
+    mask.sort_by_key(key);
+    mask.dedup();
+    if bits(mask) == full {
+        mask.clear();
+    }
 }
 
 /// One machine's states and transitions (`check_with`).
@@ -1284,7 +1404,7 @@ pub fn to_tang(
 pub fn to_tang_with(
     def: &AnimGraphDef,
     clips: &[ClipFacts],
-    joints: Option<&[String]>,
+    joints: Option<&[Joint]>,
     sound: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<u8>, String> {
     let errors: Vec<String> = check_with(def, Some(clips), joints, sound)

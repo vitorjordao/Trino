@@ -109,6 +109,9 @@ pub mod mask {
         | 1 << THIGH_L
         | 1 << THIGH_R;
     pub const NO_ARMS: u16 = 1 << PELVIS | 1 << TORSO | 1 << HEAD | 1 << THIGH_L | 1 << THIGH_R;
+    /// The shins: a body with them stands on bent knees (the root's
+    /// height follows).
+    pub const SHINS: u16 = 1 << SHIN_L | 1 << SHIN_R;
 }
 
 /// The left-right partner of each joint.
@@ -322,6 +325,15 @@ pub struct AnimState {
     /// A smoothed speed (m/s), for bodies whose speed is measured from
     /// their positions (the officials).
     pub speed: f32,
+    /// A kick played in the graph's strike layers over the clip (issue
+    /// #136, [`super::graph::KickLayers`]): its clip; the layers' weight in
+    /// 1/127 (eased in and out over [`FADE`]) with bit 7 set while the
+    /// sim's kick is on; its time in 1/4096 s. Packed small: the match
+    /// keeps 25 of these on the N64's stack ([`AnimState::strike`],
+    /// [`AnimState::kick_time`]).
+    pub kick: ClipName,
+    pub kick_q: u8,
+    pub kick_t: u16,
 }
 
 /// Crossfade length.
@@ -342,6 +354,9 @@ impl AnimState {
             fade: 0.0,
             fade_len: FADE,
             speed: 0.0,
+            kick: ClipName::Pass,
+            kick_q: 0,
+            kick_t: 0,
         }
     }
 
@@ -388,7 +403,54 @@ impl AnimState {
 
     /// The current clip keeps the body on the turf ([`plant`]).
     pub fn grounded(&self) -> bool {
-        clip(self.clip).grounded
+        clip(self.shown()).grounded
+    }
+
+    /// The clip the body shows most: a kick over half in, else the clip.
+    pub fn shown(&self) -> ClipName {
+        if self.strike() >= 0.5 {
+            self.kick
+        } else {
+            self.clip
+        }
+    }
+
+    /// The kick layers' weight, 0..1.
+    pub fn strike(&self) -> f32 {
+        (self.kick_q & 0x7f) as f32 / 127.0
+    }
+
+    pub fn set_strike(&mut self, w: f32) {
+        let q = (w.clamp(0.0, 1.0) * 127.0 + 0.5) as u8;
+        self.kick_q = (self.kick_q & 0x80) | q.min(127);
+    }
+
+    /// Whether the sim's kick is on.
+    pub fn kicking(&self) -> bool {
+        self.kick_q & 0x80 != 0
+    }
+
+    pub fn set_kicking(&mut self, on: bool) {
+        self.kick_q = (self.kick_q & 0x7f) | if on { 0x80 } else { 0 };
+    }
+
+    /// Seconds into the kick.
+    pub fn kick_time(&self) -> f32 {
+        self.kick_t as f32 / 4096.0
+    }
+
+    pub fn set_kick_time(&mut self, t: f32) {
+        self.kick_t = (t.clamp(0.0, 15.9) * 4096.0 + 0.5) as u16;
+    }
+
+    /// [`AnimState::pose_masked`] with the kick laid over it by the graph's
+    /// strike layers (their joints, weights from [`AnimState::strike`]).
+    pub fn pose_with(&self, mask: u16, kicks: &super::graph::KickLayers) -> Pose {
+        let mut pose = self.pose_masked(mask);
+        if self.kick_q & 0x7f != 0 {
+            kicks.overlay(&mut pose, self, mask);
+        }
+        pose
     }
 
     /// The pose of the joints in `mask` (see [`mask`]).

@@ -143,3 +143,46 @@ fn the_pose_tables_match_the_clip_source() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The players' kick layers (issue #136): `src/render/player.tang` is what
+/// `assets/anim/player.anim.ron` bakes against the QA rig, the rig's joints
+/// are the ones `render::graph::RIG_JOINTS` maps (the masks count rig
+/// joints), and the game reads the layers it expects.
+#[test]
+fn the_players_graph_is_its_bake_and_the_rig_joints_match() {
+    use solid_eleven::render::anim::joint;
+    use solid_eleven::render::graph::{KickLayers, RIG_JOINTS};
+    use trino_asset_pipeline::{Manifest, Platform, anim_graph};
+    let root = game();
+    let manifest = Manifest::load(&root.join("assets/manifest.toml")).unwrap();
+    let def =
+        trino_scene::anim::AnimGraphDef::load(&root.join("assets/anim/player.anim.ron")).unwrap();
+    let baked = anim_graph::bake(&root, &manifest, Platform::Pc, &def)
+        .unwrap()
+        .expect("the rig bakes on the PC");
+    let committed = std::fs::read(root.join("src/render/player.tang")).unwrap();
+    assert!(
+        baked == committed,
+        "src/render/player.tang is stale: cargo xtask anim export player --dir examples/solid-eleven --out examples/solid-eleven/src/render/player.tang"
+    );
+    let joints = anim_graph::model_joints(&root, &manifest, Platform::Pc, "models/se_player_rig")
+        .unwrap()
+        .unwrap();
+    let names: Vec<&str> = joints.iter().map(|j| j.name.as_str()).collect();
+    let mapped: Vec<&str> = RIG_JOINTS.iter().map(|(n, _)| *n).collect();
+    assert_eq!(names, mapped);
+    let mut game: Vec<usize> = RIG_JOINTS.iter().map(|(_, j)| *j).collect();
+    game.sort();
+    assert_eq!(game, (0..joints.len()).collect::<Vec<_>>());
+    let bit = |j: usize| 1u16 << j;
+    let arms =
+        bit(joint::ARM_L) | bit(joint::ARM_R) | bit(joint::FOREARM_L) | bit(joint::FOREARM_R);
+    assert_eq!(
+        KickLayers::load(),
+        KickLayers {
+            strike: !arms & ((1 << joints.len()) - 1),
+            arms,
+            clips: 0b1_1111,
+        }
+    );
+}

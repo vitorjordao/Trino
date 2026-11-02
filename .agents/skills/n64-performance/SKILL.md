@@ -570,6 +570,25 @@ hull check: 30.9 ms over four code layouts, all 83 draws on the RSP). What got i
 - What paid: far players (beyond 24 m) drop their arms and blob shadow (83 → 68 draws,
   30.7 → 27.4 ms). Moving the threshold to 22 m gained nothing more.
 
+## Animation graphs and layers (2026-11-02, #136)
+
+- **Measure a game's own code in a project's self-test with a probe:** a
+  project ROM has no perf scenes, so `--prof sample` prints nothing for it.
+  Time sections with `trino_platform_n64::runtime::now_us()` in the
+  scaffolded project's `n64/src/lib.rs` (`TRINO_SE_ANIM_PROBE`-style line),
+  run `test n64 --project`, then re-scaffold to drop it.
+- **Graph runtime cost:** `AnimGraphInstance::update` ~400 µs for a
+  three-machine graph (~26 transitions), `pose()` ~110 µs: decoding `TANG`
+  byte by byte, ~1 000 reads. Fine for a hero, not for 22 footballers (+11
+  ms): read layers as data instead (the `animation` skill).
+- **Layered draw (strider, Expansion Pak):** 1 536 µs mean over 8 paddings
+  with the pose cache vs main's 1 568 — within noise; the Pak's fold drops the
+  inertia and the additive layer the cache stores. A version whose `prepare`
+  located every sample before its key lookup cost 1 930 µs.
+- **The football template's stack sits at 60 536 B of the 61 440 B gate** on
+  main: anything the match session holds by value (it's built and moved on
+  the stack) has ~0.9 KB of room.
+
 ## The river at 1.2 ms (2026-10-18, #69 part 2)
 
 How the last 9 ms came off `micro-river`, and what the tools could and couldn't see:

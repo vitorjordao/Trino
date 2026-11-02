@@ -72,6 +72,9 @@ pub struct N64Renderer {
     /// `begin_frame`, empty on the base console (its tier folds every pose
     /// into an `AnimRef`).
     poses: Vec<trino_core::anim::AnimPose>,
+    /// What layered poses keep across frames (issue #136): inertial
+    /// offsets, additive references. Never allocated on the base console.
+    pose_cache: trino_core::render3d::PoseCache<Vec<trino_core::render3d::PoseCacheEntry>>,
     /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
     /// changes.
     tnl_ctx: TnlContext,
@@ -451,6 +454,7 @@ impl N64Renderer {
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
             poses: Vec::new(),
+            pose_cache: trino_core::render3d::PoseCache::new(Vec::new()),
             // The Expansion Pak's table when the boot found one (issue #54).
             caps: crate::hw::caps_of_memory(crate::runtime::memory_size()),
             profile: None,
@@ -580,6 +584,18 @@ impl N64Renderer {
     /// A caster's shadow into the batch: a blob (queued, built at the
     /// flush), or (up to the planar budget, `Caps::max_planar_shadows`) its
     /// mesh flattened onto the receiver by the CPU T&L.
+    /// Fill the pose cache for a layered draw (issue #136) before its
+    /// shadow, its RSP command or its CPU T&L reads it. Out of line: only
+    /// layered draws pay for it.
+    #[inline(never)]
+    #[cfg_attr(target_os = "none", optimize(size))]
+    fn prepare_pose(&mut self, model: ModelId, params: &ModelParams) {
+        if let Some((tmdl, layout)) = self.meshes.get(&model.0) {
+            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+            self.pose_cache.prepare_growing(&mesh, params.anim);
+        }
+    }
+
     fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
         if self.shadows.tier() == ShadowTier::None {
             return;
@@ -601,7 +617,9 @@ impl N64Renderer {
             return;
         }
         let t0 = self.tick();
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         let ctx = &self.tnl_ctx;
         if let Some(d) = self.shadows.planar(ctx, sphere.0, matrix, params) {
             let before = self.pending_shadow.len();
@@ -969,6 +987,7 @@ impl N64Renderer {
             self.rsp_rigid.insert(id, Rc::new(rigid_copy(&mesh)));
         }
         self.meshes.insert(id, (tmdl, layout));
+        self.pose_cache.clear();
         self.memo_gen = self.memo_gen.wrapping_add(1);
         true
     }
@@ -1206,6 +1225,7 @@ impl N64Renderer {
         let Some(_) = self.meshes.remove(&id) else {
             return false;
         };
+        self.pose_cache.clear();
         self.memo_gen = self.memo_gen.wrapping_add(1);
         let now = self.water_frame_no;
         if let Some(m) = self.rsp_meshes.remove(&id) {
@@ -1497,6 +1517,7 @@ impl Renderer for N64Renderer {
             self.bury();
         }
         self.poses.clear();
+        self.pose_cache.begin_frame();
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
@@ -1581,6 +1602,7 @@ impl Renderer for N64Renderer {
         };
         Mesh::from_layout(tmdl, layout)
             .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries())
             .pose_world(Some(*anim), out)
     }
 
@@ -1637,6 +1659,9 @@ impl Renderer for N64Renderer {
         if params.water.is_some() {
             self.draw_water(model, matrix, params);
             return;
+        }
+        if params.anim.is_some_and(|a| a.pose != 0) {
+            self.prepare_pose(model, params);
         }
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
@@ -1745,7 +1770,9 @@ impl Renderer for N64Renderer {
             self.frame_stats.not_loaded += 1;
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         self.frame_stats.models += 1;
         // `view · model` once: the eligibility test and the command share it.
         let eligible_zone = trino_core::trace::Zone::begin("eligible");
@@ -2138,7 +2165,14 @@ impl N64Renderer {
         // SAFETY: the pose table only changes in `push_pose` and
         // `begin_frame`, which a draw never calls.
         let poses: &[trino_core::anim::AnimPose] = unsafe { &*(self.poses.as_slice() as *const _) };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(poses);
+        // SAFETY: the pose cache only changes in `prepare_pose`,
+        // `begin_frame` and mesh uploads, which a draw never calls past
+        // this point.
+        let cache: &[trino_core::render3d::PoseCacheEntry] =
+            unsafe { &*(self.pose_cache.entries() as *const _) };
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(poses)
+            .with_pose_cache(cache);
         let t0 = self.tick();
         // The pose and the parts in scratch the renderer keeps (5 KB a draw
         // to initialize on the stack otherwise).

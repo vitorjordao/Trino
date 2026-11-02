@@ -114,6 +114,14 @@ pub struct GraphEdit {
     /// (the mask picker's skeleton): set by the Animation tab.
     pub joints: Vec<String>,
     pub rest: Vec<(trino_core::Vec3, Option<usize>)>,
+    /// The mask is picked in the 3D preview (issue #136) instead of on the
+    /// 2D skeleton; the preview's click lands in `mask_pick` (joint,
+    /// subtree).
+    pub mask_in_3d: bool,
+    pub mask_pick: Option<(usize, bool)>,
+    /// Where the preview drew each joint last frame (panel points; `None`
+    /// behind the camera): tests and hooks click them.
+    pub mask_points: Vec<Option<egui::Pos2>>,
     /// The 2D blend space editor's dragged point.
     drag2d: Option<usize>,
     /// The fold report of the previewed tier.
@@ -151,6 +159,9 @@ impl GraphEdit {
             layer: 0,
             joints: Vec::new(),
             rest: Vec::new(),
+            mask_in_3d: false,
+            mask_pick: None,
+            mask_points: Vec::new(),
             drag2d: None,
             folds: Vec::new(),
             cond_text: String::new(),
@@ -219,6 +230,19 @@ impl GraphEdit {
         }
     }
 
+    /// The model's joints as masks resolve them (names and parents, from
+    /// the rest skeleton).
+    pub fn joint_list(&self) -> Vec<sa::Joint> {
+        self.joints
+            .iter()
+            .enumerate()
+            .map(|(j, n)| sa::Joint {
+                name: n.clone(),
+                parent: self.rest.get(j).and_then(|r| r.1).filter(|&p| p < j),
+            })
+            .collect()
+    }
+
     /// Check and bake against the model's clips; a new instance keeps the
     /// parameters it can.
     pub fn rebake(&mut self, clips: Option<&[ClipFacts]>, sounds: &[String], generation: u64) {
@@ -228,7 +252,8 @@ impl GraphEdit {
         self.dirty = false;
         self.baked_for = Some(generation);
         let has = |s: &str| sounds.iter().any(|x| x == &format!("sounds/{s}"));
-        let joints = (!self.joints.is_empty()).then_some(self.joints.as_slice());
+        let list = self.joint_list();
+        let joints = (!list.is_empty()).then_some(list.as_slice());
         self.issues = sa::check_with(&self.def, clips, joints, &has);
         let old = self.inst.take().zip(self.tang.take());
         self.tang = clips.and_then(|c| sa::to_tang_with(&self.def, c, joints, &has).ok());
@@ -1152,45 +1177,53 @@ fn layers_ui(ui: &mut egui::Ui, g: &mut GraphEdit, clips: &[String]) -> bool {
                     .color(c::TEXT_FAINT),
             );
         } else {
+            let list = g.joint_list();
             let mask = g.def.layers[li].mask.clone();
             let all = mask.is_empty();
+            let bits = sa::mask_bits(&mask, &list).unwrap_or(0);
             ui.label(
                 RichText::new(if all {
-                    "Mask: every joint (click joints to pick some)".to_string()
+                    "Mask: every joint (click joints to pick some; Shift: a joint and all under it)"
+                        .to_string()
                 } else {
-                    format!("Mask: {} of {} joints", mask.len(), joints.len())
+                    format!(
+                        "Mask: {} of {} joints ({})",
+                        bits.count_ones().min(joints.len() as u32),
+                        joints.len(),
+                        mask.join(", ")
+                    )
                 })
                 .color(c::TEXT_WEAK),
             );
-            if let Some(j) = mask_view(ui, &g.rest, &joints, &mask) {
-                let l = &mut g.def.layers[li];
-                let n = joints[j].clone();
-                match l.mask.iter().position(|x| *x == n) {
-                    Some(k) => {
-                        l.mask.remove(k);
-                    }
-                    None => l.mask.push(n),
-                }
-                // Joint order, as the file reads best.
-                l.mask.sort_by_key(|n| joints.iter().position(|j| j == n));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut g.mask_in_3d, false, "Skeleton")
+                    .on_hover_text("The rest skeleton seen from the front");
+                ui.selectable_value(&mut g.mask_in_3d, true, "In the preview")
+                    .on_hover_text(
+                        "Click joints on the model in the 3D preview (Shift: a subtree)",
+                    );
+            });
+            let picked = if g.mask_in_3d {
+                ui.label(
+                    RichText::new(
+                        "Click a joint in the preview to toggle it; Shift+click toggles it and every joint under it.",
+                    )
+                    .size(11.0)
+                    .color(c::TEXT_FAINT),
+                );
+                g.mask_pick.take()
+            } else {
+                mask_view(ui, &g.rest, &joints, bits)
+            };
+            if let Some((j, subtree)) = picked {
+                sa::mask_toggle(&mut g.def.layers[li].mask, &list, j, subtree);
                 changed = true;
             }
             ui.horizontal_wrapped(|ui| {
-                for n in &joints {
-                    let mut on = all || mask.contains(n);
+                for (j, n) in joints.iter().enumerate() {
+                    let mut on = j < 32 && bits & (1 << j) != 0;
                     if ui.checkbox(&mut on, n.as_str()).changed() {
-                        let l = &mut g.def.layers[li];
-                        if all {
-                            l.mask = joints.iter().filter(|j| *j != n).cloned().collect();
-                        } else if on {
-                            l.mask.push(n.clone());
-                            l.mask.sort_by_key(|x| joints.iter().position(|j| j == x));
-                        } else {
-                            l.mask.retain(|x| x != n);
-                        }
-                        if l.mask.len() == joints.len() {
-                            l.mask.clear();
-                        }
+                        sa::mask_toggle(&mut g.def.layers[li].mask, &list, j, false);
                         changed = true;
                     }
                 }
@@ -1219,8 +1252,8 @@ fn mask_view(
     ui: &mut egui::Ui,
     rest: &[(trino_core::Vec3, Option<usize>)],
     joints: &[String],
-    mask: &[String],
-) -> Option<usize> {
+    bits: u32,
+) -> Option<(usize, bool)> {
     let w = (ui.available_width() - 4.0).max(80.0);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 150.0), Sense::click());
     let p = ui.painter_at(rect);
@@ -1242,7 +1275,7 @@ fn mask_view(
     let c0 = (lo + hi) * 0.5;
     // Front view: the model faces +Z, its left (+X) on the screen's right.
     let at = |v: trino_core::Vec3| Pos2::new(mid.x + (v.x - c0.x) * kx, mid.y - (v.y - c0.y) * ky);
-    let on = |j: usize| mask.is_empty() || joints.get(j).is_some_and(|n| mask.contains(n));
+    let on = |j: usize| j < 32 && bits & (1 << j) != 0;
     for (j, (v, parent)) in rest.iter().enumerate() {
         if let Some(pj) = parent {
             p.line_segment([at(*v), at(rest[*pj].0)], (1.5, c::BORDER));
@@ -1273,7 +1306,7 @@ fn mask_view(
             && let Some(pt) = pointer
             && (pt - q).length() < 8.0
         {
-            clicked = Some(j);
+            clicked = Some((j, ui.input(|i| i.modifiers.shift)));
         }
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Layer mask"));
@@ -1969,6 +2002,11 @@ pub fn select_spec(g: &mut GraphEdit, spec: &str) {
         for part in spec.split(',') {
             select_spec(g, part.trim());
         }
+        return;
+    }
+    // The mask picked in the 3D preview (issue #136).
+    if spec == "mask3d" {
+        g.mask_in_3d = true;
         return;
     }
     if let Some(n) = spec.strip_prefix("layer:") {

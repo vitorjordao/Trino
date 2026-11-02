@@ -969,6 +969,16 @@ since #122.
   - **Found on the way:** every `Ui<N>` size duplicated the UI code (60–110 KB on the N64):
     `Ui<N>` now derefs to one `UiCore<[SlotData]>`; the N64 ROM is 38 KB smaller than
     before #112.
+  - **Follow-ups (2026-11-02, GitHub #136, ADR 0039 › Follow-ups):**
+    - `render3d::PoseCache` stores an inertial transition's per-joint offsets and additive
+      clips' first frames once, across frames (content-keyed, filled at each backend's draw
+      entry, read through `Mesh::with_pose_cache`; bit for bit the uncached pose). A clip's
+      compressed track offsets decode once per pose.
+    - Masks take subtrees (`"torso/*"`); the editor picks masks in the 3D preview too.
+    - Solid Eleven's kicks are graph layers read as data (`assets/anim/player.anim.ron`,
+      `KickLayers`, `AnimGraph::layer_named`/`state_clip`): a shot at a sprint keeps the
+      run's arm swing; embedded with `cargo xtask anim export`. A graph instance per
+      character is too heavy for a crowd on the N64 (~400 µs an update).
 
 - **Physics 2.0 (2026-10-25, ADR 0035, GitHub #66):** `trino_core::physics`, core-only
   and the same bits on every target.
@@ -1323,6 +1333,7 @@ cargo xtask model pose <models/x> [--clip C --time S] --name <new>              
 cargo xtask anim list|check [name] [--platform p] [--json]          # animation graphs: names, kinds, clips, events, reachability (issue #65)
 cargo xtask anim simulate <name> --script s.ron [--out trace.json] [--json]   # a script of parameter changes through the runtime: states, events, root motion
 cargo xtask anim new <name> --model models/x                       # a starter graph, one state per clip
+cargo xtask anim export <name> --out x.tang [--dir <project>]     # a graph's baked TANG for a game that embeds it (Solid Eleven, #136)
 cargo xtask model inspect models/x --anim --compressed [--json]    # + root motion, events, ANMC bytes and errors per clip
 cargo xtask particles new <name> --sprite sprites/x | check | inspect <name> [--json]   # particle effects as text
 cargo xtask impostor new <name> --model models/x [--views N --pitch DEG --tile PX]   # pre-render a billboard atlas
@@ -1926,6 +1937,19 @@ cargo test --workspace
   after `begin_frame`, never keep the `AnimRef` across frames, and build every mesh a draw
   path poses with `Mesh::with_poses(&self.poses)`, or that path silently draws the folded
   clips (`Renderer::pose_joints` shows what a backend poses).
+- **Never keep a float-carrying `Option` payload in a hot pose path on the N64** (#136):
+  `pose_world`'s `Option<ClipSample>` blend was fine until an unrelated change moved the
+  inlining; LLVM then hoisted `f0 as f32 + k` above the `is_some` test, the unset `k` was
+  a denormal and the VR4300 trapped ("Generic floating point exception" in ares, every
+  padding). Keep `ClipSample::NONE` plus a flag.
+- **An `AnimGraphInstance` is not a crowd tool on the N64** (#136): one update of a
+  three-machine graph costs ~400 µs (the runtime decodes the blob byte by byte) and an
+  instance is 0.8–0.9 KB; 22 football players broke the template's frame and stack gates.
+  Read the layers as data (`layer_named`, `state_clip`, the mask) and lay them over the
+  game's own picking, as Solid Eleven and Plan & Party do.
+- **A new draw path that poses a mesh reads the pose cache too** (#136): build it with
+  `.with_poses(..).with_pose_cache(cache.entries())` and call `prepare_growing` at the
+  draw's entry (a miss only costs time: the pose is the same).
 - **A grouped model's animation graph is grouped too on the consoles** (#112): `platform.blob`
   misses it; read it with `platform.group_blob` once the group is loaded.
 - **Measure the N64 ROM's text against main for any core feature:** #112's first build

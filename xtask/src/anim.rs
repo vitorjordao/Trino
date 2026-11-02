@@ -25,10 +25,13 @@ const USAGE: &str = "xtask: usage:
   cargo xtask anim list [--json]
   cargo xtask anim check [name..] [--platform pc|n64|3ds|web] [--json]
   cargo xtask anim simulate <name> --script <file.ron> [--out trace.json] [--sample N] [--platform p] [--json]
-  cargo xtask anim new <name> --model models/x";
+  cargo xtask anim new <name> --model models/x
+  cargo xtask anim export <name> --out <file.tang> [--platform p]   # the baked blob, for a game that embeds it
+  (every command takes --dir <project> for another project's assets/)";
 
 pub fn run(root: &Path, args: &[&str]) -> ExitCode {
     let json = args.contains(&"--json");
+    let mut dir: Option<std::path::PathBuf> = None;
     let mut names = Vec::new();
     let mut platform = None;
     let mut script = None;
@@ -44,6 +47,7 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
                 None => return fail("--platform needs pc, n64, 3ds or web", json),
             },
             "--script" => script = it.next().map(|s| s.to_string()),
+            "--dir" => dir = it.next().map(std::path::PathBuf::from),
             "--out" => out = it.next().map(|s| s.to_string()),
             "--model" => model = it.next().map(|s| s.to_string()),
             "--sample" => match it.next().and_then(|v| v.parse().ok()) {
@@ -56,6 +60,7 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
             name => names.push(name.to_string()),
         }
     }
+    let root = dir.as_deref().unwrap_or(root);
     let manifest = match Manifest::load(&root.join("assets/manifest.toml")) {
         Ok(m) => m,
         Err(e) => return fail(&e, json),
@@ -81,6 +86,22 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
                 json,
             )
         }
+        Some("export") => {
+            let (Some(name), Some(out)) = (names.first(), out) else {
+                return fail(
+                    &format!("export needs <name> --out <file.tang>\n{USAGE}"),
+                    json,
+                );
+            };
+            export(
+                root,
+                &manifest,
+                name,
+                Path::new(&out),
+                platform.unwrap_or(Platform::Pc),
+                json,
+            )
+        }
         Some("new") => {
             let (Some(name), Some(model)) = (names.first(), model) else {
                 return fail(&format!("new needs <name> --model models/x\n{USAGE}"), json);
@@ -92,6 +113,45 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Write graph `name`'s baked `TANG` for `platform` to `out` (a game that
+/// embeds its graph with `include_bytes!`, as Solid Eleven does).
+fn export(
+    root: &Path,
+    manifest: &Manifest,
+    name: &str,
+    out: &Path,
+    platform: Platform,
+    json: bool,
+) -> ExitCode {
+    let file = anim::graph_file(root, name);
+    let def = match AnimGraphDef::load(&file) {
+        Ok(d) => d,
+        Err(e) => return fail(&format!("{}: {e}", file.display()), json),
+    };
+    let bytes = match anim_graph::bake(root, manifest, platform, &def) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return fail(
+                &format!("anim/{name}: its model is not baked for {}", platform.key()),
+                json,
+            );
+        }
+        Err(e) => return fail(&format!("anim/{name}: {e}"), json),
+    };
+    if let Err(e) = std::fs::write(out, &bytes) {
+        return fail(&format!("{}: {e}", out.display()), json);
+    }
+    if json {
+        println!(
+            "{}",
+            json!({ "ok": true, "graph": format!("anim/{name}"), "out": out.display().to_string(), "bytes": bytes.len() })
+        );
+    } else {
+        println!("anim/{name}: {} bytes -> {}", bytes.len(), out.display());
+    }
+    ExitCode::SUCCESS
 }
 
 fn fail(e: &str, json: bool) -> ExitCode {

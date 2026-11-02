@@ -70,14 +70,16 @@ impl Preview {
 
     /// Lay the preview out in `rect`: mouse orbit and zoom, then one frame
     /// (`draw` between `begin_frame` and `end_frame`, the camera set), then
-    /// the image (letterboxed for console looks).
+    /// the image (letterboxed for console looks). Returns the area's
+    /// response (a click that was no orbit) and the image's projection,
+    /// for overlays that pick in 3D (the mask picker).
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         rect: Rect,
         grid: bool,
         draw: impl FnOnce(&mut PcRenderer, &Camera3),
-    ) {
+    ) -> (egui::Response, crate::gizmo::Proj) {
         let ppp = ui.ctx().pixels_per_point();
         let size = if self.profile == SimProfile::Native {
             let s = (
@@ -141,5 +143,6 @@ impl Preview {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
             Color32::WHITE,
         );
+        (resp, crate::gizmo::Proj::new(&camera, size, image))
     }
 }

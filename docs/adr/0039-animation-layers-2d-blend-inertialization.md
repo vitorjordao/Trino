@@ -170,11 +170,81 @@ sizes (Solid Eleven: 8, 16, 80) saves more.
 
 - **Folding at run time, not at bake (§2)**, with the report `anim check` prints per tier.
 - **Inertialization samples frozen clips (§5)** instead of storing per-joint offsets.
+  *Resolved by #136 (§ Follow-ups 1): the renderer stores them once.*
 - **The mask picker clicks joints on a 2D skeleton** (the rest pose seen from the front) beside
-  the per-joint checkboxes, not in the 3D preview.
-- **Masks name joints; no subtree syntax** (`"torso"` is the torso only).
+  the per-joint checkboxes, not in the 3D preview. *#136 adds the picker in the preview.*
+- **Masks name joints; no subtree syntax** (`"torso"` is the torso only). *#136: `"torso/*"`.*
 - **The reference is the strider shooting while it runs**, not Solid Eleven: the strider is the
   #65 reference with IK chains and a group of its own, and its clips cost the base N64 3.3 KB.
+  *#136: Solid Eleven's kicks are graph layers, read as data (§ Follow-ups 5).*
+
+## Follow-ups (issue #136, November 2026)
+
+1. **Inertial offsets stored once — a renderer-side cache keyed by content.** `render3d::PoseCache`
+   (`render3d/pose_cache.rs`) keeps, across frames, what a layered pose computes the same way
+   every frame: a layer's inertial offsets (`From − To` per joint: translation and scale
+   differences, the rotation `From·To⁻¹`) and an additive clip's first frame. The key is the
+   content — the mesh's clip data, the layer and the exact bits of its frozen `From`/`To`
+   samples (they never change during a transition: §5), or the clip — never an instance, so
+   nothing in `AnimRef`/`ModelParams` grows, games add no call, and two characters in one
+   transition share an entry. Each backend owns one (`PoseCache<Vec<PoseCacheEntry>>`, 8
+   entries of 1.3 KB, allocated by the first layered pose that needs it: never on the base N64,
+   whose fold removes layers and inertia), fills it on its serial draw path before any mesh
+   reads it (`prepare_growing`, the draw entry points: shadows, the RSP path, the PC's CPU
+   workers and GPU batches then read it through `Mesh::with_pose_cache`), keeps it through
+   `begin_frame` (entries unused for two frames are replaced; a full cache skips, never
+   thrashes) and clears it when a mesh is uploaded or freed. A miss — no cache, full, a path
+   that never prepared — samples as before with the same expressions, so the pose is **bit for
+   bit** the same either way (`the_pose_cache_stores_offsets_once_and_poses_bit_for_bit`, the
+   fuzz target, the pinned `ANIM_LAYERS_JOINTS` on every target). With the offsets stored, an
+   inertialized transition costs the destination's clips plus a per-joint add: cheaper than a
+   crossfade, as #112 intended. On the Expansion Pak and the 3DS (2 layers / 6 clips) a busy
+   pose's inertia still folds into a crossfade first (§2): the cache pays where the tier keeps
+   inertia (New 3DS, PC, Web).
+2. **Cheaper layered sampling.** A clip's compressed track offsets (`anmc::joint_offsets`, a walk
+   over every track) depend on the clip, not the time: `Located::of` decodes them once per clip
+   in a pose (a `To` sample is usually a `Pose` clip, a folded `From` the clip it froze, an
+   additive reference its own clip). The additive reference frame is the cache's second kind.
+   Measured: the Expansion Pak's layered draw (8 paddings, ares) 1 536 µs mean (1 377–1 769)
+   against main's 1 568 (1 419–1 695): within noise there (its fold leaves no inertia or
+   additive layer to cache); the New 3DS 254 → 233 µs, the old 3DS 158 → 131 µs (Azahar).
+   A first `prepare` that located every sample before looking its keys up cost 1 930 µs:
+   a cache in front of work must cost only its lookup on a hit.
+3. **Mask subtrees:** `"torso/*"` is a joint and every joint under it, resolved at check and
+   bake against the model's joints and parents (`trino_scene::anim::Joint`,
+   `trino_asset_pipeline::joints`: TMDL order, parents first — a test holds it to the baked
+   skeleton's). Masks still bake to a `u32` (no `TANG` change: `strider_layers` now writes
+   `["torso/*"]` and bakes the same bytes). Any other `*` is a check error naming the form.
+4. **The mask picker in the 3D preview:** the Animation tab's Graph mode draws a dot on each
+   joint where the renderer posed it (`Renderer::pose_joints`, the previewed look's tier),
+   lit when the selected layer's mask has it; a click (not an orbit) toggles the nearest within
+   12 px, Shift+click its subtree. `trino_scene::anim::mask_toggle` keeps the entries as
+   written (a joint turned off inside `"x/*"` splits it into the joints it held). The 2D
+   skeleton stays as the other view.
+5. **Games on layers — read as data.** A graph instance is too heavy for a crowd on the N64: one
+   `AnimGraphInstance::update` of a three-machine graph costs ~400 µs there (the runtime decodes
+   the `TANG` blob byte by byte, ~1 000 reads an update) and `pose()` ~110 µs; Solid Eleven's 22
+   players took the football template's match from 30.4 to 39.9 ms (gate 33.3) and its stack past
+   the 60 KB gate (an instance is 0.8–0.9 KB). So both reference games read their layers **as
+   data** and lay them over their own clip picking:
+   - **Solid Eleven:** `assets/anim/player.anim.ron` (baked against the PC-only QA rig
+     `models/se_player_rig`, embedded as `src/render/player.tang` through the new `cargo xtask
+     anim export`, a test holding it to its bake) has a `strike` layer (hips, legs, torso, head)
+     and an `arms` layer, a state per kick. `render::graph::KickLayers` reads their masks (rig
+     joints mapped to the game's) and kicks once a match (`AnimGraph::layer_named`,
+     `state_clip`, both new); `pick_clip` keeps the gait under a kick and `AnimState::pose_with`
+     lays the kick over it — the arms only while slow, so a shot at a sprint keeps the run's arm
+     swing. Everything else (gait, falls, get-ups) is main's picking, unchanged.
+   - **Plan & Party** (private repo, its own branch): carrying is a `carry` layer (`"torso/*"`)
+     over the walk, read the same way and pushed with `Renderer::push_pose`.
+   A faster runtime (states, transitions and conditions decoded once into tables) is the
+   follow-up that would let a crowd run real instances.
+6. **Found on the way:** `pose_world` read clip samples out of `Option` payloads; after #136's
+   changes moved the inlining, LLVM hoisted `f0 as f32 + k` of an absent blend above its test
+   and an unset `k` (a denormal) trapped the VR4300 in castle64's game ("Generic floating point
+   exception" in ares, every padding). Hot pose paths now keep `ClipSample::NONE` and flags
+   (`pose_cache::Samples`), never `Option<ClipSample>`.
+7. **Not done here:** the cost on real hardware (#123) — ares and Azahar only.
 
 ## Consequences
 

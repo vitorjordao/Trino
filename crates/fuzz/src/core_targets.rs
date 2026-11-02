@@ -143,6 +143,24 @@ pub fn tmdl(data: &[u8]) {
             for i in 0..v.min(64) {
                 keep(layered.posed_position(i, &joints, n));
             }
+            // Through the renderer's pose cache (issue #136): the same
+            // joints, bit for bit.
+            let mut cache = trino_core::render3d::PoseCache::new(std::vec::Vec::new());
+            cache.prepare_growing(&layered, Some(a));
+            let mut cached = [Mat34::IDENTITY; trino_core::render3d::MAX_JOINTS];
+            let m = layered
+                .with_pose_cache(cache.entries())
+                .pose(Some(a), &mut cached);
+            let bits = |j: &[Mat34]| {
+                j.iter()
+                    .flat_map(|x| x.m.iter().flatten().map(|v| v.to_bits()))
+                    .collect::<std::vec::Vec<u32>>()
+            };
+            assert_eq!(m, n);
+            assert!(
+                bits(&cached[..m]) == bits(&joints[..n]),
+                "the pose cache moved a joint"
+            );
         }
     }
     draw_mesh(&mesh);

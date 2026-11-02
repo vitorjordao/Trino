@@ -54,6 +54,7 @@ use crate::math3d::{Mat34, Quat};
 mod hw;
 mod lit;
 mod pc;
+mod pose_cache;
 use crate::render::{AnimRef, ClipId, DetailTexture, ModelParams, Shading, SpriteId, TexFilter};
 pub use hw::{
     GpuDraw, GpuReject, GpuWater, gpu_check, gpu_check_mv, gpu_mesh_check, gpu_screen_matrix,
@@ -66,6 +67,7 @@ pub use lit::{
     water_rings_with, water_rsp, water_rsp_frame, water_vertex,
 };
 pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check};
+pub use pose_cache::{POSE_CACHE_ENTRIES, PoseCache, PoseCacheEntry};
 
 /// Mesh blob format ("TMDL", little-endian):
 /// `u32 vertex_count, u32 index_count`, then `positions f32*3*v`,
@@ -198,6 +200,9 @@ struct Skeleton<'a> {
     /// an [`AnimRef::pose`] slot points at. Empty: every pose is its
     /// `AnimRef`'s three clips.
     poses: &'a [crate::anim::AnimPose],
+    /// The renderer's [`PoseCache`] entries ([`Mesh::with_pose_cache`]):
+    /// inertial offsets and additive references kept across frames.
+    cache: &'a [PoseCacheEntry],
 }
 
 /// Where each part of a validated TMDL blob lives (byte spans), so a
@@ -334,6 +339,19 @@ struct ClipSample {
     f0: usize,
     f1: usize,
     k: f32,
+}
+
+impl ClipSample {
+    /// A sample that is no sample, with every field set: hot paths keep
+    /// this and a flag rather than an `Option<ClipSample>`, whose unset
+    /// payload LLVM may feed to the FPU before the `is_some` test (a
+    /// denormal `k` traps on the VR4300: issue #136's N64 crash).
+    const NONE: ClipSample = ClipSample {
+        at: 0,
+        f0: 0,
+        f1: 0,
+        k: 0.0,
+    };
 }
 
 /// Interpolate two local transforms (rotations by normalized lerp — the
@@ -611,6 +629,7 @@ impl<'a> Mesh<'a> {
                 compressed: k.compressed,
                 ik: k.ik,
                 poses: &[],
+                cache: &[],
             }),
             uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
             texture: l.texture,
@@ -689,6 +708,7 @@ impl<'a> Mesh<'a> {
             compressed: false,
             ik: crate::anim::ik::Chains::default(),
             poses: &[],
+            cache: &[],
         })
     }
 
@@ -807,6 +827,20 @@ impl<'a> Mesh<'a> {
     pub fn with_poses(mut self, poses: &'a [crate::anim::AnimPose]) -> Mesh<'a> {
         if let Some(s) = &mut self.skeleton {
             s.poses = poses;
+        }
+        self
+    }
+
+    /// This mesh reading the renderer's [`PoseCache`] (its
+    /// [`entries`](PoseCache::entries)): layered poses take their inertial
+    /// offsets and additive references from it where
+    /// [`PoseCache::prepare`] stored them, and sample the clips otherwise
+    /// (bit for bit the same pose either way).
+    #[inline]
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn with_pose_cache(mut self, entries: &'a [PoseCacheEntry]) -> Mesh<'a> {
+        if let Some(s) = &mut self.skeleton {
+            s.cache = entries;
         }
         self
     }
@@ -934,23 +968,32 @@ impl<'a> Mesh<'a> {
             Self::offsets_of(&skel, blend.map(|b| b.0), &mut offs[1]);
             Self::offsets_of(&skel, over.map(|o| o.0), &mut offs[2]);
         }
+        // Set values and flags from here on (`ClipSample::NONE`).
+        let (m, has_m) = (main.unwrap_or(ClipSample::NONE), main.is_some());
+        let unpack = |x: Option<(ClipSample, f32)>| match x {
+            Some((c, w)) => (c, w, true),
+            None => (ClipSample::NONE, 0.0, false),
+        };
+        let (b, bw, has_b) = unpack(blend);
+        let (o, ow, has_o) = unpack(over);
 
         // World (model-space) matrix per joint; parents precede children.
         for j in 0..j_count {
             let jat = j * JOINT_BYTES;
-            let (t, q, s) = match main {
-                Some(m) => {
-                    let a = Self::sample_any(&skel, m, j, &offs[0]);
-                    let a = match blend {
-                        Some((b, w)) => lerp_trs(a, Self::sample_any(&skel, b, j, &offs[1]), w),
-                        None => a,
-                    };
-                    match over {
-                        Some((o, w)) => lerp_trs(a, Self::sample_any(&skel, o, j, &offs[2]), w),
-                        None => a,
-                    }
+            let (t, q, s) = if has_m {
+                let a = Self::sample_any(&skel, m, j, &offs[0]);
+                let a = if has_b {
+                    lerp_trs(a, Self::sample_any(&skel, b, j, &offs[1]), bw)
+                } else {
+                    a
+                };
+                if has_o {
+                    lerp_trs(a, Self::sample_any(&skel, o, j, &offs[2]), ow)
+                } else {
+                    a
                 }
-                None => rd_trs(skel.joints, jat + 4 + 48),
+            } else {
+                rd_trs(skel.joints, jat + 4 + 48)
             };
             let local = Mat34::from_trs(t, q, s);
             let parent = rd_u32(skel.joints, jat) as i32;
@@ -989,28 +1032,27 @@ impl<'a> Mesh<'a> {
         pose: &crate::anim::AnimPose,
         out: &mut [Mat34; MAX_JOINTS],
     ) -> usize {
-        use crate::anim::{LayerMode, MAX_POSE_SAMPLES, SampleRole};
+        use crate::anim::{LayerMode, SampleRole};
         let j_count = skel.joint_count;
         let samples = pose.samples();
         let layers = pose.layers();
-        let mut loc: [Option<ClipSample>; MAX_POSE_SAMPLES] = [None; MAX_POSE_SAMPLES];
-        let mut refs: [Option<ClipSample>; MAX_POSE_SAMPLES] = [None; MAX_POSE_SAMPLES];
-        let mut offs = [[0u16; MAX_JOINTS]; MAX_POSE_SAMPLES];
-        for (i, s) in samples.iter().enumerate() {
-            let Some(layer) = layers.get(s.layer as usize) else {
-                continue;
-            };
-            loc[i] = Self::locate(skel, s.clip, s.time);
-            if layer.mode == LayerMode::Additive && s.layer > 0 {
-                refs[i] = Self::locate(skel, s.clip, 0.0);
-            }
-            if skel.compressed {
-                Self::offsets_of(skel, loc[i], &mut offs[i]);
-            }
-        }
+        let at = pose_cache::Located::of(skel, pose);
+        let cached = pose_cache::Cached::find(skel, pose, &at);
         let blend = |j: usize, l: usize, role: SampleRole, at_ref: bool| {
-            let at = if at_ref { &refs } else { &loc };
-            Self::blend_role(skel, samples, at, &offs, j, l, role)
+            if at_ref {
+                Self::blend_role(
+                    skel,
+                    samples,
+                    &at.refs,
+                    &at.offs,
+                    Some(&cached.first),
+                    j,
+                    l,
+                    role,
+                )
+            } else {
+                Self::blend_role(skel, samples, &at.loc, &at.offs, None, j, l, role)
+            }
         };
         for j in 0..j_count {
             let jat = j * JOINT_BYTES;
@@ -1022,21 +1064,25 @@ impl<'a> Mesh<'a> {
                 let Some(mut v) = blend(j, l, SampleRole::Pose, false) else {
                     continue;
                 };
-                if layer.decay > 0.0
-                    && let (Some(f), Some(t)) = (
-                        blend(j, l, SampleRole::From, false),
-                        blend(j, l, SampleRole::To, false),
-                    )
-                {
-                    // Inertialization: the offset from where the source was
-                    // to where the destination started, decaying.
+                // Inertialization: the offset from where the source was to
+                // where the destination started (stored once by the
+                // renderer's cache, else sampled), decaying.
+                let offset = if layer.decay <= 0.0 {
+                    None
+                } else if let Some(e) = cached.inertial[l] {
+                    e.get(j)
+                } else if let (Some(f), Some(t)) = (
+                    blend(j, l, SampleRole::From, false),
+                    blend(j, l, SampleRole::To, false),
+                ) {
+                    Some((f.0 - t.0, f.1 * t.1.conjugate(), f.2 - t.2))
+                } else {
+                    None
+                };
+                if let Some(o) = offset {
                     let d = layer.decay.min(1.0);
-                    let off = Quat::IDENTITY.nlerp(f.1 * t.1.conjugate(), d);
-                    v = (
-                        v.0 + (f.0 - t.0) * d,
-                        (off * v.1).normalized(),
-                        v.2 + (f.2 - t.2) * d,
-                    );
+                    let off = Quat::IDENTITY.nlerp(o.1, d);
+                    v = (v.0 + o.0 * d, (off * v.1).normalized(), v.2 + o.2 * d);
                 }
                 if l == 0 {
                     cur = v;
@@ -1100,11 +1146,13 @@ impl<'a> Mesh<'a> {
     /// layered path's inner loop.
     #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    #[allow(clippy::too_many_arguments)]
     fn blend_role(
         skel: &Skeleton,
         samples: &[crate::anim::PoseSample],
-        at: &[Option<ClipSample>; crate::anim::MAX_POSE_SAMPLES],
+        at: &pose_cache::Samples,
         offs: &[[u16; MAX_JOINTS]; crate::anim::MAX_POSE_SAMPLES],
+        cached: Option<&[Option<&PoseCacheEntry>; crate::anim::MAX_POSE_SAMPLES]>,
         j: usize,
         l: usize,
         role: crate::anim::SampleRole,
@@ -1117,10 +1165,14 @@ impl<'a> Mesh<'a> {
             if x.layer as usize != l || x.role != role {
                 continue;
             }
-            let Some(c) = at[i] else {
+            if !at.has(i) {
                 continue;
+            }
+            let c = at.at[i];
+            let (st, sq, ss) = match cached.and_then(|k| k[i]).and_then(|e| e.get(j)) {
+                Some(v) => v,
+                None => Self::sample_any(skel, c, j, &offs[i]),
             };
-            let (st, sq, ss) = Self::sample_any(skel, c, j, &offs[i]);
             let w = x.weight;
             let sq = match first {
                 Some(f) if f.dot(sq) < 0.0 => Quat::new(-sq.x, -sq.y, -sq.z, -sq.w),
@@ -4916,6 +4968,84 @@ pub(crate) mod tests {
         near(at(&[inert(1.0), two], second), (1.0, 0.75));
         // Out of range: the AnimRef again.
         near(at(&[two], second), (0.0, 1.0));
+    }
+
+    #[test]
+    fn the_pose_cache_stores_offsets_once_and_poses_bit_for_bit() {
+        use crate::anim::{AnimPose, JointMask, LayerMode, PoseLayer, SampleRole};
+        let blob = skinned_cube();
+        let lift = ClipId::from_name("lift");
+        let slide = ClipId::from_name("slide");
+        // An inertialized base under an additive layer.
+        let pose = |decay: f32, t: f32| {
+            let mut p = AnimPose::clip(slide, t);
+            p.push(0, SampleRole::From, lift, 0.5, 1.0);
+            p.push(0, SampleRole::To, slide, 0.0, 1.0);
+            p.layers[0].decay = decay;
+            let l = p
+                .add_layer(PoseLayer {
+                    mask: JointMask::ALL,
+                    mode: LayerMode::Additive,
+                    weight: 0.5,
+                    decay: 0.0,
+                })
+                .unwrap();
+            p.push(l, SampleRole::Pose, lift, t, 1.0);
+            p
+        };
+        let slot = AnimRef {
+            pose: 1,
+            ..AnimRef::new(lift, 0.5)
+        };
+        let world = |table: &[AnimPose], cache: &[PoseCacheEntry]| {
+            let mesh = Mesh::from_tmdl(&blob)
+                .unwrap()
+                .with_poses(table)
+                .with_pose_cache(cache);
+            let mut m = [Mat34::IDENTITY; MAX_JOINTS];
+            mesh.pose_world(Some(slot), &mut m);
+            m
+        };
+        let mut cache = PoseCache::new(std::vec![PoseCacheEntry::EMPTY; 2]);
+        for (frame, (d, t)) in [(1.0, 0.0), (0.7, 0.3), (0.2, 0.6), (0.0, 0.9)]
+            .into_iter()
+            .enumerate()
+        {
+            cache.begin_frame();
+            let table = [pose(d, t)];
+            let mesh = Mesh::from_tmdl(&blob).unwrap().with_poses(&table);
+            cache.prepare(&mesh, Some(slot));
+            // The same floats with the cache as without it.
+            assert_eq!(world(&table, cache.entries()), world(&table, &[]), "{d}");
+            if frame == 0 {
+                // The inertial offsets and the additive reference: once.
+                assert_eq!((cache.hits, cache.misses), (0, 2));
+            }
+        }
+        // Three more frames read them back (at decay 0 only the additive
+        // reference is asked for).
+        assert_eq!((cache.hits, cache.misses), (5, 2));
+        // Another transition while both entries are in use: no room, the
+        // mesh samples it (still the same pose).
+        let mut other = pose(0.5, 0.2);
+        other.samples[1].time = 0.25;
+        let table = [other];
+        let mesh = Mesh::from_tmdl(&blob).unwrap().with_poses(&table);
+        cache.prepare(&mesh, Some(slot));
+        assert_eq!(cache.misses, 2);
+        assert_eq!(world(&table, cache.entries()), world(&table, &[]));
+        // Two frames later the stale inertial entry makes room.
+        cache.begin_frame();
+        cache.begin_frame();
+        cache.prepare(&mesh, Some(slot));
+        assert_eq!(cache.misses, 3);
+        assert_eq!(world(&table, cache.entries()), world(&table, &[]));
+        // A plain pose (no slot) costs nothing.
+        cache.prepare(&mesh, Some(AnimRef::new(lift, 0.1)));
+        assert_eq!(cache.misses, 3);
+        // The mesh does read the stored values.
+        cache.poison();
+        assert_ne!(world(&table, cache.entries()), world(&table, &[]));
     }
 
     #[test]

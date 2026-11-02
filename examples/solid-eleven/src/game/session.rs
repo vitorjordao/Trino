@@ -174,6 +174,7 @@ impl Session {
         let ball = m.ball.pos;
         let view = MatchView {
             anims,
+            kicks: render::graph::KickLayers::load(),
             looks: dress.looks,
             ball_rot: Quat::IDENTITY,
             cam: CamState {
@@ -401,7 +402,7 @@ impl Session {
             }
         }
         for i in 0..N {
-            render::pick_clip(&self.m, i, dt, &mut v.anims[i]);
+            render::pick_clip(&self.m, i, dt, &v.kicks, &mut v.anims[i]);
         }
         // Turf: a burst at the foot where a kick or a tackle starts, a
         // spray along a slide.

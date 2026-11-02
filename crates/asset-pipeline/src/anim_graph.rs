@@ -40,14 +40,14 @@ pub fn model_tmdl(
     crate::bake_model(&source, &decl.options()).map(Some)
 }
 
-/// The model's joint names on `platform` (glTF node order; `None`: not
-/// baked there): what layer masks name.
+/// The model's joints on `platform` (TMDL order, with their parents;
+/// `None`: not baked there): what layer masks name.
 pub fn model_joints(
     root: &Path,
     manifest: &Manifest,
     platform: Platform,
     model: &str,
-) -> Result<Option<Vec<String>>, String> {
+) -> Result<Option<Vec<anim::Joint>>, String> {
     let short = model.strip_prefix("models/").unwrap_or(model);
     let Some(decl) = manifest.models.get(short) else {
         return Ok(None);
@@ -56,7 +56,7 @@ pub fn model_joints(
         return Ok(None);
     }
     let source = crate::resolve_source(&root.join("assets"), platform, &decl.file)?;
-    crate::joint_names(&source, &decl.options()).map(Some)
+    crate::joints(&source, &decl.options()).map(Some)
 }
 
 /// Whether `sounds/<name>` is declared.

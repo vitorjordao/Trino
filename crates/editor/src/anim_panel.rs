@@ -548,7 +548,9 @@ fn preview(
         q.z * ik.1.to_radians().tan() + if q.x > 0.0 { ik.2 } else { 0.0 }
     };
     let mut drawn = trino_core::anim::IkPose::NONE;
-    p.show(
+    // Where each joint is drawn (the mask picker in the preview, #136).
+    let mut joints_at: Vec<trino_core::Vec3> = Vec::new();
+    let (resp, proj) = p.show(
         ui,
         rect,
         grid,
@@ -641,11 +643,101 @@ fn preview(
                     ..ModelParams::DEFAULT
                 },
             );
+            // The joints as this renderer posed them (its table, its IK).
+            let mut w = [trino_core::Mat34::IDENTITY; trino_core::MAX_JOINTS];
+            let n = match anim {
+                Some(a0) => r.pose_joints(id, &a0, &mut w),
+                None => 0,
+            };
+            let t = at(0);
+            let m =
+                trino_core::Mat34::from_rotation_scale_translation(t.rotation, t.scale, t.position);
+            joints_at = w[..n]
+                .iter()
+                .map(|j| m.transform_point(trino_core::Vec3::new(j.m[0][3], j.m[1][3], j.m[2][3])))
+                .collect();
         },
     );
     app.anim.ik_drawn = drawn;
+    if graph_mode
+        && let Some(g) = app.anim.graph.as_mut()
+        && g.mask_in_3d
+        && g.layer > 0
+    {
+        mask_overlay(ui, &resp, &proj, g, &joints_at);
+    }
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(250));
+}
+
+/// The mask picker in the 3D preview (issue #136): a dot on every joint
+/// where the renderer posed it (lit when the selected layer's mask has it,
+/// its name on hover); a click (not an orbit) toggles the nearest joint
+/// within 12 px, Shift+click its subtree. The pick goes to the panel's
+/// `mask_pick`, which the layer's controls apply (`mask_toggle`).
+fn mask_overlay(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    proj: &crate::gizmo::Proj,
+    g: &mut crate::anim_graph_panel::GraphEdit,
+    joints_at: &[trino_core::Vec3],
+) {
+    let li = g.layer - 1;
+    let Some(layer) = g.def.layers.get(li) else {
+        return;
+    };
+    let list = g.joint_list();
+    let bits = trino_scene::anim::mask_bits(&layer.mask, &list).unwrap_or(0);
+    let painter = ui.painter_at(resp.rect);
+    let rest: Vec<Option<usize>> = list.iter().map(|j| j.parent).collect();
+    let screen: Vec<Option<Pos2>> = joints_at.iter().map(|p| proj.project(*p)).collect();
+    g.mask_points = screen.clone();
+    for (j, s) in screen.iter().enumerate() {
+        if let (Some(a), Some(Some(pj))) = (s, rest.get(j))
+            && let Some(Some(b)) = screen.get(*pj)
+        {
+            painter.line_segment([*a, *b], (1.0, c::BORDER));
+        }
+    }
+    let hover = resp.hover_pos();
+    let nearest = |pos: Pos2| {
+        screen
+            .iter()
+            .enumerate()
+            .filter_map(|(j, s)| s.map(|q| (j, (q - pos).length())))
+            .filter(|(_, d)| *d < 12.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(j, _)| j)
+    };
+    let hot = hover.and_then(nearest);
+    for (j, s) in screen.iter().enumerate() {
+        let Some(q) = s else {
+            continue;
+        };
+        let on = j < 32 && bits & (1 << j) != 0;
+        painter.circle_filled(
+            *q,
+            if hot == Some(j) { 6.0 } else { 4.5 },
+            if on { c::ACCENT } else { c::BG3 },
+        );
+        painter.circle_stroke(*q, 4.5, (1.0, c::BG0));
+        if hot == Some(j)
+            && let Some(name) = g.joints.get(j)
+        {
+            painter.text(
+                *q + Vec2::new(8.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                name,
+                egui::FontId::proportional(11.0),
+                c::TEXT,
+            );
+        }
+    }
+    if resp.clicked()
+        && let Some(j) = resp.interact_pointer_pos().and_then(nearest)
+    {
+        g.mask_pick = Some((j, ui.input(|i| i.modifiers.shift)));
+    }
 }
 
 /// The Foot IK preview's ground and tier (both modes).

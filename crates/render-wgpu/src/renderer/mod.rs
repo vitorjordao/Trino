@@ -425,6 +425,9 @@ pub struct PcRenderer {
     /// This frame's layered poses (`push_pose`, issue #112): append-only,
     /// cleared at `begin_frame`; draws point at them by `AnimRef::pose`.
     poses: Vec<trino_core::anim::AnimPose>,
+    /// What layered poses keep across frames (issue #136): inertial
+    /// offsets, additive references. Empty until a pose needs it.
+    pose_cache: trino_core::render3d::PoseCache<Vec<trino_core::render3d::PoseCacheEntry>>,
     /// This frame's screen-space AO (`set_ambient_occlusion`, cleared at
     /// `begin_frame`), what shows of it (`set_ao_view`, `TRINO_AO`) and
     /// its passes (built on first use).
@@ -2316,6 +2319,7 @@ impl PcRenderer {
             pending_surf: Vec::new(),
             locals: LightList::EMPTY,
             poses: Vec::new(),
+            pose_cache: trino_core::render3d::PoseCache::new(Vec::new()),
             wetness: 0.0,
             ao: None,
             ao_view: AoView::Game,
@@ -2425,6 +2429,18 @@ impl PcRenderer {
         }
     }
 
+    /// Fill the pose cache for a layered draw (issue #136) on the serial
+    /// path, before any mesh reads it (shadows, batches, CPU workers).
+    fn prepare_pose(&mut self, model: ModelId, params: &ModelParams) {
+        if params.anim.is_none_or(|a| a.pose == 0) {
+            return;
+        }
+        if let Some((tmdl, layout)) = self.meshes.get(&model.0) {
+            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+            self.pose_cache.prepare_growing(&mesh, params.anim);
+        }
+    }
+
     /// Register a baked TMDL mesh under a stable handle. Re-uploading the
     /// same id replaces the content (live reload).
     pub fn upload_mesh(&mut self, id: ModelId, tmdl: Vec<u8>) {
@@ -2444,6 +2460,7 @@ impl PcRenderer {
             gpu.forget_mesh(id.0);
         }
         self.meshes.insert(id.0, (tmdl, layout));
+        self.pose_cache.clear();
     }
 
     /// Send the draws `pc_gpu_check` accepts to the GPU (the default on the
@@ -3953,6 +3970,7 @@ impl PcRenderer {
         if let Some(gpu) = &mut self.gpu {
             gpu.forget_mesh(id.0);
         }
+        self.pose_cache.clear();
         self.meshes.remove(&id.0).map_or(0, |(b, _)| b.len())
     }
 
@@ -4246,6 +4264,7 @@ impl PcRenderer {
             &self.meshes,
             &self.job_ctxs,
             &self.poses,
+            self.pose_cache.entries(),
             &jobs,
             &mut self.workers,
             self.tnl_threads,
@@ -4497,7 +4516,9 @@ impl PcRenderer {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         let sphere = sh::caster_sphere(mesh.bounds(), matrix);
         match plan {
             ShadowPlan::None => {}
@@ -4618,7 +4639,9 @@ impl PcRenderer {
             let Some((tmdl, layout)) = self.meshes.get(&c.model) else {
                 continue;
             };
-            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+            let mesh = Mesh::from_layout(tmdl, layout)
+                .with_poses(&self.poses)
+                .with_pose_cache(self.pose_cache.entries());
             let n = mesh.pose(c.anim, &mut joints);
             verts.extend((0..mesh.index_count).map(|k| {
                 let i = mesh.index(k) as usize;
@@ -5695,7 +5718,9 @@ impl PcRenderer {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         let n = accepted.len() as u32;
         self.frame_stats.models += n;
         self.frame_stats.tnl.instanced += n;
@@ -6038,6 +6063,7 @@ impl Renderer for PcRenderer {
         self.pending_surf.clear();
         self.locals = LightList::EMPTY;
         self.poses.clear();
+        self.pose_cache.begin_frame();
         self.wetness = 0.0;
         self.ao = None;
         self.post = None;
@@ -6193,6 +6219,7 @@ impl Renderer for PcRenderer {
         };
         Mesh::from_layout(tmdl, layout)
             .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries())
             .pose_world(Some(*anim), out)
     }
 
@@ -6311,6 +6338,7 @@ impl Renderer for PcRenderer {
         if self.gpu.is_none() && self.gpu_tnl_active() {
             self.warm_wait(precompile::JobKind::GpuTnl);
         }
+        self.prepare_pose(model, params);
         if params.shadow.casts() {
             self.cast_shadow(model, matrix, params);
         }
@@ -6319,7 +6347,9 @@ impl Renderer for PcRenderer {
             self.frame_stats.not_loaded += 1;
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)
@@ -6665,12 +6695,15 @@ impl Renderer for PcRenderer {
         let mut rest: Vec<(Mat34, ModelParams)> = Vec::new();
         // The accepted copies' shadows (the rest cast theirs as draws).
         let mut cast: Vec<Mat34> = Vec::new();
+        self.prepare_pose(model, params);
         {
             let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
                 self.frame_stats.not_loaded += instances.len() as u32;
                 return;
             };
-            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
+            let mesh = Mesh::from_layout(tmdl, layout)
+                .with_poses(&self.poses)
+                .with_pose_cache(self.pose_cache.entries());
             let screen = self.current_screen_size();
             let eye = self.eye_view();
             let ctx = tnl_context(

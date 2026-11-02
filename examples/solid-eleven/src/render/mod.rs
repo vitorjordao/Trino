@@ -14,6 +14,7 @@
 pub mod anim;
 #[cfg(test)]
 pub(crate) mod fit;
+pub mod graph;
 pub mod menu;
 pub mod studio;
 #[rustfmt::skip]
@@ -395,6 +396,8 @@ impl Look {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct MatchView {
     pub anims: [AnimState; N + 3],
+    /// The graph's kick layers (issue #136), read once a match.
+    pub kicks: graph::KickLayers,
     pub looks: [Look; N],
     /// Ball spin, as a rotation.
     pub ball_rot: trino_core::Quat,
@@ -937,7 +940,7 @@ fn draw_people(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum, hif
         let (fx, fz) = (p.face.x.to_f32(), p.face.y.to_f32());
         let body = body_matrix(pos, fx, fz, WORLD);
         let m = detail.mask();
-        let pose = v.anims[i].pose_masked(m);
+        let pose = v.anims[i].pose_with(m, &v.kicks);
         joint_matrices(&body, &pose, &mut joints, m);
         anim::plant(&mut joints, m, v.anims[i].grounded(), body.m[1][3]);
         draw_body(r, &joints, &v.looks[i], detail, v.sky.tint());
@@ -1249,8 +1252,10 @@ fn draw_guides(r: &mut dyn Renderer, m: &Match, v: &MatchView, fr: &Frustum) {
 /// The margin around each locomotion speed edge (m/s).
 const HYST: f32 = 0.35;
 
-/// The animation a player's sim state calls for, and how fast it plays.
-pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
+/// The animation a player's sim state calls for, and how fast it plays. A
+/// kick the graph's strike layers play (`kicks`, issue #136) goes over the
+/// gait instead of replacing it ([`kick_layer`]).
+pub fn pick_clip(m: &Match, i: usize, dt: f32, kicks: &graph::KickLayers, st: &mut AnimState) {
     let p = &m.players[i];
     // The gait follows a smoothed speed (a fifth of a second): the sim's
     // small steps and stops would flip walk and stand every few frames.
@@ -1259,6 +1264,14 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
     let speed = st.speed;
     let owner = m.owner == Some(i as u8);
     let keeper = p.role == Role::Gk;
+    let kick = match p.act {
+        Act::Kick { plan, .. } => Some(kick_clip(plan)),
+        _ => None,
+    };
+    let layered = kick.filter(|c| kicks.plays(*c));
+    kick_layer(st, layered, dt);
+    // A kick on the layers: the body below keeps the gait.
+    let act = if layered.is_some() { Act::Free } else { p.act };
     // Cues the sim's state alone doesn't hold: a header just made, a
     // throw-in waiting to be taken.
     let headed = p.headed != 0 && m.tick.saturating_sub(p.headed) < 26;
@@ -1277,34 +1290,8 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
         }
         return;
     }
-    let (clip, mirror, rate, restart) = match p.act {
-        Act::Kick { plan, t } => {
-            let c = match plan.kind {
-                // A full-power strike (the fastest fifth of shots) swings
-                // through harder than a placed one.
-                crate::sim::engine::KickKind::Shot => {
-                    let (vx, vz) = (plan.vel.x.to_f32(), plan.vel.z.to_f32());
-                    if vx * vx + vz * vz >= POWER_SHOT * POWER_SHOT {
-                        ClipName::PowerShot
-                    } else {
-                        ClipName::Shot
-                    }
-                }
-                crate::sim::engine::KickKind::Throw => ClipName::Throw,
-                crate::sim::engine::KickKind::Cross
-                | crate::sim::engine::KickKind::Through
-                | crate::sim::engine::KickKind::Clear => {
-                    if plan.vel.y > Fx::int(3) {
-                        ClipName::Lob
-                    } else {
-                        ClipName::Pass
-                    }
-                }
-                _ => ClipName::Pass,
-            };
-            let _ = t;
-            (c, false, 1.0, false)
-        }
+    let (clip, mirror, rate, restart) = match act {
+        Act::Kick { .. } => (kick.unwrap_or(ClipName::Pass), false, 1.0, false),
         Act::Tackle { .. } => (ClipName::Tackle, false, 1.0, false),
         Act::Slide { .. } => (ClipName::Slide, false, 1.0, false),
         Act::Down { .. } => (ClipName::Down, false, 1.0, false),
@@ -1357,6 +1344,57 @@ pub fn pick_clip(m: &Match, i: usize, dt: f32, st: &mut AnimState) {
         }
     };
     show(st, clip, mirror, restart, rate, dt);
+}
+
+/// The clip a kick plays: a full-power strike (the fastest fifth of shots)
+/// swings through harder than a placed one; high crosses and clearances
+/// are lobs.
+fn kick_clip(plan: crate::sim::engine::KickPlan) -> ClipName {
+    match plan.kind {
+        crate::sim::engine::KickKind::Shot => {
+            let (vx, vz) = (plan.vel.x.to_f32(), plan.vel.z.to_f32());
+            if vx * vx + vz * vz >= POWER_SHOT * POWER_SHOT {
+                ClipName::PowerShot
+            } else {
+                ClipName::Shot
+            }
+        }
+        crate::sim::engine::KickKind::Throw => ClipName::Throw,
+        crate::sim::engine::KickKind::Cross
+        | crate::sim::engine::KickKind::Through
+        | crate::sim::engine::KickKind::Clear => {
+            if plan.vel.y > Fx::int(3) {
+                ClipName::Lob
+            } else {
+                ClipName::Pass
+            }
+        }
+        _ => ClipName::Pass,
+    }
+}
+
+/// The kick on the graph's strike layers: it starts from its first frame
+/// when the sim's kick does, eases in over a crossfade, plays out and eases
+/// out after it. A throw-in's throw goes on from its held wind-up (the same
+/// clip, already the whole body): no fade in.
+pub fn kick_layer(st: &mut AnimState, kick: Option<ClipName>, dt: f32) {
+    if let Some(c) = kick
+        && (!st.kicking() || st.kick != c)
+    {
+        st.kick = c;
+        st.set_kick_time(0.0);
+        if st.clip == ClipName::Throw && c == ClipName::Throw {
+            st.set_strike(1.0);
+        }
+    }
+    st.set_kicking(kick.is_some());
+    let target = if st.kicking() { 1.0 } else { 0.0 };
+    let w = st.strike();
+    let step = dt / anim::FADE;
+    st.set_strike(w + (target - w).clamp(-step, step));
+    if st.strike() > 0.0 {
+        st.set_kick_time(st.kick_time() + dt);
+    }
 }
 
 /// Play `clip` unless the body must get up first ([`anim::route`]).
@@ -1478,6 +1516,63 @@ mod tests {
                 "{fall:?}: clips shown in turn"
             );
         }
+    }
+
+    /// A kick on the graph's strike layers goes over the gait (issue #136):
+    /// the legs follow the shot at any speed; the arms swing with it from a
+    /// standstill and keep the run's swing at a sprint; with no layers the
+    /// kick is the whole body, as before.
+    #[test]
+    fn a_shot_at_a_sprint_keeps_the_runs_arm_swing() {
+        let kicks = graph::KickLayers::load();
+        assert_eq!(kicks.clips, 0b1_1111, "the graph's layers play every kick");
+        let dt = 1.0 / 60.0;
+        let near = |a: trino_core::Quat, b: trino_core::Quat| a.dot(b).abs() > 0.9999;
+        for (gait, speed, arms_kick) in [
+            (ClipName::Idle, 0.0f32, true),
+            (ClipName::Sprint, 9.0, false),
+        ] {
+            let mut st = anim::AnimState::new(gait);
+            st.speed = speed;
+            for _ in 0..15 {
+                kick_layer(&mut st, Some(ClipName::Shot), dt);
+                st.advance(dt, 1.0);
+            }
+            assert_eq!(st.shown(), ClipName::Shot);
+            let kicked = st.pose_with(mask::ALL, &kicks);
+            let running = st.pose_masked(mask::ALL);
+            let shot = anim::sample_masked(ClipName::Shot, st.kick_time(), false, mask::ALL);
+            for j in [joint::THIGH_L, joint::THIGH_R, joint::SHIN_L, joint::TORSO] {
+                assert!(
+                    near(kicked.q[j], shot.q[j]),
+                    "{speed} m/s: joint {j} follows the shot"
+                );
+            }
+            for j in [joint::ARM_L, joint::ARM_R, joint::FOREARM_L] {
+                let from = if arms_kick { shot.q[j] } else { running.q[j] };
+                assert!(near(kicked.q[j], from), "{speed} m/s: arm joint {j}");
+            }
+            if !arms_kick {
+                assert!(!near(kicked.q[joint::ARM_L], shot.q[joint::ARM_L]));
+            }
+            // Without the graph's layers nothing is laid over.
+            assert_eq!(st.pose_with(mask::ALL, &graph::KickLayers::NONE), running);
+        }
+        // The kick plays out, then eases out over a crossfade.
+        let mut st = anim::AnimState::new(ClipName::Jog);
+        for _ in 0..30 {
+            kick_layer(&mut st, Some(ClipName::Pass), dt);
+        }
+        let mut frames = 0usize;
+        while st.strike() > 0.0 {
+            kick_layer(&mut st, None, dt);
+            frames += 1;
+        }
+        assert!(
+            frames.abs_diff((anim::FADE / dt).ceil() as usize) <= 1,
+            "{frames}"
+        );
+        assert_eq!(st.shown(), ClipName::Jog);
     }
 
     /// The camera's `target - eye` doesn't move by a bit while it pans (the

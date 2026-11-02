@@ -342,6 +342,41 @@ fn probes(m: u16) -> Vec<Probe> {
             }
         }
     }
+    // Kicks on the graph's strike layers over every gait (issue #136),
+    // arms and all while slow, the gait's arm swing at a sprint; frame by
+    // frame into the kick and back out.
+    let kicks = super::graph::KickLayers::load();
+    for k in super::graph::KICKS {
+        for (gait, speed) in [
+            (ClipName::Idle, 0.0f32),
+            (ClipName::Walk, 1.6),
+            (ClipName::Jog, 3.5),
+            (ClipName::Jog, 4.6),
+            (ClipName::Sprint, 6.5),
+            (ClipName::Sprint, 9.0),
+            (ClipName::Dribble, 5.0),
+        ] {
+            let mut st = AnimState::new(gait);
+            st.speed = speed;
+            let dt = 1.0 / 60.0;
+            for f in 0..60 {
+                crate::render::kick_layer(&mut st, (f < 40).then_some(k), dt);
+                st.advance(dt, 1.0);
+                if f % 2 == 0 {
+                    out.push(Probe {
+                        label: format!(
+                            "{} over {} at {speed} m/s frame {f}",
+                            clip(k).name,
+                            clip(gait).name
+                        ),
+                        clip: None,
+                        pose: st.pose_with(m, &kicks),
+                        snap: st.grounded(),
+                    });
+                }
+            }
+        }
+    }
     out
 }
 

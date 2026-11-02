@@ -570,6 +570,29 @@ impl<'a> AnimGraph<'a> {
         }
     }
 
+    /// The layer named `name` (`1..=layer_count()`), for a game that reads
+    /// a layer as data (its mask, its clips) and lays it over its own base
+    /// (Solid Eleven's kicks, Plan & Party's carrying: issue #136).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn layer_named(&self, name: &str) -> Option<usize> {
+        let id = crate::asset::asset_id(name);
+        (1..=self.layers).find(|&l| self.layer(l).id == id)
+    }
+
+    /// The clip a clip state plays (`None`: a blend space, or no state
+    /// `i`).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn state_clip(&self, i: usize) -> Option<ClipId> {
+        if i >= self.states {
+            return None;
+        }
+        let s = self.state(i);
+        if s.param.is_some() || s.points == 0 {
+            return None;
+        }
+        Some(self.clip(self.point(&s, 0).1).id)
+    }
+
     fn params_at(&self) -> usize {
         HEADER_BYTES
     }

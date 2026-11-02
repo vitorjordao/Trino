@@ -52,6 +52,34 @@ fn v1_graphs_bake_the_bytes_they_always_did() {
     assert_eq!(now, then);
 }
 
+/// The joints a mask names (`joints`: names and parents) are the baked
+/// TMDL's, in its order (issue #136): `"torso/*"` resolves against the
+/// runtime's own joint indices.
+#[test]
+fn mask_joints_follow_the_baked_skeleton() {
+    let root = root();
+    let manifest = Manifest::load(&root.join("assets/manifest.toml")).unwrap();
+    let joints = anim_graph::model_joints(&root, &manifest, Platform::Pc, "models/strider")
+        .unwrap()
+        .unwrap();
+    let decl = &manifest.models["strider"];
+    let source = root.join("assets/shared").join(&decl.file);
+    let tmdl = trino_asset_pipeline::bake_model(&source, &decl.options()).unwrap();
+    let mesh = trino_core::Mesh::from_tmdl(&tmdl).unwrap();
+    assert_eq!(joints.len(), mesh.joint_count());
+    for (j, x) in joints.iter().enumerate() {
+        assert_eq!(x.parent, mesh.joint_parent(j), "joint {j} `{}`", x.name);
+    }
+    let names: Vec<String> = trino_asset_pipeline::joint_names(&source, &decl.options()).unwrap();
+    assert_eq!(
+        names,
+        joints.iter().map(|x| x.name.clone()).collect::<Vec<_>>()
+    );
+    // The strider's upper body is torso and below it.
+    let upper = trino_scene::anim::mask_bits(&["torso/*".to_string()], &joints).unwrap();
+    assert!(upper.count_ones() >= 4, "{upper:b}");
+}
+
 #[test]
 fn a_graph_entity_plays_and_walks_with_no_game_code() {
     let root = root();

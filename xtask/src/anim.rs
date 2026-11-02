@@ -142,6 +142,17 @@ fn list(root: &Path, json: bool) -> ExitCode {
 
 const PLATFORMS: [Platform; 4] = [Platform::Pc, Platform::N64, Platform::N3ds, Platform::Web];
 
+/// A platform's tiers and their caps (what poses each folds to).
+fn tiers(p: Platform) -> Vec<(&'static str, trino_core::Caps)> {
+    use trino_core::Caps;
+    match p {
+        Platform::Pc => vec![("pc", Caps::PC)],
+        Platform::Web => vec![("web", Caps::WEB)],
+        Platform::N64 => vec![("n64", Caps::N64), ("n64_expanded", Caps::N64_EXPANDED)],
+        Platform::N3ds => vec![("3ds", Caps::N3DS), ("n3ds_new", Caps::N3DS_NEW)],
+    }
+}
+
 fn check(
     root: &Path,
     manifest: &Manifest,
@@ -199,15 +210,36 @@ fn check(
                 }
                 continue;
             }
-            let issues = anim::check(&def, clips.as_deref(), &|s| {
+            let joints = anim_graph::model_joints(root, manifest, p, &def.model_path())
+                .ok()
+                .flatten();
+            let issues = anim::check_with(&def, clips.as_deref(), joints.as_deref(), &|s| {
                 anim_graph::has_sound(manifest, s)
             });
             let errors = issues.iter().filter(|i| i.level == Level::Error).count();
             let bytes = clips
                 .as_ref()
                 .filter(|_| errors == 0)
-                .and_then(|c| anim::to_tang(&def, c, &|s| anim_graph::has_sound(manifest, s)).ok())
+                .and_then(|c| {
+                    anim::to_tang_with(&def, c, joints.as_deref(), &|s| {
+                        anim_graph::has_sound(manifest, s)
+                    })
+                    .ok()
+                })
                 .map(|b| b.len());
+            // What each of the platform's tiers folds (issue #112).
+            let folds: Vec<serde_json::Value> = tiers(p)
+                .into_iter()
+                .map(|(tier, caps)| {
+                    let notes = anim::fold_report(&def, caps.anim_layers);
+                    json!({
+                        "tier": tier,
+                        "layers": caps.anim_layers.layers,
+                        "clips": caps.anim_layers.clips,
+                        "notes": notes,
+                    })
+                })
+                .collect();
             ok &= errors == 0;
             if !json {
                 let status = if errors == 0 { "ok" } else { "FAILED" };
@@ -219,6 +251,25 @@ fn check(
                 for i in &issues {
                     println!("  {i}");
                 }
+                for f in &folds {
+                    let notes = f["notes"].as_array().map_or(&[][..], |v| v.as_slice());
+                    if notes.is_empty() {
+                        continue;
+                    }
+                    println!(
+                        "  fold on {} ({} layer(s), {} clips):",
+                        f["tier"].as_str().unwrap_or(""),
+                        f["layers"],
+                        f["clips"]
+                    );
+                    for n in notes {
+                        println!(
+                            "    {}: {}",
+                            n["at"].as_str().unwrap_or(""),
+                            n["message"].as_str().unwrap_or("")
+                        );
+                    }
+                }
             }
             rows.push(json!({
                 "graph": name,
@@ -226,6 +277,7 @@ fn check(
                 "ok": errors == 0,
                 "bytes": bytes,
                 "issues": issues,
+                "folds": folds,
             }));
         }
     }

@@ -3469,8 +3469,9 @@ pub fn anim_graph(
     renderer: &mut dyn Renderer,
     platform: &mut dyn Platform,
 ) -> Result<AnimGraphReport, &'static str> {
+    // A graph rides its model's group on the consoles (issue #112).
     let bytes = platform
-        .blob(STRIDER_GRAPH)
+        .group_blob(STRIDER_GRAPH)
         .ok_or("anim graph: anim/strider blob missing")?;
     let g = trino_core::AnimGraph::parse(bytes)
         .map_err(|_| "anim graph: anim/strider does not parse")?;
@@ -3570,7 +3571,7 @@ pub fn foot_ik(
 ) -> Result<FootIkReport, &'static str> {
     use trino_core::anim::{FootIk, IkPose};
     let bytes = platform
-        .blob(STRIDER_GRAPH)
+        .group_blob(STRIDER_GRAPH)
         .ok_or("foot ik: anim/strider blob missing")?;
     let g =
         trino_core::AnimGraph::parse(bytes).map_err(|_| "foot ik: anim/strider does not parse")?;
@@ -3713,6 +3714,381 @@ pub fn log_foot_ik(platform: &mut dyn Platform, r: &FootIkReport) {
             if r.auto.is_none() { "off" } else { "on" },
             r.forced.left,
             r.forced.right,
+            if r.probed { "probed" } else { "drawn" },
+            r.us_per_draw
+        ),
+    );
+    platform.log(line.as_str());
+}
+
+/// The strider shooting while it runs (`assets/anim/strider_layers.anim.ron`,
+/// issue #112): an upper-body layer with a 2D blend space and an additive
+/// breath over the locomotion blend space, the hop inertialized.
+pub const STRIDER_LAYERS: BlobId = BlobId::from_path("anim/strider_layers");
+
+/// The `anim layers` script's hashes, the same on every target: the whole
+/// pose of every update (`AnimPose::digest`), then the pose folded to the
+/// base N64's tier (one layer, three clips) and to two layers of six
+/// (`AnimPose::fold`). `xtask/tests/asset_groups.rs` prints moved values.
+pub const ANIM_LAYERS_HASH: [u32; 3] = [0xf037_ddb5, 0x8802_b891, 0x46e5_8fc2];
+
+/// The joints the renderer poses the strider with for the script's busiest
+/// pose (`Renderer::pose_joints`, quantized to 1/1024 m), per tier: one
+/// layer of three clips (the base N64), two of six (the Expansion Pak, the
+/// 3DS), everything (the New 3DS, the PC, the Web).
+pub const ANIM_LAYERS_JOINTS: [u32; 3] = [0x09bf_f162, 0xc98e_71dd, 0xd107_cb25];
+
+/// What the `anim layers` step saw.
+#[derive(Debug)]
+pub struct AnimLayersReport {
+    /// [`ANIM_LAYERS_HASH`]'s three values as computed here.
+    pub hash: [u32; 3],
+    /// The renderer's joints for the busiest pose (its tier's fold).
+    pub joints: u32,
+    /// Which [`ANIM_LAYERS_JOINTS`] entry this tier compares with.
+    pub tier: usize,
+    /// The pose table slot the renderer gave (0: the pose drew as an
+    /// `AnimRef`, the base N64).
+    pub slot: u16,
+    /// Muzzle events and transitions over the script.
+    pub events: u32,
+    pub transitions: u32,
+    /// Whether the frames were read back (layered vs folded compared).
+    pub probed: bool,
+    /// Grid probes the hardware T&L frame and the CPU's differ at (`None`:
+    /// no switch on this backend).
+    pub parity: Option<u32>,
+    /// CPU time of a layered draw less a folded one (µs; 0 where the tier
+    /// folds every pose).
+    pub us_per_draw: i32,
+}
+
+/// The script: 300 updates at 60 Hz — idle into a walk and a run, the
+/// upper layer fading in, the aim sweeping a circle past the 2D space's
+/// hull, two shots, an inertialized hop. Returns the hashes, the busiest
+/// pose (most samples, an inertial offset running) and what it counted.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn anim_layers_run(
+    g: &trino_core::AnimGraph,
+) -> Result<([u32; 3], trino_core::anim::AnimPose, u32, u32), &'static str> {
+    use trino_core::anim::{AnimLayers, EventId, SampleRole};
+    let p = |n: &str| {
+        g.param_named(n)
+            .ok_or("anim layers: a parameter is missing")
+    };
+    let (speed, ax, ay) = (p("speed")?, p("aim_x")?, p("aim_y")?);
+    let (aiming, fire, hop) = (p("aiming")?, p("fire")?, p("hop")?);
+    let mut i = trino_core::AnimGraphInstance::new(g);
+    let mut h = [0x811c_9dc5u32; 3];
+    let mix = |h: &mut u32, v: u32| {
+        for b in v.to_le_bytes() {
+            *h ^= b as u32;
+            *h = h.wrapping_mul(0x0100_0193);
+        }
+    };
+    let two = AnimLayers {
+        layers: 2,
+        clips: 6,
+    };
+    let mut busiest = (0u8, trino_core::anim::AnimPose::EMPTY);
+    let (mut events, mut inertial, mut tri) = (0u32, false, false);
+    for u in 0..300u32 {
+        let v = match u {
+            0..=39 => 0.0,
+            40..=99 => 0.8,
+            100..=169 => 2.0,
+            _ => (300 - u) as f32 * 0.008,
+        };
+        i.set_float(speed, v);
+        i.set_float(aiming, (u as f32 - 20.0) * 0.05);
+        let a = u as f32 * 0.05;
+        i.set_float(ax, 1.3 * cos(a));
+        i.set_float(ay, 0.9 * sin(a));
+        if u == 60 || u == 200 {
+            i.set_trigger(fire);
+        }
+        if u == 140 {
+            i.set_trigger(hop);
+        }
+        i.update(g, 1.0 / 60.0);
+        let pose = i.pose(g);
+        mix(&mut h[0], pose.digest());
+        mix(&mut h[1], pose.fold(AnimLayers::AREF).0.digest());
+        mix(&mut h[2], pose.fold(two).0.digest());
+        inertial |= pose.samples().iter().any(|s| s.role == SampleRole::From);
+        tri |= pose
+            .samples()
+            .iter()
+            .filter(|s| s.layer == 1 && s.role == SampleRole::Pose)
+            .count()
+            == 3;
+        let score = pose.len + if pose.layers[0].decay > 0.0 { 16 } else { 0 };
+        if score > busiest.0 {
+            busiest = (score, pose);
+        }
+        events += i
+            .events()
+            .iter()
+            .filter(|e| e.id == EventId::from_name("muzzle"))
+            .count() as u32;
+    }
+    mix(&mut h[0], i.digest());
+    if events != 2 {
+        return Err("anim layers: the upper layer's muzzle event did not fire twice");
+    }
+    if !inertial {
+        return Err("anim layers: the hop's inertialized offset never showed");
+    }
+    if !tri {
+        return Err("anim layers: the aim never blended a triangle of three clips");
+    }
+    if busiest.1.layer_count < 3 {
+        return Err("anim layers: no pose held the base and both layers");
+    }
+    Ok((h, busiest.1, events, i.transitions))
+}
+
+/// Layered poses end to end (issue #112): the baked `anim/strider_layers`
+/// graph plays the same poses on every target (and folds the same for each
+/// tier: [`ANIM_LAYERS_HASH`]); the renderer poses the busiest one with the
+/// joints of its tier ([`ANIM_LAYERS_JOINTS`]) through its pose table; the
+/// layered frame differs from the folded one where the tier keeps layers
+/// (and equals it on the base N64); the hardware T&L draws it like the CPU.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn anim_layers(host: &mut dyn GroupHost) -> Result<AnimLayersReport, &'static str> {
+    let r = anim_layers_measure(host)?;
+    if r.hash != ANIM_LAYERS_HASH {
+        return Err("anim layers: pose hashes differ from the PC's (ANIM_LAYERS_HASH)");
+    }
+    if r.joints != ANIM_LAYERS_JOINTS[r.tier] {
+        return Err("anim layers: the renderer's joints differ from the PC's (ANIM_LAYERS_JOINTS)");
+    }
+    Ok(r)
+}
+
+/// [`anim_layers`] without the pinned values (the PC test prints them).
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn anim_layers_measure(host: &mut dyn GroupHost) -> Result<AnimLayersReport, &'static str> {
+    use trino_core::anim::AnimLayers;
+    let (hash, busiest, events, transitions) = {
+        let (_, platform) = host.parts();
+        let bytes = platform
+            .group_blob(STRIDER_LAYERS)
+            .ok_or("anim layers: anim/strider_layers blob missing")?;
+        let g = trino_core::AnimGraph::parse(bytes)
+            .map_err(|_| "anim layers: anim/strider_layers does not parse")?;
+        if g.model() != STRIDER.0 || g.layer_count() != 2 {
+            return Err("anim layers: anim/strider_layers is not the strider's two-layer graph");
+        }
+        let a = anim_layers_run(&g)?;
+        if anim_layers_run(&g)?.0 != a.0 {
+            return Err("anim layers: the same script gave other hashes");
+        }
+        a
+    };
+    let (renderer, _) = host.parts();
+    let caps = renderer.caps().anim_layers;
+    let tier = match caps {
+        AnimLayers::AREF => 0,
+        AnimLayers {
+            layers: 2,
+            clips: 6,
+        } => 1,
+        _ => 2,
+    };
+    // The table's pose: its slot, the joints the renderer poses.
+    renderer.begin_frame(LAYERS_CLEAR);
+    let anim = renderer.push_pose(&busiest);
+    let mut world = [trino_core::Mat34::IDENTITY; trino_core::MAX_JOINTS];
+    let n = renderer.pose_joints(STRIDER, &anim, &mut world);
+    renderer.end_frame();
+    if n == 0 {
+        return Err("anim layers: the renderer can't say how it poses the strider");
+    }
+    if (anim.pose == 0) != busiest.fold(caps).0.fits_ref() {
+        return Err("anim layers: the pose table slot does not follow Caps::anim_layers");
+    }
+    let mut joints: u32 = 0x811c_9dc5;
+    for w in &world[..n] {
+        for r in &w.m {
+            for v in r {
+                for b in (trino_core::math3d::to_i32(v * 1024.0) as u32).to_le_bytes() {
+                    joints ^= b as u32;
+                    joints = joints.wrapping_mul(0x0100_0193);
+                }
+            }
+        }
+    }
+    let mut layered = [Color::BLACK; 96];
+    let mut folded = [Color::BLACK; 96];
+    let probed = layers_grid(renderer, &busiest, true, &mut layered)
+        && layers_grid(renderer, &busiest, false, &mut folded);
+    let st = renderer.stats();
+    if st.not_loaded > 0 || st.tris + st.tnl.rsp_tris + st.tnl.gpu_tris + st.tnl.pc_gpu_tris == 0 {
+        return Err("anim layers: the strider drew nothing");
+    }
+    if probed && (layered == folded) != (tier == 0) {
+        return Err("anim layers: the layered frame is the folded one (layers) or not (base N64)");
+    }
+    // The hardware T&L (the N64's RSP, the PC's GPU path) against the CPU.
+    let parity = if host.set_hardware_tnl(false) {
+        let mut cpu = [Color::BLACK; 96];
+        let ok = layers_grid(host.parts().0, &busiest, true, &mut cpu);
+        host.set_hardware_tnl(true);
+        let mut hw = [Color::BLACK; 96];
+        let ok = ok && layers_grid(host.parts().0, &busiest, true, &mut hw);
+        ok.then(|| {
+            let far = |a: u8, b: u8| a.abs_diff(b) > 40;
+            cpu.iter()
+                .zip(&hw)
+                .filter(|(a, b)| far(a.r, b.r) || far(a.g, b.g) || far(a.b, b.b))
+                .count() as u32
+        })
+    } else {
+        None
+    };
+    if parity.is_some_and(|p| p > 3) {
+        return Err("anim layers: the hardware T&L posed the layered strider unlike the CPU");
+    }
+    // The cost: a layered draw against the folded one, one a frame. The
+    // base N64 folds every pose into an AnimRef: nothing to time.
+    let (renderer, platform) = host.parts();
+    let us_per_draw = if tier == 0 {
+        0
+    } else {
+        let folded_us = layers_time(renderer, platform, &busiest, false);
+        ((layers_time(renderer, platform, &busiest, true) - folded_us) / 16) as i32
+    };
+    Ok(AnimLayersReport {
+        hash,
+        joints,
+        tier,
+        slot: anim.pose,
+        events,
+        transitions,
+        probed,
+        parity,
+        us_per_draw,
+    })
+}
+
+/// One `anim layers` frame: the busiest pose through the renderer's table
+/// (`layered`) or as its folded `AnimRef`.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn layers_frame(renderer: &mut dyn Renderer, pose: &trino_core::anim::AnimPose, layered: bool) {
+    renderer.begin_frame(LAYERS_CLEAR);
+    renderer.set_camera(&Camera3 {
+        eye: Vec3::new(0.0, 1.1, 2.6),
+        target: Vec3::new(0.0, 0.95, 0.0),
+        fov_y: 1.0,
+    });
+    renderer.set_light(&DEFAULT_LIGHT);
+    let anim = if layered {
+        renderer.push_pose(pose)
+    } else {
+        pose.to_ref()
+    };
+    renderer.draw_model(
+        STRIDER,
+        &Transform3 {
+            position: Vec3::ZERO,
+            rotation: Vec3::new(0.0, core::f32::consts::PI * 0.8, 0.0),
+            scale: Vec3::ONE,
+        },
+        Material::VertexLit,
+        &ModelParams {
+            anim: Some(anim),
+            ..ModelParams::DEFAULT
+        },
+    );
+    renderer.end_frame();
+}
+
+const LAYERS_CLEAR: Color = Color::rgb(10, 14, 26);
+
+/// The frame three times (the 3DS LCD is double-buffered), read back on a
+/// grid over the strider; `false` where the backend can't read back.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn layers_grid(
+    renderer: &mut dyn Renderer,
+    pose: &trino_core::anim::AnimPose,
+    layered: bool,
+    out: &mut [Color; 96],
+) -> bool {
+    for _ in 0..3 {
+        layers_frame(renderer, pose, layered);
+    }
+    let caps = *renderer.caps();
+    let (w, h) = (caps.screen_width as u32, caps.screen_height as u32);
+    for y in 0..8 {
+        for x in 0..12 {
+            match renderer.read_pixel(w / 4 + w * x / 24, h / 8 + h * 3 * y / 32) {
+                Some(c) => out[(y * 12 + x) as usize] = c,
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
+/// CPU µs of 16 strider draws, one a frame (more a frame grow the N64's
+/// batch buffers for good), layered or folded.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn layers_time(
+    renderer: &mut dyn Renderer,
+    platform: &mut dyn Platform,
+    pose: &trino_core::anim::AnimPose,
+    layered: bool,
+) -> i64 {
+    let mut total = 0i64;
+    for k in 0..16 {
+        renderer.begin_frame(LAYERS_CLEAR);
+        renderer.set_light(&DEFAULT_LIGHT);
+        let anim = if layered {
+            renderer.push_pose(pose)
+        } else {
+            pose.to_ref()
+        };
+        let mm = trino_core::Mat34::from_rotation_scale_translation(
+            Vec3::new(0.0, k as f32 * 0.3, 0.0),
+            Vec3::ONE,
+            Vec3::new(k as f32 * 0.01, 0.0, 0.0),
+        );
+        let t0 = platform.now_micros();
+        renderer.draw_model_matrix(
+            STRIDER,
+            &mm,
+            Material::VertexLit,
+            &ModelParams {
+                anim: Some(anim),
+                ..ModelParams::DEFAULT
+            },
+        );
+        total += platform.now_micros().saturating_sub(t0) as i64;
+        renderer.end_frame();
+    }
+    total
+}
+
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn log_anim_layers(platform: &mut dyn Platform, r: &AnimLayersReport) {
+    let mut line: TextBuf<192> = TextBuf::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:anim layers hash={:08x} folds={:08x},{:08x} joints={:08x} tier={} slot={} \
+             events={} parity={} {}\nTRINO_LAYER_COST: us_per_draw={}\n",
+            r.hash[0],
+            r.hash[1],
+            r.hash[2],
+            r.joints,
+            r.tier,
+            r.slot,
+            r.events,
+            r.parity.map_or(-1, |p| p as i32),
             if r.probed { "probed" } else { "drawn" },
             r.us_per_draw
         ),
@@ -4032,6 +4408,12 @@ pub trait GroupHost {
     fn heap_tolerance(&self) -> u32 {
         8 * 1024
     }
+    /// Turn the backend's hardware T&L (the N64's RSP, the PC's GPU path)
+    /// on or off for a parity check; `false` when it has no such switch for
+    /// skinned draws (the 3DS poses them on the CPU).
+    fn set_hardware_tnl(&mut self, _on: bool) -> bool {
+        false
+    }
 }
 
 /// Frames a group may take to load before the check gives up.
@@ -4283,6 +4665,12 @@ pub fn anim_steps(host: &mut dyn GroupHost) -> Result<u32, &'static str> {
         platform.log("TRINO_STEP:foot ik\n");
         let ik = foot_ik(renderer, platform)?;
         log_foot_ik(platform, &ik);
+        platform.log("TRINO_STEP:anim layers\n");
+    }
+    let layers = anim_layers(host)?;
+    {
+        let (_, platform) = host.parts();
+        log_anim_layers(platform, &layers);
         platform.unload_group(STRIDER_GROUP);
     }
     // Frames for the backends to free what the RSP or the GPU may still

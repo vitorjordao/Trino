@@ -7,7 +7,8 @@ use core::fmt::Write as _;
 use super::layout::{LABEL_LEN, TRACK_MIN, fit_prefix, floor, image_rect, round, wrap};
 use super::node::{NodeKind, Overflow, VAlign};
 use super::values::{UiValue, UiValues};
-use super::{Slot, Ui, UiEnv, UiNode, UiScreen, flags};
+use super::{Slot, UiEnv, UiNode, UiScreen, flags};
+use super::{SlotData, UiCore};
 use crate::math::{Color, Rect, Vec2, Vec3};
 use crate::math3d;
 use crate::render::{
@@ -100,7 +101,7 @@ struct Look {
     focused: bool,
 }
 
-impl<const N: usize> Ui<N> {
+impl UiCore<[SlotData]> {
     /// Lay out (when anything changed) and draw the whole screen: the main
     /// screen's nodes where the renderer is now, then — when the screen has
     /// bottom-screen nodes and the target a second screen — the bottom's,
@@ -177,7 +178,7 @@ impl<const N: usize> Ui<N> {
         // screen without depths makes no extra call.
         let mut depth = 0i8;
         for i in 0..self.count {
-            let slot = self.slots[i];
+            let slot = self.per[i].slot;
             if slot.on != which || self.hidden(i) {
                 continue;
             }
@@ -189,7 +190,7 @@ impl<const N: usize> Ui<N> {
             if hc && !matches!(n.kind, NodeKind::Image { .. } | NodeKind::Model3d { .. }) {
                 n.color = None;
             }
-            let rect = self.rects[i];
+            let rect = self.per[i].rect;
             let is_focus = focus == Some(i);
             let is_pressed = is_focus
                 && (pressed == Some((slot.node, slot.item))

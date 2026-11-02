@@ -67,7 +67,8 @@ fn the_strider_compresses_within_its_bounds_and_saves_ram() {
         raw.len()
     );
     let report = compression_report(&path, &opts, &bounds).unwrap();
-    assert_eq!(report.len(), 4);
+    // idle, walk, run, hop and #112's upper-body clips (aim ×5, shoot, breathe).
+    assert_eq!(report.len(), 11);
     for r in &report {
         assert!(r.max_rotation_deg <= bounds.rotation, "{r:?}");
         assert!(r.max_translation <= bounds.translation, "{r:?}");

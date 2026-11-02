@@ -169,6 +169,12 @@ pub struct Caps {
     /// time per draw, `perf::N64_COST.us_per_ik_draw`): a game turns it on
     /// for one character with `FootIk::force`.
     pub anim_ik: bool,
+    /// What one pose may hold (issue #112, [`crate::anim::AnimLayers`]):
+    /// layers with joint masks, and clip samples. The base N64 keeps #65's
+    /// one layer of three clips; the Expansion Pak and the 3DS take two
+    /// layers of six, the New 3DS, the PC and the Web all of it. A pose past
+    /// it folds the same way on every target ([`crate::anim::AnimPose::fold`]).
+    pub anim_layers: crate::anim::AnimLayers,
     /// How the finished 3D is post-processed ([`crate::post`], issue #64):
     /// the whole stack (HDR, tonemap, bloom, LUT, vignette, grain) on the PC
     /// and the Web, grading baked into colors and glow billboards on the
@@ -315,6 +321,7 @@ impl Caps {
         shadow_tier: crate::shadow::ShadowTier::Blob,
         stereo: false,
         anim_ik: false,
+        anim_layers: crate::anim::AnimLayers::AREF,
         post_tier: crate::post::PostTier::Baked,
         max_planar_shadows: 2,
         // The RDP's z: 18 bits, stored compressed (3-bit exponent, 11-bit
@@ -338,6 +345,10 @@ impl Caps {
     pub const N64_EXPANDED: Caps = Caps {
         ram_bytes: 8 * 1024 * 1024,
         hw_tier: HwTier::Expanded,
+        anim_layers: crate::anim::AnimLayers {
+            layers: 2,
+            clips: 6,
+        },
         ..Caps::N64
     };
 
@@ -367,6 +378,10 @@ impl Caps {
         shadow_tier: crate::shadow::ShadowTier::Planar,
         stereo: true,
         anim_ik: true,
+        anim_layers: crate::anim::AnimLayers {
+            layers: 2,
+            clips: 6,
+        },
         post_tier: crate::post::PostTier::Baked,
         max_planar_shadows: 255,
         // DEPTH24_STENCIL8, the 3D in its band (35%) of citro2d's range.
@@ -390,6 +405,7 @@ impl Caps {
         hw_tier: HwTier::Expanded,
         crowd_percent: 200,
         particle_percent: 200,
+        anim_layers: crate::anim::AnimLayers::MAX,
         ..Caps::N3DS
     };
 
@@ -420,6 +436,7 @@ impl Caps {
         shadow_tier: crate::shadow::ShadowTier::Map,
         stereo: false,
         anim_ik: true,
+        anim_layers: crate::anim::AnimLayers::MAX,
         post_tier: crate::post::PostTier::Full,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
@@ -465,6 +482,7 @@ impl Caps {
         shadow_tier: crate::shadow::ShadowTier::Map,
         stereo: false,
         anim_ik: true,
+        anim_layers: crate::anim::AnimLayers::MAX,
         post_tier: crate::post::PostTier::Full,
         max_planar_shadows: 255,
         // Depth32Float: z near 1 keeps 24 bits; two for the rasterizer's
@@ -501,6 +519,7 @@ impl Caps {
             hw_tier: table.hw_tier,
             crowd_percent: table.crowd_percent,
             particle_percent: table.particle_percent,
+            anim_layers: table.anim_layers,
             ..self
         }
     }
@@ -749,14 +768,17 @@ mod tests {
 
     #[test]
     fn expanded_tiers_only_change_what_their_hardware_adds() {
-        // The Expansion Pak: memory only.
+        // The Expansion Pak: memory, and what it holds (a second animation
+        // layer's pose table, issue #112).
         let x = Caps::N64_EXPANDED;
         assert_eq!(x.ram_bytes, 2 * Caps::N64.ram_bytes);
         assert_eq!(x.hw_tier, HwTier::Expanded);
+        assert_eq!((x.anim_layers.layers, x.anim_layers.clips), (2, 6));
         assert_eq!(
             Caps {
                 ram_bytes: Caps::N64.ram_bytes,
                 hw_tier: HwTier::Base,
+                anim_layers: crate::anim::AnimLayers::AREF,
                 ..x
             },
             Caps::N64
@@ -775,6 +797,7 @@ mod tests {
                 hw_tier: HwTier::Base,
                 crowd_percent: 100,
                 particle_percent: 100,
+                anim_layers: Caps::N3DS.anim_layers,
                 ..n
             },
             Caps::N3DS

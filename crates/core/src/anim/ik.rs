@@ -274,6 +274,39 @@ pub(crate) fn solve(
     }
 }
 
+/// The steepest slope a foot aligns to (sine of 30°): a steeper normal
+/// tilts the foot this far, then the clip's pose takes over.
+pub const MAX_FOOT_TILT: f32 = 0.5;
+
+/// Turn each foot onto the ground's normal under it (issue #112, after
+/// [`solve`]): the foot's subtree rotates about the ankle by the turn from
+/// the model's up to the normal, at most [`MAX_FOOT_TILT`]. Out of line.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub(crate) fn align_feet(
+    world: &mut [Mat34; MAX_JOINTS],
+    count: usize,
+    parent: &dyn Fn(usize) -> Option<usize>,
+    chains: &Chains,
+    slope: crate::anim::FootSlope,
+) {
+    for l in 0..chains.legs as usize {
+        let mut n = slope.normal(l);
+        let side = sqrt(n.x * n.x + n.z * n.z);
+        if side < 1e-4 {
+            continue;
+        }
+        if side > MAX_FOOT_TILT {
+            let k = MAX_FOOT_TILT / side;
+            n = Vec3::new(n.x * k, sqrt(1.0 - MAX_FOOT_TILT * MAX_FOOT_TILT), n.z * k);
+        }
+        let f = chains.chain[l][2] as usize;
+        let r = from_to(Vec3::new(0.0, 1.0, 0.0), n);
+        let at = pos(&world[f]);
+        turn_subtree(world, count, parent, f, at, &r);
+    }
+}
+
 /// A game's foot IK: the [`IkPose`] for a character from the ground under
 /// its feet, by tier.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -334,6 +367,39 @@ impl FootIk {
         }
         IkPose::from_units(out[0], out[1])
     }
+
+    /// The feet's slope for foot alignment (issue #112): `normal(world
+    /// point)` answers the ground's world normal under each foot (a
+    /// raycast's), `None` for none. Flat where the tier has no IK.
+    /// Layered poses carry it ([`crate::anim::AnimPose::with_slope`]); the
+    /// base N64's fold drops it.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn slope(
+        &self,
+        caps: &crate::Caps,
+        matrix: &Mat34,
+        feet: [Vec3; 2],
+        mut normal: impl FnMut(Vec3) -> Option<Vec3>,
+    ) -> crate::anim::FootSlope {
+        if !self.enabled(caps) {
+            return crate::anim::FootSlope::FLAT;
+        }
+        let mut n = [Vec3::new(0.0, 1.0, 0.0); 2];
+        for (o, f) in n.iter_mut().zip(feet) {
+            let w = matrix.transform_point(Vec3::new(f.x, 0.0, f.z));
+            if let Some(world) = normal(w) {
+                // World → model: the matrix's rotation transposed (its
+                // scale divides out when the normal is renormalized).
+                let m = &matrix.m;
+                *o = Vec3::new(
+                    m[0][0] * world.x + m[1][0] * world.y + m[2][0] * world.z,
+                    m[0][1] * world.x + m[1][1] * world.y + m[2][1] * world.z,
+                    m[0][2] * world.x + m[1][2] * world.y + m[2][2] * world.z,
+                );
+            }
+        }
+        crate::anim::FootSlope::from_normals(n[0], n[1])
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +449,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_sloped_foot_turns_onto_its_ground_within_the_limit() {
+        let chains = Chains {
+            legs: 1,
+            pelvis: NO_JOINT,
+            chain: [[0, 1, 2], [0, 0, 0]],
+        };
+        let up = |w: &[Mat34; MAX_JOINTS]| rot(&w[2], Vec3::new(0.0, 1.0, 0.0));
+        // Flat: the clip's foot.
+        let (mut w, parent) = leg();
+        let before = w;
+        align_feet(&mut w, 3, &parent, &chains, crate::anim::FootSlope::FLAT);
+        assert_eq!(w[2], before[2]);
+        // A gentle slope (about 11°): the foot's up is the ground's normal,
+        // the ankle stays where it was, the knee is untouched.
+        let n = Vec3::new(0.2, 1.0, 0.0);
+        let slope = crate::anim::FootSlope::from_normals(n, n);
+        align_feet(&mut w, 3, &parent, &chains, slope);
+        let u = up(&w);
+        let want = slope.normal(0);
+        assert!((u - want).dot(u - want) < 1e-4, "{u:?} vs {want:?}");
+        assert!((pos(&w[2]) - pos(&before[2])).dot(pos(&w[2]) - pos(&before[2])) < 1e-10);
+        assert_eq!(w[1], before[1]);
+        // A cliff: at most 30° (sin = MAX_FOOT_TILT).
+        let (mut w, parent) = leg();
+        let steep = Vec3::new(1.0, 0.2, 0.0);
+        align_feet(
+            &mut w,
+            3,
+            &parent,
+            &chains,
+            crate::anim::FootSlope::from_normals(steep, steep),
+        );
+        let side = up(&w);
+        assert!((sqrt(side.x * side.x + side.z * side.z) - MAX_FOOT_TILT).abs() < 2e-3);
     }
 
     #[test]

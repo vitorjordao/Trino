@@ -136,3 +136,8 @@ match self.strings.table() {
   `ui/selftest.ui.ron`) runs on the PC profiles (`engine_checks`), ares, Azahar and the
   browsers (where the pixel probes report skipped: no synchronous read-back).
 - A `Model3d` node sets its own camera: draw screens after the world's 3D.
+- **The UI's code is one copy for every size** (#112): `Ui<N>` derefs to
+  `UiCore<[SlotData]>`. New methods go on `impl UiCore<[SlotData]>`, never on
+  `impl<const N: usize> Ui<N>` (each `N` would duplicate them: a `Ui<128>` was 60 KB
+  of N64 code). `crates/core/tests/ui.rs::every_size_lays_out_and_draws_the_same_screen`
+  holds sizes 3, 8, 64 and 128 to the same layout.

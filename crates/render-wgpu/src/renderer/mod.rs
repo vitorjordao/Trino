@@ -422,6 +422,9 @@ pub struct PcRenderer {
     /// lit draws used (the lit pipeline's uniform).
     locals: LightList,
     wetness: f32,
+    /// This frame's layered poses (`push_pose`, issue #112): append-only,
+    /// cleared at `begin_frame`; draws point at them by `AnimRef::pose`.
+    poses: Vec<trino_core::anim::AnimPose>,
     /// This frame's screen-space AO (`set_ambient_occlusion`, cleared at
     /// `begin_frame`), what shows of it (`set_ao_view`, `TRINO_AO`) and
     /// its passes (built on first use).
@@ -2312,6 +2315,7 @@ impl PcRenderer {
             pending_tex: Vec::new(),
             pending_surf: Vec::new(),
             locals: LightList::EMPTY,
+            poses: Vec::new(),
             wetness: 0.0,
             ao: None,
             ao_view: AoView::Game,
@@ -4241,6 +4245,7 @@ impl PcRenderer {
         let chunks = cpu_tnl::run(
             &self.meshes,
             &self.job_ctxs,
+            &self.poses,
             &jobs,
             &mut self.workers,
             self.tnl_threads,
@@ -4492,7 +4497,7 @@ impl PcRenderer {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         let sphere = sh::caster_sphere(mesh.bounds(), matrix);
         match plan {
             ShadowPlan::None => {}
@@ -4613,7 +4618,7 @@ impl PcRenderer {
             let Some((tmdl, layout)) = self.meshes.get(&c.model) else {
                 continue;
             };
-            let mesh = Mesh::from_layout(tmdl, layout);
+            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
             let n = mesh.pose(c.anim, &mut joints);
             verts.extend((0..mesh.index_count).map(|k| {
                 let i = mesh.index(k) as usize;
@@ -5690,7 +5695,7 @@ impl PcRenderer {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         let n = accepted.len() as u32;
         self.frame_stats.models += n;
         self.frame_stats.tnl.instanced += n;
@@ -6032,6 +6037,7 @@ impl Renderer for PcRenderer {
         self.pending_tex.clear();
         self.pending_surf.clear();
         self.locals = LightList::EMPTY;
+        self.poses.clear();
         self.wetness = 0.0;
         self.ao = None;
         self.post = None;
@@ -6168,6 +6174,28 @@ impl Renderer for PcRenderer {
         self.light = *light;
     }
 
+    fn push_pose(&mut self, pose: &trino_core::anim::AnimPose) -> trino_core::AnimRef {
+        let (a, entry) = pose.table_entry(self.caps.anim_layers, self.poses.len());
+        if let Some(e) = entry {
+            self.poses.push(e);
+        }
+        a
+    }
+
+    fn pose_joints(
+        &self,
+        model: ModelId,
+        anim: &trino_core::AnimRef,
+        out: &mut [Mat34; trino_core::MAX_JOINTS],
+    ) -> usize {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return 0;
+        };
+        Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .pose_world(Some(*anim), out)
+    }
+
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
         if let Some(r) = self.recording_state() {
             let s = r.lights(lights);
@@ -6291,7 +6319,7 @@ impl Renderer for PcRenderer {
             self.frame_stats.not_loaded += 1;
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         self.frame_stats.models += 1;
         let texture = mesh
             .texture_for(params)
@@ -6642,7 +6670,7 @@ impl Renderer for PcRenderer {
                 self.frame_stats.not_loaded += instances.len() as u32;
                 return;
             };
-            let mesh = Mesh::from_layout(tmdl, layout);
+            let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
             let screen = self.current_screen_size();
             let eye = self.eye_view();
             let ctx = tnl_context(

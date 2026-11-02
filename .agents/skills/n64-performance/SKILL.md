@@ -436,7 +436,10 @@ docker run --rm -v "$PWD/target/n64":/w -w /w trino-n64:latest \
 ```
 
 Check code size first: `mips64-elf-nm -S --size-sort -C trino.elf | tail -30` in the
-same image. A hot function near or above 16 KB (the I-cache) is a lever on its own:
+same image. Code is RAM on the N64: for a feature, diff both ELFs' symbol sizes by name
+(strip the `::h…` hash and `.llvm.N` suffixes) against main's; #112 found +33 KB of its own
+and, under it, one copy of the UI per `Ui<N>` size (60 KB), now shared (`UiCore`). Closures
+don't inherit `optimize(size)`: move big ones into `fn`s. A hot function near or above 16 KB (the I-cache) is a lever on its own:
 `tessellate_with` was 60 KB until 1i. Code layout then moves less between builds too.
 
 Then find the function (`grep` its mangled name, e.g. `tessellate_joints`) and count

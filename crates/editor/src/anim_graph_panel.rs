@@ -28,6 +28,63 @@ use trino_scene::anim::{
 
 use crate::theme::{self, c, icon};
 
+/// The base's (`layer` 0) or a layer's states.
+pub fn states_in(def: &AnimGraphDef, layer: usize) -> &Vec<(String, StateDef)> {
+    match layer.checked_sub(1).and_then(|l| def.layers.get(l)) {
+        Some(l) => &l.states,
+        None => &def.states,
+    }
+}
+
+pub fn states_in_mut(def: &mut AnimGraphDef, layer: usize) -> &mut Vec<(String, StateDef)> {
+    match layer.checked_sub(1).filter(|&l| l < def.layers.len()) {
+        Some(l) => &mut def.layers[l].states,
+        None => &mut def.states,
+    }
+}
+
+pub fn transitions_in(def: &AnimGraphDef, layer: usize) -> &Vec<TransitionDef> {
+    match layer.checked_sub(1).and_then(|l| def.layers.get(l)) {
+        Some(l) => &l.transitions,
+        None => &def.transitions,
+    }
+}
+
+pub fn transitions_in_mut(def: &mut AnimGraphDef, layer: usize) -> &mut Vec<TransitionDef> {
+    match layer.checked_sub(1).filter(|&l| l < def.layers.len()) {
+        Some(l) => &mut def.layers[l].transitions,
+        None => &mut def.transitions,
+    }
+}
+
+fn layout_in(def: &AnimGraphDef, layer: usize) -> &Vec<(String, (f32, f32))> {
+    match layer.checked_sub(1).and_then(|l| def.layers.get(l)) {
+        Some(l) => &l.layout,
+        None => &def.layout,
+    }
+}
+
+fn layout_in_mut(def: &mut AnimGraphDef, layer: usize) -> &mut Vec<(String, (f32, f32))> {
+    match layer.checked_sub(1).filter(|&l| l < def.layers.len()) {
+        Some(l) => &mut def.layers[l].layout,
+        None => &mut def.layout,
+    }
+}
+
+fn start_in_mut(def: &mut AnimGraphDef, layer: usize) -> &mut Option<String> {
+    match layer.checked_sub(1).filter(|&l| l < def.layers.len()) {
+        Some(l) => &mut def.layers[l].start,
+        None => &mut def.start,
+    }
+}
+
+fn start_index_in(def: &AnimGraphDef, layer: usize) -> usize {
+    match layer.checked_sub(1).and_then(|l| def.layers.get(l)) {
+        Some(l) => l.start_index(),
+        None => def.start_index(),
+    }
+}
+
 /// What is selected on the canvas.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sel {
@@ -50,7 +107,17 @@ pub struct GraphEdit {
     /// Root motion the preview has been carried by (wrapped to stay in view).
     pub carried: RootPose,
     pub selected: Option<Sel>,
-    /// The condition being edited (RON) and why it does not parse.
+    /// The machine the canvas shows: 0 the base, `k` the graph's layer
+    /// `k - 1` (issue #112).
+    pub layer: usize,
+    /// The model's joint names (layer masks), and its rest-pose joints
+    /// (the mask picker's skeleton): set by the Animation tab.
+    pub joints: Vec<String>,
+    pub rest: Vec<(trino_core::Vec3, Option<usize>)>,
+    /// The 2D blend space editor's dragged point.
+    drag2d: Option<usize>,
+    /// The fold report of the previewed tier.
+    pub folds: Vec<sa::FoldNote>,
     cond_text: String,
     cond_error: Option<String>,
     cond_for: Option<usize>,
@@ -81,6 +148,11 @@ impl GraphEdit {
             inst: None,
             carried: RootPose::IDENTITY,
             selected: None,
+            layer: 0,
+            joints: Vec::new(),
+            rest: Vec::new(),
+            drag2d: None,
+            folds: Vec::new(),
             cond_text: String::new(),
             cond_error: None,
             cond_for: None,
@@ -122,12 +194,12 @@ impl GraphEdit {
                 self.def = def;
                 self.dirty = true;
                 if let Some(Sel::State(i)) = self.selected
-                    && i >= self.def.states.len()
+                    && i >= states_in(&self.def, self.layer).len()
                 {
                     self.selected = None;
                 }
                 if let Some(Sel::Transition(i)) = self.selected
-                    && i >= self.def.transitions.len()
+                    && i >= transitions_in(&self.def, self.layer).len()
                 {
                     self.selected = None;
                 }
@@ -156,9 +228,10 @@ impl GraphEdit {
         self.dirty = false;
         self.baked_for = Some(generation);
         let has = |s: &str| sounds.iter().any(|x| x == &format!("sounds/{s}"));
-        self.issues = sa::check(&self.def, clips, &has);
+        let joints = (!self.joints.is_empty()).then_some(self.joints.as_slice());
+        self.issues = sa::check_with(&self.def, clips, joints, &has);
         let old = self.inst.take().zip(self.tang.take());
-        self.tang = clips.and_then(|c| sa::to_tang(&self.def, c, &has).ok());
+        self.tang = clips.and_then(|c| sa::to_tang_with(&self.def, c, joints, &has).ok());
         if let Some(g) = self.tang.as_deref().and_then(|b| AnimGraph::parse(b).ok()) {
             let mut inst = AnimGraphInstance::new(&g);
             // Keep the values the panel had set.
@@ -211,6 +284,18 @@ impl GraphEdit {
         Some(self.inst.as_ref()?.anim(&g))
     }
 
+    /// The whole layered pose (issue #112) for a graph that has layers, a
+    /// 2D space or inertia: the preview pushes it into its renderer's pose
+    /// table, which folds it to the previewed look's tier. `None`: the
+    /// `AnimRef` is the pose.
+    pub fn layered_pose(&self) -> Option<trino_core::anim::AnimPose> {
+        if !self.def.uses_v2() {
+            return None;
+        }
+        let g = self.graph()?;
+        Some(self.inst.as_ref()?.pose(&g))
+    }
+
     /// Set a parameter of the live instance by name.
     pub fn set_param(&mut self, name: &str, v: f32) -> bool {
         let Some(bytes) = self.tang.clone() else {
@@ -228,37 +313,62 @@ impl GraphEdit {
         Some(self.inst.as_ref()?.param(g.param_named(name)?))
     }
 
-    /// The live state's index.
+    /// The live state's index in the shown machine (base or layer).
     pub fn live_state(&self) -> Option<usize> {
-        self.inst.as_ref().map(|i| i.state())
+        let g = self.graph()?;
+        let lo = g.states_of(self.layer).0;
+        self.inst
+            .as_ref()
+            .and_then(|i| i.layer_state(self.layer).checked_sub(lo))
+    }
+
+    /// The shown machine mid-crossfade: (from, progress), local indices.
+    pub fn live_fade(&self) -> Option<(usize, f32)> {
+        let g = self.graph()?;
+        let lo = g.states_of(self.layer).0;
+        let (f, k) = self.inst.as_ref()?.layer_transition(self.layer)?;
+        Some((f.checked_sub(lo)?, k))
     }
 
     /// Where state `i` is drawn (its `layout` entry, else a grid).
     pub fn pos(&self, i: usize) -> Pos2 {
-        let name = &self.def.states[i].0;
-        match self.def.layout.iter().find(|(n, _)| n == name) {
+        let name = &states_in(&self.def, self.layer)[i].0;
+        match layout_in(&self.def, self.layer)
+            .iter()
+            .find(|(n, _)| n == name)
+        {
             Some((_, (x, y))) => Pos2::new(*x, *y),
             None => Pos2::new(24.0 + (i % 3) as f32 * 210.0, 36.0 + (i / 3) as f32 * 96.0),
         }
     }
 
     fn set_pos(&mut self, i: usize, p: Pos2) {
-        let name = self.def.states[i].0.clone();
+        let name = states_in(&self.def, self.layer)[i].0.clone();
         let v = (p.x.round(), p.y.round());
-        match self.def.layout.iter_mut().find(|(n, _)| *n == name) {
+        match layout_in_mut(&mut self.def, self.layer)
+            .iter_mut()
+            .find(|(n, _)| *n == name)
+        {
             Some(e) => e.1 = v,
-            None => self.def.layout.push((name, v)),
+            None => layout_in_mut(&mut self.def, self.layer).push((name, v)),
         }
     }
 
     /// Rename state `i` everywhere (transitions, start, layout).
     pub fn rename_state(&mut self, i: usize, to: &str) -> Result<(), String> {
         let to = to.trim();
-        if to.is_empty() || self.def.states.iter().any(|(n, _)| n == to) {
+        if to.is_empty()
+            || states_in(&self.def, self.layer)
+                .iter()
+                .any(|(n, _)| n == to)
+        {
             return Err(format!("`{to}`: empty or already a state"));
         }
-        let from = std::mem::replace(&mut self.def.states[i].0, to.to_string());
-        for t in &mut self.def.transitions {
+        let from = std::mem::replace(
+            &mut states_in_mut(&mut self.def, self.layer)[i].0,
+            to.to_string(),
+        );
+        for t in transitions_in_mut(&mut self.def, self.layer) {
             if t.from == From::State(from.clone()) {
                 t.from = From::State(to.to_string());
             }
@@ -266,10 +376,10 @@ impl GraphEdit {
                 t.to = to.to_string();
             }
         }
-        if self.def.start.as_deref() == Some(from.as_str()) {
-            self.def.start = Some(to.to_string());
+        if start_in_mut(&mut self.def, self.layer).as_deref() == Some(from.as_str()) {
+            *start_in_mut(&mut self.def, self.layer) = Some(to.to_string());
         }
-        for (n, _) in &mut self.def.layout {
+        for (n, _) in layout_in_mut(&mut self.def, self.layer) {
             if *n == from {
                 *n = to.to_string();
             }
@@ -279,13 +389,13 @@ impl GraphEdit {
 
     /// Remove state `i` and every transition to or from it.
     pub fn remove_state(&mut self, i: usize) {
-        let (name, _) = self.def.states.remove(i);
+        let (name, _) = states_in_mut(&mut self.def, self.layer).remove(i);
         self.def
             .transitions
             .retain(|t| t.to != name && t.from != From::State(name.clone()));
-        self.def.layout.retain(|(n, _)| *n != name);
-        if self.def.start.as_deref() == Some(name.as_str()) {
-            self.def.start = None;
+        layout_in_mut(&mut self.def, self.layer).retain(|(n, _)| *n != name);
+        if start_in_mut(&mut self.def, self.layer).as_deref() == Some(name.as_str()) {
+            *start_in_mut(&mut self.def, self.layer) = None;
         }
         self.selected = None;
     }
@@ -293,18 +403,52 @@ impl GraphEdit {
     /// Add a state (a clip, or a blend space over the first float
     /// parameter); returns its index.
     pub fn add_state(&mut self, blend: bool, clips: &[String]) -> usize {
+        self.add_state_kind(if blend { 1 } else { 0 }, clips)
+    }
+
+    /// A float parameter named `name`, made when missing.
+    fn float_param(&mut self, name: &str) -> String {
+        if self.def.param(name).is_none() {
+            self.def.params.push((name.into(), ParamDef::Float(0.0)));
+        }
+        name.to_string()
+    }
+
+    /// Mark the graph for a rebake (the model's joints changed).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Add a state of `kind` (0 clip, 1 a 1D blend space, 2 a 2D one over
+    /// `x` and `y`: three clips in a triangle); returns its index.
+    pub fn add_state_kind(&mut self, kind: usize, clips: &[String]) -> usize {
         let mut name = self.new_name.trim().to_string();
         if name.is_empty() {
             name = "state".into();
         }
         let base = name.clone();
         let mut k = 2;
-        while self.def.states.iter().any(|(n, _)| *n == name) {
+        while states_in(&self.def, self.layer)
+            .iter()
+            .any(|(n, _)| *n == name)
+        {
             name = format!("{base}-{k}");
             k += 1;
         }
         let clip = clips.first().cloned().unwrap_or_default();
-        let state = if blend {
+        let blend = kind == 1;
+        let state = if kind == 2 {
+            let (x, y) = (self.float_param("x"), self.float_param("y"));
+            let at = |i: usize| clips.get(i).or(clips.first()).cloned().unwrap_or_default();
+            StateDef::Blend2D {
+                x,
+                y,
+                points: vec![(0.0, 0.0, at(0)), (1.0, 0.0, at(1)), (0.0, 1.0, at(2))],
+                speed: 1.0,
+                speed_param: None,
+                root_motion: true,
+            }
+        } else if blend {
             let param = self
                 .def
                 .params
@@ -338,23 +482,26 @@ impl GraphEdit {
                 events: Vec::new(),
             }
         };
-        self.def.states.push((name, state));
-        let i = self.def.states.len() - 1;
+        states_in_mut(&mut self.def, self.layer).push((name, state));
+        let i = states_in(&self.def, self.layer).len() - 1;
         self.selected = Some(Sel::State(i));
         i
     }
 
     /// Add a transition from state `from` to the next state, on `Finished`.
     pub fn add_transition(&mut self, from: usize) -> usize {
-        let n = self.def.states.len();
+        let n = states_in(&self.def, self.layer).len();
         let to = (from + 1) % n.max(1);
-        self.def.transitions.push(TransitionDef {
-            from: From::State(self.def.states[from].0.clone()),
-            to: self.def.states[to].0.clone(),
+        let names = states_in(&self.def, self.layer);
+        let (from, to) = (names[from].0.clone(), names[to].0.clone());
+        transitions_in_mut(&mut self.def, self.layer).push(TransitionDef {
+            from: From::State(from),
+            to,
             when: CondDef::Finished,
             blend: 0.15,
+            mode: Default::default(),
         });
-        let i = self.def.transitions.len() - 1;
+        let i = transitions_in(&self.def, self.layer).len() - 1;
         self.selected = Some(Sel::Transition(i));
         i
     }
@@ -399,23 +546,29 @@ pub fn canvas(ui: &mut egui::Ui, rect: Rect, g: &mut GraphEdit) -> bool {
         x += 24.0;
     }
     let origin = rect.min.to_vec2();
-    let n = g.def.states.len();
+    let n = states_in(&g.def, g.layer).len();
     let boxes: Vec<Rect> = (0..n)
         .map(|i| Rect::from_min_size(g.pos(i) + origin, BOX))
         .collect();
     let any = Rect::from_min_size(rect.min + Vec2::new(6.0, 6.0), Vec2::new(44.0, 20.0));
     let live = g.live_state();
-    let fading = g.inst.as_ref().and_then(|i| i.transition());
+    let fading = g.live_fade();
     // Transitions: a line between box edges, an arrowhead, its condition.
     let mut hit: Option<Sel> = None;
     let pointer = resp.interact_pointer_pos().or(resp.hover_pos());
-    for (ti, t) in g.def.transitions.iter().enumerate() {
-        let Some(to) = g.def.states.iter().position(|(nm, _)| *nm == t.to) else {
+    for (ti, t) in transitions_in(&g.def, g.layer).iter().enumerate() {
+        let Some(to) = states_in(&g.def, g.layer)
+            .iter()
+            .position(|(nm, _)| *nm == t.to)
+        else {
             continue;
         };
         let a = match &t.from {
             From::Any => any.center(),
-            From::State(f) => match g.def.states.iter().position(|(nm, _)| nm == f) {
+            From::State(f) => match states_in(&g.def, g.layer)
+                .iter()
+                .position(|(nm, _)| nm == f)
+            {
                 Some(i) => boxes[i].center(),
                 None => continue,
             },
@@ -428,7 +581,7 @@ pub fn canvas(ui: &mut egui::Ui, rect: Rect, g: &mut GraphEdit) -> bool {
         let end = edge(boxes[to], a, b);
         let selected = g.selected == Some(Sel::Transition(ti));
         let active = fading.is_some_and(|(from, _)| {
-            matches!(&t.from, From::State(f) if g.def.states.get(from).is_some_and(|s| s.0 == *f))
+            matches!(&t.from, From::State(f) if states_in(&g.def, g.layer).get(from).is_some_and(|s| s.0 == *f))
                 && Some(to) == live
         });
         let col = if selected {
@@ -461,7 +614,10 @@ pub fn canvas(ui: &mut egui::Ui, rect: Rect, g: &mut GraphEdit) -> bool {
             hit = Some(Sel::Transition(ti));
         }
     }
-    if g.def.transitions.iter().any(|t| t.from == From::Any) {
+    if transitions_in(&g.def, g.layer)
+        .iter()
+        .any(|t| t.from == From::Any)
+    {
         p.rect_filled(any, 10.0, c::BG3);
         p.text(
             any.center(),
@@ -471,9 +627,9 @@ pub fn canvas(ui: &mut egui::Ui, rect: Rect, g: &mut GraphEdit) -> bool {
             c::TEXT_WEAK,
         );
     }
-    let start = g.def.start_index();
+    let start = start_index_in(&g.def, g.layer);
     for (i, r) in boxes.iter().enumerate() {
-        let (name, s) = &g.def.states[i];
+        let (name, s) = &states_in(&g.def, g.layer)[i];
         let on = live == Some(i);
         let sel = g.selected == Some(Sel::State(i));
         p.rect_filled(*r, 7.0, if on { c::ACCENT_SOFT } else { c::BG2 });
@@ -489,6 +645,7 @@ pub fn canvas(ui: &mut egui::Ui, rect: Rect, g: &mut GraphEdit) -> bool {
         let glyph = match s {
             StateDef::Clip { .. } => icon::FILM_STRIP,
             StateDef::Blend1D { .. } => icon::SLIDERS_HORIZONTAL,
+            StateDef::Blend2D { .. } => icon::GRID_FOUR,
         };
         // The start state carries a flag (the editor's fonts have no arrows).
         let star = if i == start {
@@ -506,6 +663,9 @@ pub fn canvas(ui: &mut egui::Ui, rect: Rect, g: &mut GraphEdit) -> bool {
         let sub = match s {
             StateDef::Clip { clip, .. } => clip.clone(),
             StateDef::Blend1D { param, points, .. } => format!("{param}: {} clips", points.len()),
+            StateDef::Blend2D { x, y, points, .. } => {
+                format!("{x} × {y}: {} clips", points.len())
+            }
         };
         p.text(
             r.left_center() + Vec2::new(8.0, 8.0),
@@ -633,7 +793,7 @@ fn pick_w(
 /// The side panel: parameters, the selection, adding, the issues. Returns
 /// whether the graph changed (save it).
 pub fn controls(ui: &mut egui::Ui, g: &mut GraphEdit, clips: &[String]) -> bool {
-    let mut changed = false;
+    let mut changed = layers_ui(ui, g, clips);
     // ---- parameters: live values (and the list itself) ----
     theme::component(
         ui,
@@ -734,8 +894,8 @@ pub fn controls(ui: &mut egui::Ui, g: &mut GraphEdit, clips: &[String]) -> bool 
         "States",
         |ui| {
             ui.horizontal_wrapped(|ui| {
-                for i in 0..g.def.states.len() {
-                    let name = g.def.states[i].0.clone();
+                for i in 0..states_in(&g.def, g.layer).len() {
+                    let name = states_in(&g.def, g.layer)[i].0.clone();
                     let on = g.selected == Some(Sel::State(i));
                     let live = g.live_state() == Some(i);
                     let text = if live {
@@ -773,14 +933,20 @@ pub fn controls(ui: &mut egui::Ui, g: &mut GraphEdit, clips: &[String]) -> bool 
                     g.add_state(true, clips);
                     changed = true;
                 }
+                if named(ui, format!("{} 2D", icon::PLUS), "Add a 2D blend space") {
+                    g.add_state_kind(2, clips);
+                    changed = true;
+                }
             });
         },
     );
 
     // ---- the selection ----
     match g.selected {
-        Some(Sel::State(i)) if i < g.def.states.len() => changed |= state_ui(ui, g, i, clips),
-        Some(Sel::Transition(i)) if i < g.def.transitions.len() => {
+        Some(Sel::State(i)) if i < states_in(&g.def, g.layer).len() => {
+            changed |= state_ui(ui, g, i, clips)
+        }
+        Some(Sel::Transition(i)) if i < transitions_in(&g.def, g.layer).len() => {
             changed |= transition_ui(ui, g, i)
         }
         _ => {}
@@ -830,14 +996,302 @@ pub fn controls(ui: &mut egui::Ui, g: &mut GraphEdit, clips: &[String]) -> bool 
             );
         },
     );
+    // ---- what the previewed look's tier folds (issue #112) ----
+    if !g.folds.is_empty() {
+        let n = g.folds.len();
+        theme::component(
+            ui,
+            "graph-folds",
+            icon::STACK,
+            c::WARN,
+            &format!("This look folds the pose ({n})"),
+            |ui| {
+                for f in &g.folds {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{}: {}", f.at, f.message)).color(c::TEXT_WEAK),
+                        )
+                        .wrap(),
+                    );
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "Every tier: cargo xtask anim check {} --platform n64",
+                        g.name
+                    ))
+                    .size(11.0)
+                    .color(c::TEXT_FAINT),
+                );
+            },
+        );
+    }
     changed
+}
+
+/// The machines (the base and each layer), the selected layer's settings
+/// and its joint mask. Returns whether the graph changed.
+fn layers_ui(ui: &mut egui::Ui, g: &mut GraphEdit, clips: &[String]) -> bool {
+    let mut changed = false;
+    theme::component(ui, "graph-layers", icon::STACK, c::ACCENT, "Layers", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let mut pick = None;
+            let names: Vec<String> = std::iter::once("Base".to_string())
+                .chain(g.def.layers.iter().map(|l| l.name.clone()))
+                .collect();
+            for (k, n) in names.iter().enumerate() {
+                let r = ui.add(
+                    egui::Button::new(n.as_str())
+                        .selected(g.layer == k)
+                        .frame_when_inactive(false),
+                );
+                let label = format!("Layer {n}");
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+                if r.clicked() {
+                    pick = Some(k);
+                }
+            }
+            if let Some(k) = pick {
+                g.layer = k;
+                g.selected = None;
+                g.cond_for = None;
+            }
+            let r = ui.button(format!("{} Layer", icon::PLUS)).on_hover_text(
+                "A layer over the others: its own states, on the joints of its mask",
+            );
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Add a layer")
+            });
+            if r.clicked() && g.def.layers.len() < trino_core::anim::graph::MAX_LAYERS {
+                let mut name = "layer".to_string();
+                let mut k = 2;
+                while g.def.layers.iter().any(|l| l.name == name) {
+                    name = format!("layer-{k}");
+                    k += 1;
+                }
+                let clip = clips.first().cloned().unwrap_or_default();
+                g.def.layers.push(sa::LayerDef::starter(&name, &clip));
+                g.layer = g.def.layers.len();
+                g.selected = None;
+                changed = true;
+            }
+        });
+        if g.layer == 0 {
+            ui.label(
+                RichText::new("The base moves every joint; layers above it play on their masks.")
+                    .size(11.0)
+                    .color(c::TEXT_FAINT),
+            );
+            return;
+        }
+        let li = g.layer - 1;
+        let floats: Vec<String> = g
+            .def
+            .params
+            .iter()
+            .filter(|(_, p)| matches!(p, ParamDef::Float(_)))
+            .map(|(n, _)| n.clone())
+            .collect();
+        let mut remove = false;
+        {
+            let l = &mut g.def.layers[li];
+            theme::prop(ui, "Name", |ui| {
+                let mut text = l.name.clone();
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width()));
+                if r.lost_focus() && !text.trim().is_empty() && text != l.name {
+                    l.name = text.trim().to_string();
+                    changed = true;
+                }
+            });
+            let modes = ["Override".to_string(), "Additive".into()];
+            let cur = (l.mode == sa::LayerModeDef::Additive) as usize;
+            theme::prop(ui, "Mode", |ui| {
+                if let Some(k) = pick(
+                    ui,
+                    "graph-layer-mode",
+                    "Layer mode",
+                    &modes[cur].clone(),
+                    &modes,
+                ) {
+                    l.mode = if k == 1 {
+                        sa::LayerModeDef::Additive
+                    } else {
+                        sa::LayerModeDef::Override
+                    };
+                    changed = true;
+                }
+            });
+            let mut opts = vec!["value".to_string()];
+            opts.extend(floats.iter().cloned());
+            let cur = match &l.weight {
+                sa::WeightDef::Param(p) => p.clone(),
+                sa::WeightDef::Value(_) => "value".into(),
+            };
+            theme::prop(ui, "Weight", |ui| {
+                if let Some(k) = pick(ui, "graph-layer-weight", "Layer weight", &cur, &opts) {
+                    l.weight = if k == 0 {
+                        sa::WeightDef::Value(1.0)
+                    } else {
+                        sa::WeightDef::Param(opts[k].clone())
+                    };
+                    changed = true;
+                }
+            });
+            if let sa::WeightDef::Value(v) = &mut l.weight {
+                theme::prop(ui, "Value", |ui| {
+                    changed |= ui.add(egui::Slider::new(v, 0.0..=1.0)).changed();
+                });
+            }
+        }
+        // The mask: click the skeleton's joints, or tick them.
+        let joints = g.joints.clone();
+        if joints.is_empty() {
+            ui.label(
+                RichText::new("The model's joint names are unknown: the mask can't be edited here")
+                    .size(11.0)
+                    .color(c::TEXT_FAINT),
+            );
+        } else {
+            let mask = g.def.layers[li].mask.clone();
+            let all = mask.is_empty();
+            ui.label(
+                RichText::new(if all {
+                    "Mask: every joint (click joints to pick some)".to_string()
+                } else {
+                    format!("Mask: {} of {} joints", mask.len(), joints.len())
+                })
+                .color(c::TEXT_WEAK),
+            );
+            if let Some(j) = mask_view(ui, &g.rest, &joints, &mask) {
+                let l = &mut g.def.layers[li];
+                let n = joints[j].clone();
+                match l.mask.iter().position(|x| *x == n) {
+                    Some(k) => {
+                        l.mask.remove(k);
+                    }
+                    None => l.mask.push(n),
+                }
+                // Joint order, as the file reads best.
+                l.mask.sort_by_key(|n| joints.iter().position(|j| j == n));
+                changed = true;
+            }
+            ui.horizontal_wrapped(|ui| {
+                for n in &joints {
+                    let mut on = all || mask.contains(n);
+                    if ui.checkbox(&mut on, n.as_str()).changed() {
+                        let l = &mut g.def.layers[li];
+                        if all {
+                            l.mask = joints.iter().filter(|j| *j != n).cloned().collect();
+                        } else if on {
+                            l.mask.push(n.clone());
+                            l.mask.sort_by_key(|x| joints.iter().position(|j| j == x));
+                        } else {
+                            l.mask.retain(|x| x != n);
+                        }
+                        if l.mask.len() == joints.len() {
+                            l.mask.clear();
+                        }
+                        changed = true;
+                    }
+                }
+            });
+        }
+        if ui
+            .button(format!("{} Delete layer", icon::TRASH))
+            .on_hover_text("Remove the layer, its states and transitions")
+            .clicked()
+        {
+            remove = true;
+        }
+        if remove {
+            g.def.layers.remove(li);
+            g.layer = 0;
+            g.selected = None;
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// The model's rest skeleton seen from the front: a dot per joint (lit
+/// when in the mask), a line to its parent. Returns the clicked joint.
+fn mask_view(
+    ui: &mut egui::Ui,
+    rest: &[(trino_core::Vec3, Option<usize>)],
+    joints: &[String],
+    mask: &[String],
+) -> Option<usize> {
+    let w = (ui.available_width() - 4.0).max(80.0);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 150.0), Sense::click());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 6.0, c::BG0);
+    if rest.is_empty() {
+        return None;
+    }
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for (v, _) in rest {
+        lo = lo.min(Vec2::new(v.x, v.y));
+        hi = hi.max(Vec2::new(v.x, v.y));
+    }
+    let span = (hi - lo).max(Vec2::splat(1e-3));
+    // A diagram, not a drawing: each axis fills the box (a biped is tall
+    // and narrow; uniform scale piles its legs' labels on each other).
+    let kx = (rect.width() - 140.0).max(40.0) / span.x;
+    let ky = (rect.height() - 24.0) / span.y;
+    let mid = rect.center();
+    let c0 = (lo + hi) * 0.5;
+    // Front view: the model faces +Z, its left (+X) on the screen's right.
+    let at = |v: trino_core::Vec3| Pos2::new(mid.x + (v.x - c0.x) * kx, mid.y - (v.y - c0.y) * ky);
+    let on = |j: usize| mask.is_empty() || joints.get(j).is_some_and(|n| mask.contains(n));
+    for (j, (v, parent)) in rest.iter().enumerate() {
+        if let Some(pj) = parent {
+            p.line_segment([at(*v), at(rest[*pj].0)], (1.5, c::BORDER));
+        }
+        let _ = j;
+    }
+    let mut clicked = None;
+    let pointer = resp.interact_pointer_pos();
+    for (j, (v, _)) in rest.iter().enumerate() {
+        let q = at(*v);
+        p.circle_filled(q, 5.0, if on(j) { c::ACCENT } else { c::BG3 });
+        if let Some(name) = joints.get(j) {
+            // Labels away from the middle: the left side's to the left.
+            let left = q.x < mid.x - 1.0;
+            p.text(
+                q + Vec2::new(if left { -7.0 } else { 7.0 }, 0.0),
+                if left {
+                    egui::Align2::RIGHT_CENTER
+                } else {
+                    egui::Align2::LEFT_CENTER
+                },
+                name,
+                egui::FontId::proportional(9.5),
+                c::TEXT_FAINT,
+            );
+        }
+        if resp.clicked()
+            && let Some(pt) = pointer
+            && (pt - q).length() < 8.0
+        {
+            clicked = Some(j);
+        }
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Layer mask"));
+    clicked
 }
 
 /// A float parameter's slider range: around a blend space's points, else 0..5.
 fn float_range(def: &AnimGraphDef, name: &str) -> (f32, f32) {
     let mut lo: f32 = 0.0;
     let mut hi: f32 = 5.0;
-    for (_, s) in &def.states {
+    for (_, s) in def.machines().iter().flat_map(|m| m.states.iter()) {
+        if let StateDef::Blend2D { x, y, points, .. } = s
+            && (x == name || y == name)
+        {
+            let v = points.iter().map(|p| if x == name { p.0 } else { p.1 });
+            lo = v.clone().fold(lo, f32::min) * 1.25;
+            hi = v.fold(f32::MIN, f32::max).max(0.1) * 1.25;
+        }
         if let StateDef::Blend1D {
             param,
             points,
@@ -859,7 +1313,7 @@ fn float_range(def: &AnimGraphDef, name: &str) -> (f32, f32) {
 
 fn state_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize, clips: &[String]) -> bool {
     let mut changed = false;
-    let name = g.def.states[i].0.clone();
+    let name = states_in(&g.def, g.layer)[i].0.clone();
     let floats: Vec<String> = g
         .def
         .params
@@ -867,23 +1321,31 @@ fn state_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize, clips: &[String]) ->
         .filter(|(_, p)| matches!(p, ParamDef::Float(_)))
         .map(|(n, _)| n.clone())
         .collect();
+    let layer = g.layer;
     let weights = g.graph().zip(g.inst.as_ref()).map(|(gr, inst)| {
-        let mut cbuf = [trino_core::anim::Contribution {
-            clip: 0,
-            time: 0.0,
-            weight: 0.0,
-        }; 4];
-        let n = inst.contributions(&gr, &mut cbuf);
+        let mut cbuf = [trino_core::anim::Contribution::NONE; 6];
+        let n = inst.layer_contributions(&gr, layer, &mut cbuf);
         cbuf[..n]
             .iter()
             .map(|x| (gr.clip(x.clip).id, x.weight))
             .collect::<Vec<_>>()
     });
     let live = g.live_state() == Some(i);
-    let blend_value = match &g.def.states[i].1 {
+    let blend_value = match &states_in(&g.def, g.layer)[i].1 {
         StateDef::Blend1D { param, .. } => g.param(param),
         _ => None,
     };
+    let blend_xy = match &states_in(&g.def, g.layer)[i].1 {
+        StateDef::Blend2D { x, y, .. } => Some((
+            x.clone(),
+            y.clone(),
+            g.param(x).unwrap_or(0.0),
+            g.param(y).unwrap_or(0.0),
+        )),
+        _ => None,
+    };
+    let mut set_xy: Option<(f32, f32)> = None;
+    let mut drag2d = g.drag2d;
     let mut rename: Option<String> = None;
     theme::component(
         ui,
@@ -900,7 +1362,7 @@ fn state_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize, clips: &[String]) ->
                     rename = Some(text.clone());
                 }
             });
-            let (_, s) = &mut g.def.states[i];
+            let (_, s) = &mut states_in_mut(&mut g.def, g.layer)[i];
             match s {
                 StateDef::Clip {
                     clip,
@@ -1092,6 +1554,92 @@ fn state_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize, clips: &[String]) ->
                     });
                     changed |= ui.checkbox(root_motion, "Root motion").changed();
                 }
+                StateDef::Blend2D {
+                    x,
+                    y,
+                    points,
+                    speed,
+                    speed_param,
+                    root_motion,
+                } => {
+                    theme::prop(ui, "X", |ui| {
+                        if let Some(k) =
+                            pick(ui, "graph-2d-x", "Blend x parameter", &x.clone(), &floats)
+                        {
+                            *x = floats[k].clone();
+                            changed = true;
+                        }
+                    });
+                    theme::prop(ui, "Y", |ui| {
+                        if let Some(k) =
+                            pick(ui, "graph-2d-y", "Blend y parameter", &y.clone(), &floats)
+                        {
+                            *y = floats[k].clone();
+                            changed = true;
+                        }
+                    });
+                    // The plane: points (drag them), the baked triangles,
+                    // the parameters' dot (drag it to drive the preview).
+                    let value = blend_xy.as_ref().map(|b| (b.2, b.3));
+                    let w = weights.as_ref().filter(|_| live);
+                    match blend_2d(ui, points, value, w.map(|v| v.as_slice()), &mut drag2d) {
+                        Blend2DEdit::None => {}
+                        Blend2DEdit::Moved => changed = true,
+                        Blend2DEdit::Value(vx, vy) => set_xy = Some((vx, vy)),
+                    }
+                    let mut remove = None;
+                    for (k, (px, py, clip)) in points.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            changed |= ui
+                                .add(egui::DragValue::new(px).speed(0.01).prefix("x "))
+                                .changed();
+                            changed |= ui
+                                .add(egui::DragValue::new(py).speed(0.01).prefix("y "))
+                                .changed();
+                            let w = ui.available_width() - 36.0;
+                            if let Some(j) = pick_w(
+                                ui,
+                                &format!("graph-point2-{k}"),
+                                "Point clip",
+                                &clip.clone(),
+                                clips,
+                                w,
+                            ) {
+                                *clip = clips[j].clone();
+                                changed = true;
+                            }
+                            if theme::named_icon_button(ui, icon::TRASH, "Remove point").clicked() {
+                                remove = Some(k);
+                            }
+                        });
+                    }
+                    if let Some(k) = remove {
+                        points.remove(k);
+                        changed = true;
+                    }
+                    if ui.button(format!("{} Point", icon::PLUS)).clicked() {
+                        let n = points.len() as f32;
+                        points.push((n.cos(), n.sin(), clips.first().cloned().unwrap_or_default()));
+                        changed = true;
+                    }
+                    theme::prop(ui, "Speed", |ui| {
+                        changed |= ui
+                            .add(egui::DragValue::new(speed).range(0.0..=10.0).speed(0.01))
+                            .changed();
+                    });
+                    let mut opts = vec!["none".to_string()];
+                    opts.extend(floats.iter().cloned());
+                    theme::prop(ui, "× param", |ui| {
+                        let cur = speed_param.clone().unwrap_or_else(|| "none".into());
+                        if let Some(k) =
+                            pick(ui, "graph-2d-speed-param", "Speed parameter", &cur, &opts)
+                        {
+                            *speed_param = (k > 0).then(|| opts[k].clone());
+                            changed = true;
+                        }
+                    });
+                    changed |= ui.checkbox(root_motion, "Root motion").changed();
+                }
             }
             ui.horizontal(|ui| {
                 if ui
@@ -1099,7 +1647,7 @@ fn state_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize, clips: &[String]) ->
                     .on_hover_text("The graph's start state")
                     .clicked()
                 {
-                    g.def.start = Some(name.clone());
+                    *start_in_mut(&mut g.def, g.layer) = Some(name.clone());
                     changed = true;
                 }
                 if ui
@@ -1121,12 +1669,129 @@ fn state_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize, clips: &[String]) ->
             });
         },
     );
+    g.drag2d = drag2d;
+    if let (Some((vx, vy)), Some((x, y, ..))) = (set_xy, blend_xy) {
+        g.set_param(&x, vx);
+        g.set_param(&y, vy);
+    }
     if let Some(to) = rename
         && g.rename_state(i, &to).is_ok()
     {
         changed = true;
     }
     changed
+}
+
+/// What the 2D blend space view did.
+enum Blend2DEdit {
+    None,
+    /// A point was dragged (save the graph).
+    Moved,
+    /// The parameters' dot was dragged: drive the preview there.
+    Value(f32, f32),
+}
+
+/// A 2D blend space: its points on a plane (drag one to move it), the
+/// Delaunay triangles the bake will use, the parameters' value (drag it to
+/// set them) and the live weights by each point.
+fn blend_2d(
+    ui: &mut egui::Ui,
+    points: &mut [(f32, f32, String)],
+    value: Option<(f32, f32)>,
+    weights: Option<&[(trino_core::ClipId, f32)]>,
+    drag: &mut Option<usize>,
+) -> Blend2DEdit {
+    let w = (ui.available_width() - 4.0).max(120.0);
+    let side = w.min(220.0);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, side), Sense::click_and_drag());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 6.0, c::BG0);
+    let mut span = 1.0f32;
+    for q in points.iter() {
+        span = span.max(q.0.abs()).max(q.1.abs());
+    }
+    let span = span * 1.25;
+    let mid = rect.center();
+    let k = (side * 0.5 - 8.0) / span;
+    let at = |x: f32, y: f32| Pos2::new(mid.x + x * k, mid.y - y * k);
+    let back = |q: Pos2| ((q.x - mid.x) / k, (mid.y - q.y) / k);
+    p.line_segment([at(-span, 0.0), at(span, 0.0)], (1.0, c::BG2));
+    p.line_segment([at(0.0, -span), at(0.0, span)], (1.0, c::BG2));
+    if let Ok(tris) = sa::triangulate(points) {
+        for t in tris {
+            let v = t.map(|i| at(points[i as usize].0, points[i as usize].1));
+            for e in 0..3 {
+                p.line_segment([v[e], v[(e + 1) % 3]], (1.0, c::BORDER));
+            }
+        }
+    }
+    let mut out = Blend2DEdit::None;
+    let pointer = resp.interact_pointer_pos();
+    if resp.drag_started()
+        && let Some(pt) = pointer
+    {
+        *drag = points
+            .iter()
+            .position(|q| (at(q.0, q.1) - pt).length() < 8.0);
+    }
+    if resp.dragged()
+        && let Some(pt) = pointer
+    {
+        match *drag {
+            Some(i) if i < points.len() => {
+                let (x, y) = back(pt);
+                points[i].0 = (x * 100.0).round() / 100.0;
+                points[i].1 = (y * 100.0).round() / 100.0;
+            }
+            _ => {
+                let (x, y) = back(pt);
+                out = Blend2DEdit::Value(x, y);
+            }
+        }
+    }
+    if resp.drag_stopped() {
+        if drag.is_some() {
+            out = Blend2DEdit::Moved;
+        }
+        *drag = None;
+    }
+    if resp.clicked()
+        && let Some(pt) = pointer
+    {
+        let (x, y) = back(pt);
+        out = Blend2DEdit::Value(x, y);
+    }
+    for q in points.iter() {
+        let c0 = at(q.0, q.1);
+        let wt = weights
+            .and_then(|w| {
+                w.iter()
+                    .find(|x| x.0 == trino_core::ClipId::from_name(&q.2))
+            })
+            .map_or(0.0, |x| x.1);
+        p.circle_filled(
+            c0,
+            4.0 + 5.0 * wt,
+            if wt > 0.0 { c::PLAY } else { c::ACCENT },
+        );
+        p.text(
+            c0 + Vec2::new(7.0, -7.0),
+            egui::Align2::LEFT_BOTTOM,
+            if wt > 0.0 {
+                format!("{} {:.0}%", q.2, wt * 100.0)
+            } else {
+                q.2.clone()
+            },
+            egui::FontId::proportional(10.0),
+            c::TEXT_WEAK,
+        );
+    }
+    if let Some((x, y)) = value {
+        let q = at(x.clamp(-span, span), y.clamp(-span, span));
+        p.circle_stroke(q, 6.0, Stroke::new(2.0, c::PLAY));
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "2D blend space"));
+    out
 }
 
 /// A blend space's points on a line, the parameter's value marked.
@@ -1177,10 +1842,13 @@ fn transition_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize) -> bool {
     let mut changed = false;
     if g.cond_for != Some(i) {
         g.cond_for = Some(i);
-        g.cond_text = cond_ron(&g.def.transitions[i].when);
+        g.cond_text = cond_ron(&transitions_in(&g.def, g.layer)[i].when);
         g.cond_error = None;
     }
-    let names: Vec<String> = g.def.states.iter().map(|(n, _)| n.clone()).collect();
+    let names: Vec<String> = states_in(&g.def, g.layer)
+        .iter()
+        .map(|(n, _)| n.clone())
+        .collect();
     let mut froms = vec!["any".to_string()];
     froms.extend(names.iter().cloned());
     let mut remove = false;
@@ -1191,7 +1859,7 @@ fn transition_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize) -> bool {
         c::PREFAB,
         &format!("Transition {i}"),
         |ui| {
-            let t = &mut g.def.transitions[i];
+            let t = &mut transitions_in_mut(&mut g.def, g.layer)[i];
             let cur = match &t.from {
                 From::Any => "any".to_string(),
                 From::State(s) => s.clone(),
@@ -1222,6 +1890,26 @@ fn transition_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize) -> bool {
                     )
                     .changed();
             });
+            let modes = ["Crossfade".to_string(), "Inertial".into()];
+            let cur = (t.mode == sa::TransitionMode::Inertial) as usize;
+            theme::prop(ui, "Mode", |ui| {
+                if let Some(k) = pick(
+                    ui,
+                    "graph-mode",
+                    "Transition mode",
+                    &modes[cur].clone(),
+                    &modes,
+                )
+                .map(|k| k == 1)
+                {
+                    t.mode = if k {
+                        sa::TransitionMode::Inertial
+                    } else {
+                        sa::TransitionMode::Crossfade
+                    };
+                    changed = true;
+                }
+            });
             ui.label(RichText::new("When (RON): Trigger(\"x\"), Finished, Param(\"x\"), Not(..), And([..]), Greater(\"x\", 1.0), After(0.5)").size(11.0).color(c::TEXT_FAINT));
             let r = ui.add(
                 egui::TextEdit::singleline(&mut g.cond_text)
@@ -1249,7 +1937,7 @@ fn transition_ui(ui: &mut egui::Ui, g: &mut GraphEdit, i: usize) -> bool {
         },
     );
     if remove {
-        g.def.transitions.remove(i);
+        transitions_in_mut(&mut g.def, g.layer).remove(i);
         g.selected = None;
         g.cond_for = None;
         changed = true;
@@ -1276,6 +1964,23 @@ pub fn layout_moved(g: &mut GraphEdit) -> Result<(), String> {
 /// For tests and hooks: select a state or a transition by spec
 /// (`state:<name>` / `transition:<i>`).
 pub fn select_spec(g: &mut GraphEdit, spec: &str) {
+    // Several, comma-separated: `layer:upper,state:aim`.
+    if spec.contains(',') {
+        for part in spec.split(',') {
+            select_spec(g, part.trim());
+        }
+        return;
+    }
+    if let Some(n) = spec.strip_prefix("layer:") {
+        g.layer = g
+            .def
+            .layers
+            .iter()
+            .position(|l| l.name == n)
+            .map_or(0, |i| i + 1);
+        g.selected = None;
+        return;
+    }
     if let Some(n) = spec.strip_prefix("state:") {
         g.selected = g
             .def
@@ -1287,6 +1992,6 @@ pub fn select_spec(g: &mut GraphEdit, spec: &str) {
         .strip_prefix("transition:")
         .and_then(|i| i.parse().ok())
     {
-        g.selected = (i < g.def.transitions.len()).then_some(Sel::Transition(i));
+        g.selected = (i < transitions_in(&g.def, g.layer).len()).then_some(Sel::Transition(i));
     }
 }

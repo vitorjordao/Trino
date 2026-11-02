@@ -123,6 +123,8 @@ pub struct Report {
     pub verts: usize,
     pub tris: usize,
     pub joints: usize,
+    /// The joints' names, in TMDL order (what a layer mask or `ik` names).
+    pub joint_names: Vec<String>,
     /// Vertices blending two joints (smooth skinning, `--smooth`).
     pub blended: usize,
     /// Vertices per color slot 0..=4 (TMDL `SLOT`, glTF `_SLOT`); `None`
@@ -309,7 +311,7 @@ impl Report {
             ),
         };
         format!(
-            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"anmc\":{},\"compression\":{compression},\"vertices\":{},\"triangles\":{},\"joints\":{},\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"anim\":{anim},\"warnings\":[{}],\"errors\":[{}]}}",
+            "{{\"ok\":{},\"file\":{},\"bytes\":{},\"anmc\":{},\"compression\":{compression},\"vertices\":{},\"triangles\":{},\"joints\":{},\"joint_names\":[{}],\"blended_vertices\":{},\"slot_vertices\":{},\"clips\":[{}],\"size\":[{},{},{}],\"min\":[{},{},{}],\"radius\":{},\"n64_draw_us\":{},\"n64_frame_percent\":{:.1},\"anim\":{anim},\"warnings\":[{}],\"errors\":[{}]}}",
             self.errors.is_empty(),
             quote(&self.file),
             self.bytes,
@@ -317,6 +319,7 @@ impl Report {
             self.verts,
             self.tris,
             self.joints,
+            list(&self.joint_names),
             self.blended,
             self.slots.map_or("null".into(), |c| format!("{c:?}")),
             clips.join(","),
@@ -360,6 +363,15 @@ impl Report {
             );
         } else if self.joints > 0 {
             s += &format!("  rigid skeleton: {} joint(s)\n", self.joints);
+        }
+        if !self.joint_names.is_empty() {
+            let names: Vec<String> = self
+                .joint_names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| format!("{i} {n}"))
+                .collect();
+            s += &format!("  joints (layer masks, ik): {}\n", names.join(", "));
         }
         if let Some(c) = self.slots {
             s += &format!(
@@ -497,6 +509,7 @@ pub fn inspect(path: &Path, opts: &ModelOptions) -> Result<Report, String> {
         verts: mesh.vertex_count,
         tris,
         joints: mesh.joint_count(),
+        joint_names: trino_asset_pipeline::joint_names(path, opts).unwrap_or_default(),
         blended: (0..mesh.vertex_count)
             .filter(|&i| mesh.blend_of(i).is_some())
             .count(),

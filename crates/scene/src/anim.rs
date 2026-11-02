@@ -33,7 +33,9 @@ use trino_core::anim::graph::{self as g, op};
 use trino_core::anim::{AnimGraph, AnimGraphInstance, ClipMeta, EventId};
 use trino_core::{ClipId, Mesh};
 
-pub const GRAPH_VERSION: u32 = 1;
+/// 2: layers, `Blend2D`, `mode: Inertial` (issue #112); a version-1 file
+/// reads unchanged.
+pub const GRAPH_VERSION: u32 = 2;
 
 /// Where graphs live, under the project root.
 pub const DIR: &str = "assets/anim";
@@ -135,7 +137,7 @@ fn yes() -> bool {
 }
 
 fn version_one() -> u32 {
-    GRAPH_VERSION
+    1
 }
 
 fn default_blend() -> f32 {
@@ -209,6 +211,28 @@ pub enum StateDef {
         #[serde(default = "yes")]
         root_motion: bool,
     },
+    /// A blend space over two float parameters (direction × speed, aim
+    /// pitch × yaw): the clips at the corners of the triangle around the
+    /// value (a Delaunay triangulation baked from the points), weighted
+    /// by its barycentric coordinates, synchronized by normalized time.
+    /// Outside the points' hull, the nearest edge.
+    Blend2D {
+        x: String,
+        y: String,
+        /// (x, y, clip).
+        points: Vec<(f32, f32, String)>,
+        #[serde(default = "one")]
+        speed: f32,
+        #[serde(
+            default,
+            deserialize_with = "bare",
+            serialize_with = "bare_ser",
+            skip_serializing_if = "Option::is_none"
+        )]
+        speed_param: Option<String>,
+        #[serde(default = "yes")]
+        root_motion: bool,
+    },
 }
 
 impl StateDef {
@@ -217,6 +241,7 @@ impl StateDef {
         match self {
             StateDef::Clip { clip, .. } => vec![clip.as_str()],
             StateDef::Blend1D { points, .. } => points.iter().map(|(_, c)| c.as_str()).collect(),
+            StateDef::Blend2D { points, .. } => points.iter().map(|(_, _, c)| c.as_str()).collect(),
         }
     }
 
@@ -224,6 +249,16 @@ impl StateDef {
         match self {
             StateDef::Clip { .. } => "Clip",
             StateDef::Blend1D { .. } => "Blend1D",
+            StateDef::Blend2D { .. } => "Blend2D",
+        }
+    }
+
+    /// The most clips it plays at once (1, 2 or 3).
+    pub fn width(&self) -> usize {
+        match self {
+            StateDef::Clip { .. } => 1,
+            StateDef::Blend1D { points, .. } => points.len().clamp(1, 2),
+            StateDef::Blend2D { points, .. } => points.len().clamp(1, 3),
         }
     }
 }
@@ -314,9 +349,151 @@ pub struct TransitionDef {
     pub to: String,
     #[serde(default)]
     pub when: CondDef,
-    /// Crossfade seconds (0 = cut).
+    /// Crossfade seconds (0 = cut); an inertialized transition's decay.
     #[serde(default = "default_blend")]
     pub blend: f32,
+    /// `Crossfade` (both states play, weighted) or `Inertial` (the
+    /// destination plays alone from the first frame, plus the offset from
+    /// where the source was, decaying over `blend`: no extra clip played).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mode: TransitionMode,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// How a transition blends (issue #112).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TransitionMode {
+    #[default]
+    Crossfade,
+    Inertial,
+}
+
+/// How a layer combines with the ones under it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LayerModeDef {
+    /// Its masked joints take its pose, by its weight.
+    #[default]
+    Override,
+    /// Its clips' motion from their first frame is added on top.
+    Additive,
+}
+
+/// A layer's weight: a number, or a Float parameter's name (its value,
+/// clamped to 0..1).
+#[derive(Clone, Debug, PartialEq)]
+pub enum WeightDef {
+    Value(f32),
+    Param(String),
+}
+
+impl Default for WeightDef {
+    fn default() -> Self {
+        WeightDef::Value(1.0)
+    }
+}
+
+impl Serialize for WeightDef {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            WeightDef::Value(v) => s.serialize_f32(*v),
+            WeightDef::Param(p) => s.serialize_str(p),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WeightDef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = WeightDef;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a weight (0..1) or a Float parameter's name")
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<WeightDef, E> {
+                Ok(WeightDef::Value(v as f32))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<WeightDef, E> {
+                Ok(WeightDef::Value(v as f32))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<WeightDef, E> {
+                Ok(WeightDef::Value(v as f32))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<WeightDef, E> {
+                Ok(WeightDef::Param(v.to_string()))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// A layer over the base state machine (issue #112): its own states and
+/// transitions, playing on the joints of its mask.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LayerDef {
+    pub name: String,
+    /// The joints it moves, by name (the model's glTF nodes); empty: all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mode: LayerModeDef,
+    #[serde(default)]
+    pub weight: WeightDef,
+    /// Its start state (default: its first).
+    #[serde(
+        default,
+        deserialize_with = "bare",
+        serialize_with = "bare_ser",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub start: Option<String>,
+    #[serde(with = "ordered")]
+    pub states: Vec<(String, StateDef)>,
+    #[serde(default)]
+    pub transitions: Vec<TransitionDef>,
+    /// The editor's canvas for this layer.
+    #[serde(default, with = "ordered", skip_serializing_if = "Vec::is_empty")]
+    pub layout: Vec<(String, (f32, f32))>,
+}
+
+impl LayerDef {
+    pub fn state(&self, name: &str) -> Option<&StateDef> {
+        self.states.iter().find(|(n, _)| n == name).map(|(_, s)| s)
+    }
+
+    pub fn start_index(&self) -> usize {
+        self.start
+            .as_ref()
+            .and_then(|s| self.states.iter().position(|(n, _)| n == s))
+            .unwrap_or(0)
+    }
+
+    /// A starter layer: one clip state.
+    pub fn starter(name: &str, clip: &str) -> LayerDef {
+        LayerDef {
+            name: name.to_string(),
+            mask: Vec::new(),
+            mode: LayerModeDef::Override,
+            weight: WeightDef::Value(1.0),
+            start: None,
+            states: vec![(
+                clip.to_string(),
+                StateDef::Clip {
+                    clip: clip.to_string(),
+                    looping: None,
+                    speed: 1.0,
+                    speed_param: None,
+                    root_motion: false,
+                    events: Vec::new(),
+                },
+            )],
+            transitions: Vec::new(),
+            layout: Vec::new(),
+        }
+    }
 }
 
 /// `assets/anim/<name>.anim.ron`.
@@ -344,6 +521,9 @@ pub struct AnimGraphDef {
     /// Where the editor's graph view draws each state (its own layout).
     #[serde(default, with = "ordered", skip_serializing_if = "Vec::is_empty")]
     pub layout: Vec<(String, (f32, f32))>,
+    /// Layers over the base (issue #112), bottom to top.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<LayerDef>,
 }
 
 impl AnimGraphDef {
@@ -368,7 +548,12 @@ impl AnimGraphDef {
             .depth_limit(3)
             .struct_names(true)
             .separate_tuple_members(false);
-        ron::ser::to_string_pretty(self, cfg).expect("graph serializes")
+        // A file using layers, 2D spaces or inertia says it is version 2.
+        let mut def = self.clone();
+        if def.uses_v2() {
+            def.version = def.version.max(2);
+        }
+        ron::ser::to_string_pretty(&def, cfg).expect("graph serializes")
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -429,7 +614,64 @@ impl AnimGraphDef {
                 .collect(),
             transitions: Vec::new(),
             layout: Vec::new(),
+            layers: Vec::new(),
         }
+    }
+
+    /// Whether it needs `TANG` v2: layers, a 2D blend space or an
+    /// inertialized transition (else it bakes to v1, byte for byte).
+    pub fn uses_v2(&self) -> bool {
+        !self.layers.is_empty()
+            || self
+                .states
+                .iter()
+                .any(|(_, s)| matches!(s, StateDef::Blend2D { .. }))
+            || self
+                .transitions
+                .iter()
+                .any(|t| t.mode == TransitionMode::Inertial)
+    }
+
+    /// Every state machine: the base (`None`) then each layer.
+    pub fn machines(&self) -> Vec<Machine<'_>> {
+        let mut out = vec![Machine {
+            layer: None,
+            states: &self.states,
+            transitions: &self.transitions,
+            start: self.start_index(),
+        }];
+        for l in &self.layers {
+            out.push(Machine {
+                layer: Some(l),
+                states: &l.states,
+                transitions: &l.transitions,
+                start: l.start_index(),
+            });
+        }
+        out
+    }
+}
+
+/// One state machine of a graph: the base, or a layer's.
+#[derive(Clone, Copy, Debug)]
+pub struct Machine<'a> {
+    pub layer: Option<&'a LayerDef>,
+    pub states: &'a [(String, StateDef)],
+    pub transitions: &'a [TransitionDef],
+    pub start: usize,
+}
+
+impl Machine<'_> {
+    /// `state "x"` or `layer "upper" state "x"`.
+    pub fn at(&self, what: &str) -> String {
+        match self.layer {
+            Some(l) => format!("layer \"{}\" {what}", l.name),
+            None => what.to_string(),
+        }
+    }
+
+    pub fn state(&self, name: &str) -> Option<&StateDef> {
+        self.states.iter().find(|(n, _)| n == name).map(|(_, s)| s)
     }
 }
 
@@ -525,12 +767,24 @@ impl std::fmt::Display for Issue {
 
 /// Validate a graph: names (states, params, clips), parameter kinds per
 /// use, limits, blend points, events past their clip's end, unreachable
-/// states and dead ends. `clips` = the model's (`clip_facts`), `None` when
-/// the model is unknown (then clip checks are skipped and reported).
-/// `sound` says whether `sounds/<x>` exists for `sfx:<x>` events.
+/// states and dead ends, in the base and in every layer. `clips` = the
+/// model's (`clip_facts`), `None` when the model is unknown (then clip
+/// checks are skipped and reported). `sound` says whether `sounds/<x>`
+/// exists for `sfx:<x>` events.
 pub fn check(
     def: &AnimGraphDef,
     clips: Option<&[ClipFacts]>,
+    sound: &dyn Fn(&str) -> bool,
+) -> Vec<Issue> {
+    check_with(def, clips, None, sound)
+}
+
+/// [`check`] knowing the model's joint names (`joints`, glTF node order):
+/// layer masks are checked against them.
+pub fn check_with(
+    def: &AnimGraphDef,
+    clips: Option<&[ClipFacts]>,
+    joints: Option<&[String]>,
     sound: &dyn Fn(&str) -> bool,
 ) -> Vec<Issue> {
     let mut out = Vec::new();
@@ -541,14 +795,14 @@ pub fn check(
             message: m,
         })
     };
-    let state_at = |n: &str| format!("state \"{n}\"");
     if def.states.is_empty() {
         err("graph".into(), "has no states".into());
     }
-    if def.states.len() > g::MAX_STATES {
+    let total: usize = def.machines().iter().map(|m| m.states.len()).sum();
+    if total > g::MAX_STATES {
         err(
             "graph".into(),
-            format!("{} states (at most {})", def.states.len(), g::MAX_STATES),
+            format!("{total} states (at most {})", g::MAX_STATES),
         );
     }
     if def.params.len() > g::MAX_PARAMS {
@@ -561,14 +815,17 @@ pub fn check(
             ),
         );
     }
+    if def.layers.len() > g::MAX_LAYERS {
+        err(
+            "graph".into(),
+            format!("{} layers (at most {})", def.layers.len(), g::MAX_LAYERS),
+        );
+    }
     if let Some(s) = &def.start
         && def.state(s).is_none()
     {
         err("start".into(), format!("names no state (`{s}`)"));
     }
-    let kind = |p: &str| def.param(p);
-    let clip =
-        |name: &str| clips.and_then(|cs| cs.iter().find(|c| c.id == ClipId::from_name(name)));
     if clips.is_none() {
         err(
             "model".into(),
@@ -578,13 +835,118 @@ pub fn check(
             ),
         );
     }
+    let kind = |p: &str| def.param(p);
     let float_param =
         |at: &str, p: &str, what: &str, err: &mut dyn FnMut(String, String)| match kind(p) {
             Some(ParamDef::Float(_)) => {}
             Some(_) => err(at.into(), format!("{what} `{p}` must be a Float parameter")),
             None => err(at.into(), format!("{what} `{p}` is not a parameter")),
         };
-    for (name, s) in &def.states {
+    // Layers: names, masks, weights.
+    let mut masks: Vec<(String, u32)> = Vec::new();
+    for (i, l) in def.layers.iter().enumerate() {
+        let at = format!("layer \"{}\"", l.name);
+        if def.layers[..i].iter().any(|o| o.name == l.name) || l.name.is_empty() {
+            err(
+                at.clone(),
+                "layer names must be unique and not empty".into(),
+            );
+        }
+        if l.states.is_empty() {
+            err(at.clone(), "a layer needs states".into());
+        }
+        if let Some(s) = &l.start
+            && l.state(s).is_none()
+        {
+            err(at.clone(), format!("start names no state (`{s}`)"));
+        }
+        match &l.weight {
+            WeightDef::Value(v) if !(0.0..=1.0).contains(v) => {
+                err(at.clone(), format!("weight {v} is outside 0..1"))
+            }
+            WeightDef::Param(p) => float_param(&at, p, "weight", &mut err),
+            _ => {}
+        }
+        match (joints, mask_bits(&l.mask, joints.unwrap_or(&[]))) {
+            (_, Ok(bits)) if l.mode == LayerModeDef::Override => masks.push((l.name.clone(), bits)),
+            (_, Ok(_)) => {}
+            (None, Err(_)) => err(
+                at.clone(),
+                "its mask names joints, but the model's joints are unknown".into(),
+            ),
+            (Some(_), Err(e)) => err(at.clone(), e),
+        }
+    }
+    // Two override layers on the same joint: the upper one hides the lower.
+    let mut overlaps = Vec::new();
+    for (i, (a, ma)) in masks.iter().enumerate() {
+        for (b, mb) in &masks[i + 1..] {
+            if ma & mb != 0 {
+                overlaps.push(Issue {
+                    level: Level::Warning,
+                    at: format!("layer \"{b}\""),
+                    message: format!(
+                        "overrides {} joint(s) layer `{a}` also overrides: at full weight it hides them",
+                        (ma & mb).count_ones()
+                    ),
+                });
+            }
+        }
+    }
+    for m in def.machines() {
+        check_machine(def, &m, clips, sound, &mut out);
+    }
+    out.extend(overlaps);
+    out
+}
+
+/// A layer mask's bits from joint names (empty: every joint).
+pub fn mask_bits(names: &[String], joints: &[String]) -> Result<u32, String> {
+    if names.is_empty() {
+        return Ok(u32::MAX);
+    }
+    let mut bits = 0u32;
+    for n in names {
+        match joints.iter().position(|j| j == n) {
+            Some(i) if i < 32 => bits |= 1 << i,
+            Some(_) => return Err(format!("mask: joint `{n}` is past the 32 a mask holds")),
+            None => {
+                return Err(format!(
+                    "mask: no joint `{n}` in the model (joints: {})",
+                    joints.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(bits)
+}
+
+/// One machine's states and transitions (`check_with`).
+fn check_machine(
+    def: &AnimGraphDef,
+    m: &Machine,
+    clips: Option<&[ClipFacts]>,
+    sound: &dyn Fn(&str) -> bool,
+    out: &mut Vec<Issue>,
+) {
+    let mut err = |at: String, msg: String| {
+        out.push(Issue {
+            level: Level::Error,
+            at,
+            message: msg,
+        })
+    };
+    let state_at = |n: &str| m.at(&format!("state \"{n}\""));
+    let kind = |p: &str| def.param(p);
+    let clip =
+        |name: &str| clips.and_then(|cs| cs.iter().find(|c| c.id == ClipId::from_name(name)));
+    let float_param =
+        |at: &str, p: &str, what: &str, err: &mut dyn FnMut(String, String)| match kind(p) {
+            Some(ParamDef::Float(_)) => {}
+            Some(_) => err(at.into(), format!("{what} `{p}` must be a Float parameter")),
+            None => err(at.into(), format!("{what} `{p}` is not a parameter")),
+        };
+    for (name, s) in m.states {
         let at = state_at(name);
         for c in s.clips() {
             if clips.is_some() && clip(c).is_none() {
@@ -670,11 +1032,41 @@ pub fn check(
                     );
                 }
             }
+            StateDef::Blend2D {
+                x,
+                y,
+                points,
+                speed_param,
+                ..
+            } => {
+                float_param(&at, x, "x", &mut err);
+                float_param(&at, y, "y", &mut err);
+                if x == y {
+                    err(at.clone(), "x and y must be two parameters".into());
+                }
+                if let Some(p) = speed_param {
+                    float_param(&at, p, "speed_param", &mut err);
+                }
+                if points.len() > g::MAX_POINTS {
+                    err(
+                        at.clone(),
+                        format!("{} points (at most {})", points.len(), g::MAX_POINTS),
+                    );
+                }
+                match triangulate(points) {
+                    Ok(t) if t.len() > g::MAX_TRIANGLES => err(
+                        at.clone(),
+                        format!("{} triangles (at most {})", t.len(), g::MAX_TRIANGLES),
+                    ),
+                    Ok(_) => {}
+                    Err(e) => err(at.clone(), e),
+                }
+            }
         }
     }
-    let state_names: BTreeSet<&str> = def.states.iter().map(|(n, _)| n.as_str()).collect();
-    for (i, t) in def.transitions.iter().enumerate() {
-        let at = format!("transition {i}");
+    let state_names: BTreeSet<&str> = m.states.iter().map(|(n, _)| n.as_str()).collect();
+    for (i, t) in m.transitions.iter().enumerate() {
+        let at = m.at(&format!("transition {i}"));
         if let From::State(f) = &t.from
             && !state_names.contains(f.as_str())
         {
@@ -685,6 +1077,12 @@ pub fn check(
         }
         if t.blend < 0.0 || t.blend.is_nan() {
             err(at.clone(), "blend must be 0 or more seconds".into());
+        }
+        if t.mode == TransitionMode::Inertial && t.blend <= 0.0 {
+            err(
+                at.clone(),
+                "an Inertial transition needs a blend (its decay) above 0".into(),
+            );
         }
         if t.when.depth() > g::MAX_COND_DEPTH {
             err(
@@ -721,10 +1119,10 @@ pub fn check(
         });
     }
     // Reachability from the start.
-    if !def.states.is_empty() {
-        let start = def.states[def.start_index()].0.as_str();
+    if !m.states.is_empty() {
+        let start = m.states[m.start.min(m.states.len() - 1)].0.as_str();
         let mut seen = BTreeSet::from([start]);
-        let any: Vec<&str> = def
+        let any: Vec<&str> = m
             .transitions
             .iter()
             .filter(|t| t.from == From::Any)
@@ -733,7 +1131,7 @@ pub fn check(
         seen.extend(any.iter().copied());
         loop {
             let before = seen.len();
-            for t in &def.transitions {
+            for t in m.transitions {
                 if let From::State(f) = &t.from
                     && seen.contains(f.as_str())
                 {
@@ -744,7 +1142,7 @@ pub fn check(
                 break;
             }
         }
-        for (name, _) in &def.states {
+        for (name, _) in m.states {
             if !seen.contains(name.as_str()) {
                 out.push(Issue {
                     level: Level::Warning,
@@ -755,8 +1153,8 @@ pub fn check(
         }
         // A one-shot state no transition leaves holds its last frame
         // forever.
-        for (name, s) in &def.states {
-            let leaves = def.transitions.iter().any(|t| match &t.from {
+        for (name, s) in m.states {
+            let leaves = m.transitions.iter().any(|t| match &t.from {
                 From::Any => t.to != *name,
                 From::State(f) => f == name,
             });
@@ -775,17 +1173,121 @@ pub fn check(
             }
         }
     }
-    out
+}
+
+/// The Delaunay triangulation of a 2D blend space's points (point
+/// indices, counter-clockwise, in a deterministic order): every triangle
+/// whose circumcircle holds no other point, overlapping ones (cocircular
+/// points) dropped. Errors: fewer than three points, duplicates, all on a
+/// line.
+pub fn triangulate(points: &[(f32, f32, String)]) -> Result<Vec<[u8; 3]>, String> {
+    if points.len() < 3 {
+        return Err("a 2D blend space needs at least three points".into());
+    }
+    if points.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+        return Err("points must be finite".into());
+    }
+    let p: Vec<(f64, f64)> = points.iter().map(|q| (q.0 as f64, q.1 as f64)).collect();
+    for i in 0..p.len() {
+        for j in i + 1..p.len() {
+            if (p[i].0 - p[j].0).abs() < 1e-6 && (p[i].1 - p[j].1).abs() < 1e-6 {
+                return Err(format!(
+                    "points {i} and {j} are at the same place ({}, {})",
+                    points[i].0, points[i].1
+                ));
+            }
+        }
+    }
+    let cross = |a: usize, b: usize, c: usize| {
+        (p[b].0 - p[a].0) * (p[c].1 - p[a].1) - (p[b].1 - p[a].1) * (p[c].0 - p[a].0)
+    };
+    let span = p
+        .iter()
+        .flat_map(|q| [q.0.abs(), q.1.abs()])
+        .fold(1e-9, f64::max);
+    let eps = 1e-9 * span * span;
+    let mut tris: Vec<[usize; 3]> = Vec::new();
+    for a in 0..p.len() {
+        for b in a + 1..p.len() {
+            for c in b + 1..p.len() {
+                let d = cross(a, b, c);
+                if d.abs() <= eps {
+                    continue;
+                }
+                let t = if d > 0.0 { [a, b, c] } else { [a, c, b] };
+                // Strictly inside the circumcircle (counter-clockwise t).
+                let inside = |k: usize| {
+                    let [i, j, l] = t;
+                    let (ax, ay) = (p[i].0 - p[k].0, p[i].1 - p[k].1);
+                    let (bx, by) = (p[j].0 - p[k].0, p[j].1 - p[k].1);
+                    let (cx, cy) = (p[l].0 - p[k].0, p[l].1 - p[k].1);
+                    let det = (ax * ax + ay * ay) * (bx * cy - cx * by)
+                        - (bx * bx + by * by) * (ax * cy - cx * ay)
+                        + (cx * cx + cy * cy) * (ax * by - bx * ay);
+                    det > eps * span * span
+                };
+                if !(0..p.len()).any(|k| k != a && k != b && k != c && inside(k)) {
+                    tris.push(t);
+                }
+            }
+        }
+    }
+    if tris.is_empty() {
+        return Err("the points are all on one line: nothing to triangulate".into());
+    }
+    // Cocircular points give crossing triangles: keep the first of each
+    // overlapping pair.
+    let centroid = |t: &[usize; 3]| {
+        (
+            (p[t[0]].0 + p[t[1]].0 + p[t[2]].0) / 3.0,
+            (p[t[0]].1 + p[t[1]].1 + p[t[2]].1) / 3.0,
+        )
+    };
+    let holds = |t: &[usize; 3], q: (f64, f64)| {
+        (0..3).all(|e| {
+            let (a, b) = (p[t[e]], p[t[(e + 1) % 3]]);
+            (b.0 - a.0) * (q.1 - a.1) - (b.1 - a.1) * (q.0 - a.0) > eps
+        })
+    };
+    let crosses = |s: &[usize; 3], t: &[usize; 3]| {
+        let seg = |a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)| {
+            let o = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| {
+                (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+            };
+            o(a, b, c) * o(a, b, d) < -eps && o(c, d, a) * o(c, d, b) < -eps
+        };
+        (0..3).any(|i| (0..3).any(|j| seg(p[s[i]], p[s[(i + 1) % 3]], p[t[j]], p[t[(j + 1) % 3]])))
+            || holds(s, centroid(t))
+            || holds(t, centroid(s))
+    };
+    let mut kept: Vec<[usize; 3]> = Vec::new();
+    for t in tris {
+        if !kept.iter().any(|k| crosses(k, &t)) {
+            kept.push(t);
+        }
+    }
+    Ok(kept.into_iter().map(|t| t.map(|i| i as u8)).collect())
 }
 
 /// Bake a graph to `TANG` against its model's clips. Errors are
-/// [`check`]'s errors, joined.
+/// [`check`]'s errors, joined. A graph with no layers, 2D spaces or
+/// inertialized transitions bakes to `TANG` v1 (the bytes #65 baked).
 pub fn to_tang(
     def: &AnimGraphDef,
     clips: &[ClipFacts],
     sound: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<u8>, String> {
-    let errors: Vec<String> = check(def, Some(clips), sound)
+    to_tang_with(def, clips, None, sound)
+}
+
+/// [`to_tang`] with the model's joint names, which layer masks need.
+pub fn to_tang_with(
+    def: &AnimGraphDef,
+    clips: &[ClipFacts],
+    joints: Option<&[String]>,
+    sound: &dyn Fn(&str) -> bool,
+) -> Result<Vec<u8>, String> {
+    let errors: Vec<String> = check_with(def, Some(clips), joints, sound)
         .into_iter()
         .filter(|i| i.level == Level::Error)
         .map(|i| i.to_string())
@@ -793,25 +1295,41 @@ pub fn to_tang(
     if !errors.is_empty() {
         return Err(errors.join("\n"));
     }
+    let v2 = def.uses_v2();
+    let machines = def.machines();
+    // Each machine's first state and transition in the shared tables.
+    let mut s0 = Vec::new();
+    let mut t0 = Vec::new();
+    let (mut ns, mut nt) = (0usize, 0usize);
+    for m in &machines {
+        s0.push(ns);
+        t0.push(nt);
+        ns += m.states.len();
+        nt += m.transitions.len();
+    }
     let param_index = |p: &str| def.params.iter().position(|(n, _)| n == p).unwrap() as u16;
-    let state_index = |s: &str| def.states.iter().position(|(n, _)| n == s).unwrap() as u16;
     // The clips the graph plays, in first-use order.
     let mut used: Vec<&str> = Vec::new();
-    for (_, s) in &def.states {
-        for c in s.clips() {
-            if !used.contains(&c) {
-                used.push(c);
+    for m in &machines {
+        for (_, s) in m.states {
+            for c in s.clips() {
+                if !used.contains(&c) {
+                    used.push(c);
+                }
             }
         }
     }
     let clip_index = |c: &str| used.iter().position(|u| *u == c).unwrap() as u16;
     let facts = |c: &str| clips.iter().find(|f| f.id == ClipId::from_name(c)).unwrap();
+    // `feet()` reads the base's clips only: a clip only layers play needs
+    // no feet track (the console's RAM), nor root motion.
+    let base_clips: Vec<&str> = def.states.iter().flat_map(|(_, s)| s.clips()).collect();
 
     let head = g::HEADER_BYTES
         + def.params.len() * g::PARAM_BYTES
         + used.len() * g::CLIP_BYTES
-        + def.states.len() * g::STATE_BYTES
-        + def.transitions.len() * g::TRANSITION_BYTES;
+        + ns * g::STATE_BYTES
+        + nt * g::TRANSITION_BYTES;
     let mut data: Vec<u8> = Vec::new();
     let mut put = |bytes: &[u8]| -> u32 {
         while !data.len().is_multiple_of(4) {
@@ -824,19 +1342,27 @@ pub fn to_tang(
     let u32le = |v: u32| v.to_le_bytes();
     let mut table = Vec::with_capacity(head);
     table.extend_from_slice(g::TANG_MAGIC);
-    table.extend_from_slice(&u32le(g::TANG_VERSION));
+    table.extend_from_slice(&u32le(if v2 { g::TANG_VERSION } else { 1 }));
     table.extend_from_slice(&u32le(trino_core::asset_id(&def.model_path())));
     for n in [
         def.params.len(),
         used.len(),
-        def.states.len(),
-        def.transitions.len(),
+        ns,
+        nt,
         def.start_index(),
-        0,
+        if v2 { def.layers.len() } else { 0 },
     ] {
         table.extend_from_slice(&(n as u16).to_le_bytes());
     }
-    table.extend_from_slice(&[0; 8]);
+    // The layers' offset (patched below), the base's share.
+    let layers_at_field = table.len();
+    table.extend_from_slice(&[0; 4]);
+    if v2 {
+        table.extend_from_slice(&(def.states.len() as u16).to_le_bytes());
+        table.extend_from_slice(&(def.transitions.len() as u16).to_le_bytes());
+    } else {
+        table.extend_from_slice(&[0; 4]);
+    }
     for (name, p) in &def.params {
         table.extend_from_slice(&u32le(trino_core::asset_id(name)));
         let (kind, v) = match p {
@@ -852,123 +1378,211 @@ pub fn to_tang(
         table.extend_from_slice(&u32le(f.id.0));
         table.extend_from_slice(&f.duration.to_le_bytes());
         table.extend_from_slice(&[f.looping as u8, 0, 0, 0]);
+        let base = base_clips.contains(c);
         let ev = f.events.as_ref().map_or(g::NONE32, |b| put(b));
-        let root = f.root.as_ref().map_or(g::NONE32, |b| put(b));
-        let feet = f.feet.as_ref().map_or(g::NONE32, |b| put(b));
+        let root = f
+            .root
+            .as_ref()
+            .filter(|_| base)
+            .map_or(g::NONE32, |b| put(b));
+        let feet = f
+            .feet
+            .as_ref()
+            .filter(|_| base)
+            .map_or(g::NONE32, |b| put(b));
         table.extend_from_slice(&u32le(ev));
         table.extend_from_slice(&u32le(root));
         table.extend_from_slice(&u32le(feet));
     }
-    for (name, s) in &def.states {
-        let StateRow {
-            kind,
-            flags,
-            points,
-            speed,
-            speed_param,
-            param,
-            wrap,
-            events,
-        } = match s {
-            StateDef::Clip {
-                clip,
-                looping,
+    for m in &machines {
+        for (name, s) in m.states {
+            let StateRow {
+                kind,
+                flags,
+                points,
                 speed,
                 speed_param,
-                root_motion,
+                param,
+                wrap,
                 events,
-            } => {
-                let mut flags = if *root_motion {
-                    g::STATE_ROOT_MOTION
-                } else {
-                    0
-                };
-                if let Some(l) = looping {
-                    flags |= g::STATE_LOOP_SET | if *l { g::STATE_LOOP_ON } else { 0 };
+            } = match s {
+                StateDef::Clip {
+                    clip,
+                    looping,
+                    speed,
+                    speed_param,
+                    root_motion,
+                    events,
+                } => {
+                    let mut flags = if *root_motion {
+                        g::STATE_ROOT_MOTION
+                    } else {
+                        0
+                    };
+                    if let Some(l) = looping {
+                        flags |= g::STATE_LOOP_SET | if *l { g::STATE_LOOP_ON } else { 0 };
+                    }
+                    StateRow {
+                        kind: 0,
+                        flags,
+                        points: vec![(0.0, 0.0, clip_index(clip))],
+                        speed: *speed,
+                        speed_param: speed_param.as_ref(),
+                        param: g::NONE16,
+                        wrap: 0.0f32.to_le_bytes(),
+                        events,
+                    }
                 }
-                StateRow {
-                    kind: 0,
-                    flags,
-                    points: vec![(0.0, clip_index(clip))],
+                StateDef::Blend1D {
+                    param,
+                    points,
+                    wrap,
+                    speed,
+                    speed_param,
+                    root_motion,
+                } => StateRow {
+                    kind: 1,
+                    flags: if *root_motion {
+                        g::STATE_ROOT_MOTION
+                    } else {
+                        0
+                    },
+                    points: points
+                        .iter()
+                        .map(|(v, c)| (*v, 0.0, clip_index(c)))
+                        .collect(),
                     speed: *speed,
                     speed_param: speed_param.as_ref(),
-                    param: g::NONE16,
-                    wrap: 0.0,
-                    events,
-                }
-            }
-            StateDef::Blend1D {
-                param,
-                points,
-                wrap,
-                speed,
-                speed_param,
-                root_motion,
-            } => StateRow {
-                kind: 1,
-                flags: if *root_motion {
-                    g::STATE_ROOT_MOTION
-                } else {
-                    0
+                    param: param_index(param),
+                    wrap: wrap.unwrap_or(0.0).to_le_bytes(),
+                    events: &[],
                 },
-                points: points.iter().map(|(v, c)| (*v, clip_index(c))).collect(),
-                speed: *speed,
-                speed_param: speed_param.as_ref(),
-                param: param_index(param),
-                wrap: wrap.unwrap_or(0.0),
-                events: &[],
-            },
-        };
-        let mut pts = Vec::new();
-        for (v, c) in &points {
-            pts.extend_from_slice(&v.to_le_bytes());
-            pts.extend_from_slice(&c.to_le_bytes());
-            pts.extend_from_slice(&[0, 0]);
-        }
-        let points_at = put(&pts);
-        let events_at = if events.is_empty() {
-            g::NONE32
-        } else {
-            let mut list: Vec<&(f32, String)> = events.iter().collect();
-            list.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut b = (list.len() as u32).to_le_bytes().to_vec();
-            for (t, n) in list {
-                b.extend_from_slice(&t.to_le_bytes());
-                b.extend_from_slice(&EventId::from_name(n).0.to_le_bytes());
-                let snd = n
-                    .strip_prefix("sfx:")
-                    .map_or(0, |s| trino_core::asset_id(&format!("sounds/{s}")));
-                b.extend_from_slice(&snd.to_le_bytes());
+                StateDef::Blend2D {
+                    x,
+                    y,
+                    points,
+                    speed,
+                    speed_param,
+                    root_motion,
+                } => {
+                    let tris = triangulate(points).expect("checked");
+                    let mut w = param_index(y).to_le_bytes().to_vec();
+                    w.extend_from_slice(&(tris.len() as u16).to_le_bytes());
+                    StateRow {
+                        kind: 2,
+                        flags: if *root_motion {
+                            g::STATE_ROOT_MOTION
+                        } else {
+                            0
+                        },
+                        points: points
+                            .iter()
+                            .map(|(px, py, c)| (*px, *py, clip_index(c)))
+                            .collect(),
+                        speed: *speed,
+                        speed_param: speed_param.as_ref(),
+                        param: param_index(x),
+                        wrap: [w[0], w[1], w[2], w[3]],
+                        events: &[],
+                    }
+                }
+            };
+            let mut pts = Vec::new();
+            for (vx, vy, c) in &points {
+                pts.extend_from_slice(&vx.to_le_bytes());
+                if kind == 2 {
+                    pts.extend_from_slice(&vy.to_le_bytes());
+                }
+                pts.extend_from_slice(&c.to_le_bytes());
+                pts.extend_from_slice(&[0, 0]);
             }
-            put(&b)
-        };
-        table.extend_from_slice(&u32le(trino_core::asset_id(name)));
-        table.extend_from_slice(&[kind, flags]);
-        table.extend_from_slice(&(points.len() as u16).to_le_bytes());
-        table.extend_from_slice(&speed.to_le_bytes());
-        table.extend_from_slice(
-            &speed_param
-                .map_or(g::NONE16, |p| param_index(p))
-                .to_le_bytes(),
-        );
-        table.extend_from_slice(&param.to_le_bytes());
-        table.extend_from_slice(&wrap.to_le_bytes());
-        table.extend_from_slice(&u32le(points_at));
-        table.extend_from_slice(&u32le(events_at));
-        table.extend_from_slice(&[0; 4]);
+            let points_at = put(&pts);
+            let tris_at = if let StateDef::Blend2D { points, .. } = s {
+                let tris = triangulate(points).expect("checked");
+                put(&tris.concat())
+            } else {
+                0
+            };
+            let events_at = if events.is_empty() {
+                g::NONE32
+            } else {
+                let mut list: Vec<&(f32, String)> = events.iter().collect();
+                list.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut b = (list.len() as u32).to_le_bytes().to_vec();
+                for (t, n) in list {
+                    b.extend_from_slice(&t.to_le_bytes());
+                    b.extend_from_slice(&EventId::from_name(n).0.to_le_bytes());
+                    let snd = n
+                        .strip_prefix("sfx:")
+                        .map_or(0, |s| trino_core::asset_id(&format!("sounds/{s}")));
+                    b.extend_from_slice(&snd.to_le_bytes());
+                }
+                put(&b)
+            };
+            table.extend_from_slice(&u32le(trino_core::asset_id(name)));
+            table.extend_from_slice(&[kind, flags]);
+            table.extend_from_slice(&(points.len() as u16).to_le_bytes());
+            table.extend_from_slice(&speed.to_le_bytes());
+            table.extend_from_slice(
+                &speed_param
+                    .map_or(g::NONE16, |p| param_index(p))
+                    .to_le_bytes(),
+            );
+            table.extend_from_slice(&param.to_le_bytes());
+            table.extend_from_slice(&wrap);
+            table.extend_from_slice(&u32le(points_at));
+            table.extend_from_slice(&u32le(events_at));
+            table.extend_from_slice(&u32le(tris_at));
+        }
     }
-    for t in &def.transitions {
-        let from = match &t.from {
-            From::Any => g::NONE16,
-            From::State(f) => state_index(f),
-        };
-        let mut code = Vec::new();
-        encode_cond(&t.when, &param_index, &mut code);
-        let cond_at = put(&code);
-        table.extend_from_slice(&from.to_le_bytes());
-        table.extend_from_slice(&state_index(&t.to).to_le_bytes());
-        table.extend_from_slice(&t.blend.to_le_bytes());
-        table.extend_from_slice(&u32le(cond_at));
+    for (mi, m) in machines.iter().enumerate() {
+        let state_index =
+            |n: &str| (s0[mi] + m.states.iter().position(|(x, _)| x == n).unwrap()) as u16;
+        for t in m.transitions {
+            let from = match &t.from {
+                From::Any => g::NONE16,
+                From::State(f) => state_index(f),
+            };
+            let mut to = state_index(&t.to);
+            if t.mode == TransitionMode::Inertial {
+                to |= g::INERTIAL;
+            }
+            let mut code = Vec::new();
+            encode_cond(&t.when, &param_index, &mut code);
+            let cond_at = put(&code);
+            table.extend_from_slice(&from.to_le_bytes());
+            table.extend_from_slice(&to.to_le_bytes());
+            table.extend_from_slice(&t.blend.to_le_bytes());
+            table.extend_from_slice(&u32le(cond_at));
+        }
+    }
+    if v2 && !def.layers.is_empty() {
+        let mut rec = Vec::new();
+        for (i, l) in def.layers.iter().enumerate() {
+            let mi = i + 1;
+            let mask = mask_bits(&l.mask, joints.unwrap_or(&[]))?;
+            let (wp, w) = match &l.weight {
+                WeightDef::Value(v) => (g::NONE16, *v),
+                WeightDef::Param(p) => (param_index(p), 1.0),
+            };
+            rec.extend_from_slice(&u32le(trino_core::asset_id(&l.name)));
+            rec.extend_from_slice(&u32le(mask));
+            rec.extend_from_slice(&[(l.mode == LayerModeDef::Additive) as u8, 0]);
+            rec.extend_from_slice(&wp.to_le_bytes());
+            rec.extend_from_slice(&w.to_le_bytes());
+            for v in [
+                s0[mi],
+                l.states.len(),
+                t0[mi],
+                l.transitions.len(),
+                s0[mi] + l.start_index(),
+                0,
+            ] {
+                rec.extend_from_slice(&(v as u16).to_le_bytes());
+            }
+        }
+        let at = put(&rec);
+        table[layers_at_field..layers_at_field + 4].copy_from_slice(&u32le(at));
     }
     debug_assert_eq!(table.len(), head);
     table.extend_from_slice(&data);
@@ -981,11 +1595,13 @@ pub fn to_tang(
 struct StateRow<'a> {
     kind: u8,
     flags: u8,
-    points: Vec<(f32, u16)>,
+    /// (x, y, clip); y only for 2D.
+    points: Vec<(f32, f32, u16)>,
     speed: f32,
     speed_param: Option<&'a String>,
     param: u16,
-    wrap: f32,
+    /// The 1D wrap, or a 2D state's y param and triangle count.
+    wrap: [u8; 4],
     events: &'a [(f32, String)],
 }
 
@@ -1032,6 +1648,81 @@ fn encode_cond(c: &CondDef, param: &dyn Fn(&str) -> u16, out: &mut Vec<u8>) {
     }
 }
 
+/// What a tier folds of a graph (issue #112, `anim check --platform`): the
+/// same rules [`trino_core::anim::AnimPose::fold`] applies at run time,
+/// worked out for the graph's worst case, so the fallback a console plays
+/// is written down, never a silent difference.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct FoldNote {
+    /// What it is about: `layer "upper"`, `transition 2`, `pose`.
+    pub at: String,
+    pub message: String,
+}
+
+/// Fold notes for a tier's `caps` (empty: the graph plays whole there).
+pub fn fold_report(def: &AnimGraphDef, caps: trino_core::anim::AnimLayers) -> Vec<FoldNote> {
+    let mut out = Vec::new();
+    let keep = (caps.layers.max(1) as usize).min(def.layers.len() + 1);
+    let aref = caps.layers <= 1 && caps.clips <= 3;
+    for l in def.layers.iter().skip(keep - 1) {
+        out.push(FoldNote {
+            at: format!("layer \"{}\"", l.name),
+            message: format!(
+                "dropped: this tier plays {} layer(s); the base's pose draws",
+                caps.layers.max(1)
+            ),
+        });
+    }
+    // The worst case per machine: a crossfade between its two widest
+    // states, or an inertialized one (its pose plus three frozen clips
+    // each way).
+    let mut worst = 0usize;
+    let mut inertial_notes = Vec::new();
+    for (mi, m) in def.machines().into_iter().take(keep).enumerate() {
+        let width = |n: &str| m.state(n).map_or(1, StateDef::width);
+        let widest = m.states.iter().map(|(_, s)| s.width()).max().unwrap_or(1);
+        let mut w = widest;
+        for (i, t) in m.transitions.iter().enumerate() {
+            let from = match &t.from {
+                From::State(f) => width(f),
+                From::Any => widest,
+            };
+            let to = width(&t.to);
+            let n = match t.mode {
+                TransitionMode::Crossfade if t.blend > 0.0 => from + to,
+                TransitionMode::Inertial => {
+                    inertial_notes.push((mi, i, from.min(3), to));
+                    to + from.min(3) + to
+                }
+                _ => to,
+            };
+            w = w.max(n);
+        }
+        worst += w;
+    }
+    for (mi, i, from, to) in inertial_notes {
+        let m = &def.machines()[mi];
+        if aref || worst > caps.clips as usize {
+            out.push(FoldNote {
+                at: m.at(&format!("transition {i}")),
+                message: format!(
+                    "inertialized -> a crossfade from the frozen source ({from} + {to} clips): no offsets on this tier"
+                ),
+            });
+        }
+    }
+    if worst > caps.clips as usize {
+        out.push(FoldNote {
+            at: "pose".into(),
+            message: format!(
+                "up to {worst} clips at once fold to {}: the lightest go, each layer renormalized (a 2D space toward its nearest edge)",
+                caps.clips
+            ),
+        });
+    }
+    out
+}
+
 /// A script for [`simulate`]: parameter changes at times.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename = "Script", deny_unknown_fields)]
@@ -1069,6 +1760,9 @@ impl ScriptDef {
 /// One stretch of time in a state.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Segment {
+    /// The layer (`None`: the base).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
     pub state: String,
     pub from: f32,
     pub to: f32,
@@ -1076,9 +1770,24 @@ pub struct Segment {
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct TraceTransition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
     pub at: f32,
     pub from: String,
     pub to: String,
+    /// An inertialized transition.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inertial: bool,
+}
+
+/// A layer's share of a pose sample.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct LayerSample {
+    pub layer: String,
+    pub state: String,
+    /// Its weight now (0: left out of the pose).
+    pub weight: f32,
+    pub clips: Vec<(String, f32, f32)>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -1096,8 +1805,16 @@ pub struct TraceEvent {
 pub struct TraceSample {
     pub at: f32,
     pub state: String,
-    /// (clip, time, weight) of each clip in the pose.
+    /// (clip, time, weight) of each clip in the base's pose.
     pub clips: Vec<(String, f32, f32)>,
+    /// Each layer's (issue #112).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<LayerSample>,
+    /// What's left of the base's inertialized offset (1 → 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inertia: Option<f32>,
+    /// `AnimPose::digest` of the whole pose.
+    pub pose: u32,
 }
 
 /// What a script did to a graph (`anim simulate`'s JSON).
@@ -1129,7 +1846,14 @@ pub fn simulate(
 ) -> Result<Trace, String> {
     let graph = AnimGraph::parse(tang).map_err(|e| format!("graph: {e:?}"))?;
     let mut inst = AnimGraphInstance::new(&graph);
-    let state_name = |i: usize| def.states.get(i).map_or("?".into(), |(n, _)| n.clone());
+    // State names by global index (the base's, then each layer's).
+    let all_states: Vec<String> = def
+        .machines()
+        .iter()
+        .flat_map(|m| m.states.iter().map(|(n, _)| n.clone()))
+        .collect();
+    let state_name = |i: usize| all_states.get(i).cloned().unwrap_or_else(|| "?".into());
+    let layer_name = |l: usize| (l > 0).then(|| def.layers[l - 1].name.clone());
     let clip_name = |id: ClipId| {
         clip_names
             .iter()
@@ -1138,11 +1862,14 @@ pub fn simulate(
             .unwrap_or_else(|| format!("{:#010x}", id.0))
     };
     let mut event_names: Vec<String> = Vec::new();
-    for (_, s) in &def.states {
-        if let StateDef::Clip { events, .. } = s {
-            event_names.extend(events.iter().map(|(_, n)| n.clone()));
+    for m in def.machines() {
+        for (_, s) in m.states {
+            if let StateDef::Clip { events, .. } = s {
+                event_names.extend(events.iter().map(|(_, n)| n.clone()));
+            }
         }
     }
+    let machines = 1 + inst.layer_count();
     let dt = if script.dt > 0.0 {
         script.dt
     } else {
@@ -1155,11 +1882,14 @@ pub fn simulate(
     let mut trace = Trace {
         graph: def.model_path(),
         updates,
-        segments: vec![Segment {
-            state: state_name(inst.state()),
-            from: 0.0,
-            to: 0.0,
-        }],
+        segments: (0..machines)
+            .map(|l| Segment {
+                layer: layer_name(l),
+                state: state_name(inst.layer_state(l)),
+                from: 0.0,
+                to: 0.0,
+            })
+            .collect(),
         transitions: Vec::new(),
         events: Vec::new(),
         root: (0.0, 0.0, 0.0),
@@ -1183,7 +1913,7 @@ pub fn simulate(
             }
             next += 1;
         }
-        let before = inst.state();
+        let before: Vec<usize> = (0..machines).map(|l| inst.layer_state(l)).collect();
         inst.update(&graph, dt);
         let now = t + dt;
         for e in inst.events().iter() {
@@ -1206,38 +1936,68 @@ pub fn simulate(
             z: d.translation.z,
             yaw: d.yaw,
         });
-        if inst.state() != before {
-            trace.segments.last_mut().unwrap().to = now;
+        for (l, &was) in before.iter().enumerate() {
+            let is = inst.layer_state(l);
+            if is == was {
+                continue;
+            }
+            let name = layer_name(l);
+            if let Some(seg) = trace.segments.iter_mut().rev().find(|s| s.layer == name) {
+                seg.to = now;
+            }
             trace.transitions.push(TraceTransition {
+                layer: name.clone(),
                 at: now,
-                from: state_name(before),
-                to: state_name(inst.state()),
+                from: state_name(was),
+                to: state_name(is),
+                inertial: inst.inertia(l).is_some_and(|d| d > 0.99),
             });
             trace.segments.push(Segment {
-                state: state_name(inst.state()),
+                layer: name,
+                state: state_name(is),
                 from: now,
                 to: now,
             });
         }
         if sample_every > 0 && u % sample_every == 0 {
-            let mut c = [trino_core::anim::Contribution {
-                clip: 0,
-                time: 0.0,
-                weight: 0.0,
-            }; 4];
-            let n = inst.contributions(&graph, &mut c);
+            let clips_of = |l: usize| {
+                let mut c = [trino_core::anim::Contribution::NONE; g::MAX_CONTRIBUTIONS];
+                let n = inst.layer_contributions(&graph, l, &mut c);
+                c[..n]
+                    .iter()
+                    .map(|x| (clip_name(graph.clip(x.clip).id), x.time, x.weight))
+                    .collect::<Vec<_>>()
+            };
+            let pose = inst.pose(&graph);
             trace.samples.push(TraceSample {
                 at: now,
                 state: state_name(inst.state()),
-                clips: c[..n]
-                    .iter()
-                    .map(|x| (clip_name(graph.clip(x.clip).id), x.time, x.weight))
+                clips: clips_of(0),
+                layers: (1..machines)
+                    .map(|l| {
+                        let lw = graph.layer(l);
+                        let w = lw.weight
+                            * lw.weight_param
+                                .map_or(1.0, |p| inst.param(p).clamp(0.0, 1.0));
+                        LayerSample {
+                            layer: def.layers[l - 1].name.clone(),
+                            state: state_name(inst.layer_state(l)),
+                            weight: w,
+                            clips: clips_of(l),
+                        }
+                    })
                     .collect(),
+                inertia: inst.inertia(0),
+                pose: pose.digest(),
             });
         }
     }
-    if let Some(s) = trace.segments.last_mut() {
-        s.to = updates as f32 * dt;
+    // Each machine's last segment runs to the end.
+    for l in 0..machines {
+        let name = layer_name(l);
+        if let Some(seg) = trace.segments.iter_mut().rev().find(|s| s.layer == name) {
+            seg.to = updates as f32 * dt;
+        }
     }
     trace.root = (pose.x, pose.z, pose.yaw);
     trace.digest = inst.digest();

@@ -299,6 +299,82 @@ fn animated_and_smooth_skinned_meshes_draw_on_the_gpu() {
     assert!(a != b);
 }
 
+/// A layered pose (issue #112): the walk with the wave over some joints
+/// and an additive layer, pushed into the renderer's pose table. The GPU
+/// path poses the same joints as the CPU path (the oracle), the table's
+/// pose is what draws (not the folded `AnimRef`), and `pose_joints` says so.
+#[test]
+fn layered_poses_draw_the_same_on_the_gpu_and_the_cpu() {
+    use trino_core::anim::{AnimPose, JointMask, LayerMode, PoseLayer, SampleRole};
+    let _gpu = gpu();
+    let Some(mut r) = headless() else {
+        return;
+    };
+    upload(&mut r);
+    let walk = ClipId::from_name("walk");
+    let wave = ClipId::from_name("wave");
+    let pose = |t: f32| {
+        let mut p = AnimPose::clip(walk, t);
+        let up = p
+            .add_layer(PoseLayer {
+                mask: JointMask(0b1111_0000),
+                mode: LayerMode::Override,
+                weight: 0.8,
+                decay: 0.0,
+            })
+            .unwrap();
+        p.push(up, SampleRole::Pose, wave, 0.4, 1.0);
+        let add = p
+            .add_layer(PoseLayer {
+                mask: JointMask::ALL,
+                mode: LayerMode::Additive,
+                weight: 0.5,
+                decay: 0.0,
+            })
+            .unwrap();
+        p.push(add, SampleRole::Pose, wave, 0.7, 1.0);
+        p
+    };
+    let frame = |r: &mut PcRenderer, layered: bool| {
+        begin(r, false);
+        for (k, t) in [0.1f32, 0.35, 0.6].into_iter().enumerate() {
+            let p = pose(t);
+            let anim = if layered { r.push_pose(&p) } else { p.to_ref() };
+            assert_eq!(anim.pose > 0, layered);
+            r.draw_model_matrix(
+                ROBOT,
+                &at(k as f32 * 1.8 - 1.8, 0.0, 0.0, 2.6 + k as f32 * 0.3),
+                Material::VertexLit,
+                &ModelParams {
+                    anim: Some(anim),
+                    ..ModelParams::DEFAULT
+                },
+            );
+        }
+        r.end_frame();
+        r.read_offscreen()
+    };
+    let d = oracle(&mut r, "layered_draws", |r| frame(r, true));
+    assert_eq!(d.gpu_draws, 3);
+    // The table's pose draws, not its fold.
+    assert!(frame(&mut r, true) != frame(&mut r, false));
+    // The joints the renderer poses are the layered pose's.
+    r.begin_frame(Color::BLACK);
+    let a = r.push_pose(&pose(0.35));
+    let mut j = [Mat34::IDENTITY; trino_core::MAX_JOINTS];
+    let n = r.pose_joints(ROBOT, &a, &mut j);
+    let mut f = [Mat34::IDENTITY; trino_core::MAX_JOINTS];
+    assert_eq!(r.pose_joints(ROBOT, &pose(0.35).to_ref(), &mut f), n);
+    assert!(n > 4 && j[..n] != f[..n]);
+    r.end_frame();
+    // Cleared at begin_frame: the slot now draws the folded clips.
+    r.begin_frame(Color::BLACK);
+    let mut g = [Mat34::IDENTITY; trino_core::MAX_JOINTS];
+    r.pose_joints(ROBOT, &a, &mut g);
+    assert_eq!(g[..n], f[..n]);
+    r.end_frame();
+}
+
 /// 400 copies in one call: one GPU instanced draw per (model, texture,
 /// sidedness) group, the copies' tints applied, pixels within the oracle;
 /// 400 separate `draw_model` calls are merged into the same few draw calls.

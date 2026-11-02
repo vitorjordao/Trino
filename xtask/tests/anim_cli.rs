@@ -188,7 +188,8 @@ fn check_names_a_broken_graph_and_new_writes_a_starter() {
     );
     assert!(o.status.success(), "{}", text(&o.stderr));
     let v: Value = serde_json::from_slice(&o.stdout).unwrap();
-    assert_eq!(v["states"].as_array().unwrap().len(), 4);
+    // One state per clip: #65's four and #112's seven upper-body clips.
+    assert_eq!(v["states"].as_array().unwrap().len(), 11);
     let o = xtask_in(dir, &["anim", "check", "walker", "--platform", "pc"]);
     assert!(o.status.success(), "{}", text(&o.stdout));
     let o = xtask_in(dir, &["anim", "new", "walker", "--model", "models/strider"]);
@@ -223,7 +224,7 @@ fn model_inspect_reports_root_motion_events_and_compression() {
     assert!(walk["root_foot_slide"].as_f64().unwrap() < walk["foot_slide"].as_f64().unwrap());
     assert_eq!(walk["events"].as_array().unwrap().len(), 2);
     let c = v["compression"].as_array().unwrap();
-    assert_eq!(c.len(), 4);
+    assert_eq!(c.len(), 11);
     for r in c {
         assert!(r["bytes"].as_u64() < r["raw_bytes"].as_u64(), "{r}");
         assert!(r["max_rotation_deg"].as_f64().unwrap() <= 0.5, "{r}");

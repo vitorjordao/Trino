@@ -163,12 +163,14 @@ fn check_names_what_is_wrong() {
         to: "hop".into(),
         when: CondDef::Greater("hop".into(), 1.0),
         blend: 0.1,
+        mode: Default::default(),
     });
     bad.transitions.push(anim::TransitionDef {
         from: From::State("hop".into()),
         to: "rest".into(),
         when: CondDef::Trigger("speed".into()),
         blend: 0.1,
+        mode: Default::default(),
     });
     let issues = anim::check(&bad, Some(&clips()), &|s| s != "nope");
     let text: Vec<String> = issues.iter().map(|i| i.to_string()).collect();
@@ -446,9 +448,9 @@ fn broken_blobs_are_refused_never_played() {
         AnimGraph::parse(&tang[..20]).unwrap_err(),
         GraphError::Truncated
     );
-    let mut v2 = tang.clone();
-    v2[4] = 2;
-    assert_eq!(AnimGraph::parse(&v2).unwrap_err(), GraphError::Version(2));
+    let mut v3 = tang.clone();
+    v3[4] = 3;
+    assert_eq!(AnimGraph::parse(&v3).unwrap_err(), GraphError::Version(3));
     // Every truncation and every single-byte change either parses (and then
     // plays without a panic) or is refused.
     for cut in 0..tang.len() {

@@ -1,0 +1,63 @@
+// The strider shooting while it runs (issue #112): the legs keep the speed
+// blend space, the upper body (torso, head, arms) aims in a 2D blend space by
+// aim yaw × pitch and fires, a breath is added on top of everything, and the
+// hop cuts in inertialized (no crossfade: the hop plays whole from its first
+// frame, the walk's offset decaying). The base N64 plays it folded to one
+// layer of three clips (`cargo xtask anim check strider_layers --platform n64`).
+AnimGraph(
+    version: 2,
+    model: "models/strider",
+    params: {
+        "speed": Float(0.0),
+        "aim_x": Float(0.0),
+        "aim_y": Float(0.0),
+        "aiming": Float(0.0),
+        "fire": Trigger,
+        "hop": Trigger,
+    },
+    states: {
+        "locomotion": Blend1D(
+            param: "speed",
+            points: [(0.0, "idle"), (0.8, "walk"), (2.0, "run")],
+        ),
+        "hop": Clip(clip: "hop", root_motion: false),
+    },
+    transitions: [
+        (from: "locomotion", to: "hop", when: Trigger("hop"), blend: 0.15, mode: Inertial),
+        (from: "hop", to: "locomotion", when: Finished, blend: 0.2),
+    ],
+    layers: [
+        (
+            name: "upper",
+            mask: ["torso", "head", "arm_l", "arm_r"],
+            weight: "aiming",
+            states: {
+                "aim": Blend2D(
+                    x: "aim_x",
+                    y: "aim_y",
+                    points: [
+                        (0.0, 0.0, "aim"),
+                        (-1.0, 0.0, "aim_left"),
+                        (1.0, 0.0, "aim_right"),
+                        (0.0, 1.0, "aim_up"),
+                        (0.0, -1.0, "aim_down"),
+                    ],
+                    root_motion: false,
+                ),
+                "shoot": Clip(clip: "shoot", root_motion: false, events: [(0.0, "muzzle")]),
+            },
+            transitions: [
+                (from: "aim", to: "shoot", when: Trigger("fire"), blend: 0.05),
+                (from: "shoot", to: "aim", when: Finished, blend: 0.12, mode: Inertial),
+            ],
+        ),
+        (
+            name: "breath",
+            mode: Additive,
+            weight: 0.6,
+            states: {
+                "breathe": Clip(clip: "breathe", root_motion: false),
+            },
+        ),
+    ],
+)

@@ -10,23 +10,38 @@
 //! pose is an [`AnimRef`] (up to three clips), which every backend already
 //! draws.
 //!
-//! ## `TANG` v1 (little-endian; offsets from the blob's start)
+//! ## `TANG` v2 (little-endian; offsets from the blob's start)
+//!
+//! v2 (issue #112) is v1 plus layers, 2D blend spaces and inertialized
+//! transitions; a v1 blob is a v2 blob with none of them (its reserved
+//! header bytes are 0) and plays exactly as before.
 //!
 //! ```text
 //! header (32 B): "TANG" u32 version, u32 model id, u16 params, u16 clips,
-//!                u16 states, u16 transitions, u16 start state, u16 0, u32 0 u32 0
+//!                u16 states, u16 transitions, u16 start state,
+//!                u16 layers (v2: over the base; 0 in v1), u32 layers offset,
+//!                u16 base states, u16 base transitions (v2: the base layer's
+//!                share, first in their tables; 0 = all of them)
 //! params      (12 B each): u32 name id, u8 kind (0 float, 1 bool, 2 trigger), u8 0 *3, f32 default
 //! clips       (24 B each): u32 clip id, f32 duration, u8 loops, u8 0 *3,
 //!                          u32 events offset, u32 root track offset, u32 feet offset
 //!                          (NONE = 0xFFFF_FFFF)
-//! states      (32 B each): u32 name id, u8 kind (0 clip, 1 blend 1D), u8 flags
+//! states      (32 B each): u32 name id, u8 kind (0 clip, 1 blend 1D, 2 blend 2D), u8 flags
 //!                          (bit 0 root motion, bit 1 loop override, bit 2 its value),
 //!                          u16 points, f32 speed, u16 speed param, u16 blend param
 //!                          (NONE = 0xFFFF), f32 wrap (0 = none), u32 points offset,
-//!                          u32 events offset, u32 0
-//! transitions (12 B each): u16 from (0xFFFF = any state), u16 to, f32 blend seconds,
+//!                          u32 events offset, u32 triangles offset (2D)
+//!                          (2D: the wrap field is u16 y param, u16 triangles)
+//! transitions (12 B each): u16 from (0xFFFF = any state of its layer), u16 to
+//!                          (bit 15: inertialized), f32 blend seconds,
 //!                          u32 condition offset
-//! data: points (8 B: f32 value, u16 clip, u16 0), event tracks
+//! layers      (28 B each, at the layers offset): u32 name id, u32 joint mask,
+//!                          u8 mode (0 override, 1 additive), u8 0, u16 weight
+//!                          param (NONE = none), f32 weight, u16 first state,
+//!                          u16 states, u16 first transition, u16 transitions,
+//!                          u16 start state, u16 0
+//! data: points (8 B: f32 value, u16 clip, u16 0; 2D: 12 B, f32 x, f32 y,
+//!       u16 clip, u16 0), triangles (3 × u8 point), event tracks
 //!       ([`EventTrack`]: u32 n + records), root tracks ([`RootTrack`]),
 //!       feet tracks ([`FeetTrack`]: f32 fps, u32 frames, frames × 2 × f32*3,
 //!       the IK chains' ankles in model space, left then right),
@@ -41,11 +56,17 @@ use super::{rd_f32, rd_u8, rd_u16, rd_u32};
 use crate::render::{AnimBlend, AnimRef, ClipId};
 
 pub const TANG_MAGIC: &[u8; 4] = b"TANG";
-pub const TANG_VERSION: u32 = 1;
+pub const TANG_VERSION: u32 = 2;
 /// Parameters one graph may declare (the instance keeps them inline).
 pub const MAX_PARAMS: usize = 16;
-/// Points of one blend space.
-pub const MAX_POINTS: usize = 8;
+/// Points of one blend space (eight directions and the middle, and more).
+pub const MAX_POINTS: usize = 16;
+/// Triangles of one 2D blend space.
+pub const MAX_TRIANGLES: usize = 24;
+/// Layers one graph may declare over its base.
+pub const MAX_LAYERS: usize = crate::anim::MAX_POSE_LAYERS - 1;
+/// Clip shares one layer's pose has at most (a 2D space fading into another).
+pub const MAX_CONTRIBUTIONS: usize = 6;
 /// States of one graph.
 pub const MAX_STATES: usize = 64;
 /// Deepest condition tree (`Not(And([Or(..)]))` is 3).
@@ -60,6 +81,10 @@ pub const CLIP_BYTES: usize = 24;
 pub const STATE_BYTES: usize = 32;
 pub const TRANSITION_BYTES: usize = 12;
 pub const POINT_BYTES: usize = 8;
+pub const POINT2_BYTES: usize = 12;
+pub const LAYER_BYTES: usize = 28;
+/// A transition's `to` bit: inertialized (no crossfade, a decaying offset).
+pub const INERTIAL: u16 = 0x8000;
 
 /// State flags.
 pub const STATE_ROOT_MOTION: u8 = 1;
@@ -140,6 +165,25 @@ pub struct AnimGraph<'a> {
     states: usize,
     transitions: usize,
     start: usize,
+    layers: usize,
+    layers_at: usize,
+    base_states: usize,
+    base_transitions: usize,
+}
+
+/// One layer over a graph's base (v2): its own state machine, playing on
+/// the joints of its mask, by its weight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GraphLayer {
+    pub id: u32,
+    pub mask: crate::anim::JointMask,
+    pub mode: crate::anim::LayerMode,
+    /// A float parameter (clamped 0..1) the weight is multiplied by.
+    pub weight_param: Option<usize>,
+    pub weight: f32,
+    pub states: (usize, usize),
+    pub transitions: (usize, usize),
+    pub start: usize,
 }
 
 /// One clip a graph plays, as the bake copied it from the model.
@@ -225,8 +269,13 @@ impl<'a> FeetTrack<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct GraphState<'a> {
     pub id: StateId,
-    /// A blend space over `param` (`Some`), or one clip.
+    /// A blend space over `param` (`Some`; 2D: the x axis), or one clip.
     pub param: Option<usize>,
+    /// A 2D blend space's y parameter.
+    pub param_y: Option<usize>,
+    /// Triangles of a 2D blend space.
+    pub triangles: usize,
+    tris_at: usize,
     pub points: usize,
     pub speed: f32,
     pub speed_param: Option<usize>,
@@ -254,24 +303,46 @@ impl<'a> AnimGraph<'a> {
             return Err(GraphError::BadMagic);
         }
         let version = rd_u32(bytes, 4);
-        if version != TANG_VERSION {
+        if version != 1 && version != TANG_VERSION {
             return Err(GraphError::Version(version));
         }
+        let states = rd_u16(bytes, 16) as usize;
+        let transitions = rd_u16(bytes, 18) as usize;
+        let (layers, layers_at, bs, bt) = if version >= 2 {
+            (
+                rd_u16(bytes, 22) as usize,
+                rd_u32(bytes, 24) as usize,
+                rd_u16(bytes, 28) as usize,
+                rd_u16(bytes, 30) as usize,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
         let g = AnimGraph {
             bytes,
             params: rd_u16(bytes, 12) as usize,
             clips: rd_u16(bytes, 14) as usize,
-            states: rd_u16(bytes, 16) as usize,
-            transitions: rd_u16(bytes, 18) as usize,
+            states,
+            transitions,
             start: rd_u16(bytes, 20) as usize,
+            layers,
+            layers_at,
+            base_states: if bs == 0 { states } else { bs },
+            base_transitions: if bs == 0 && bt == 0 { transitions } else { bt },
         };
-        if g.params > MAX_PARAMS || g.states > MAX_STATES {
+        if g.params > MAX_PARAMS || g.states > MAX_STATES || g.layers > MAX_LAYERS {
             return Err(GraphError::TooBig);
         }
-        if g.states == 0 || g.start >= g.states {
+        if g.states == 0
+            || g.start >= g.base_states
+            || g.base_states > g.states
+            || g.base_transitions > g.transitions
+        {
             return Err(GraphError::Corrupt);
         }
-        if bytes.len() < g.transitions_at() + g.transitions * TRANSITION_BYTES {
+        if bytes.len() < g.transitions_at() + g.transitions * TRANSITION_BYTES
+            || (g.layers > 0 && bytes.len() < g.layers_at + g.layers * LAYER_BYTES)
+        {
             return Err(GraphError::Truncated);
         }
         let track = |off: u32| -> Result<(), GraphError> {
@@ -313,43 +384,47 @@ impl<'a> AnimGraph<'a> {
             }
         }
         for s in 0..g.states {
-            let at = g.states_at() + s * STATE_BYTES;
-            let kind = rd_u8(bytes, at + 4);
-            let points = rd_u16(bytes, at + 6) as usize;
-            let speed_param = rd_u16(bytes, at + 12);
-            let param = rd_u16(bytes, at + 14);
-            let points_at = rd_u32(bytes, at + 20) as usize;
-            if kind > 1 || points == 0 || points > MAX_POINTS || (kind == 0 && points != 1) {
-                return Err(if points > MAX_POINTS {
-                    GraphError::TooBig
-                } else {
-                    GraphError::Corrupt
-                });
-            }
-            if !sane(rd_f32(bytes, at + 8)) || !sane(rd_f32(bytes, at + 16)) {
-                return Err(GraphError::Corrupt);
-            }
-            if (kind == 1 && param as usize >= g.params)
-                || (speed_param != NONE16 && speed_param as usize >= g.params)
-                || bytes.len() < points_at + points * POINT_BYTES
+            g.check_state(s)?;
+        }
+        // Each layer's states and transitions: a range after the base's,
+        // in order; its transitions stay inside it.
+        let (mut next_s, mut next_t) = (g.base_states, g.base_transitions);
+        for l in 0..g.layers {
+            let at = g.layers_at + l * LAYER_BYTES;
+            let wp = rd_u16(bytes, at + 10);
+            let (s0, sn) = (
+                rd_u16(bytes, at + 16) as usize,
+                rd_u16(bytes, at + 18) as usize,
+            );
+            let (t0, tn) = (
+                rd_u16(bytes, at + 20) as usize,
+                rd_u16(bytes, at + 22) as usize,
+            );
+            let start = rd_u16(bytes, at + 24) as usize;
+            if rd_u8(bytes, at + 8) > 1
+                || (wp != NONE16 && wp as usize >= g.params)
+                || !(0.0..=1.0).contains(&rd_f32(bytes, at + 12))
+                || s0 != next_s
+                || sn == 0
+                || t0 != next_t
+                || !(s0..s0 + sn).contains(&start)
             {
                 return Err(GraphError::Corrupt);
             }
-            let mut last = f32::MIN;
-            for p in 0..points {
-                let v = rd_f32(bytes, points_at + p * POINT_BYTES);
-                let clip = rd_u16(bytes, points_at + p * POINT_BYTES + 4) as usize;
-                if clip >= g.clips || !v.is_finite() || v < last {
-                    return Err(GraphError::Corrupt);
-                }
-                last = v;
-            }
-            track(rd_u32(bytes, at + 24))?;
+            next_s = s0 + sn;
+            next_t = t0 + tn;
+        }
+        if next_s != g.states || next_t != g.transitions {
+            return Err(GraphError::Corrupt);
         }
         for t in 0..g.transitions {
             let at = g.transitions_at() + t * TRANSITION_BYTES;
-            let (from, to) = (rd_u16(bytes, at), rd_u16(bytes, at + 2) as usize);
-            if (from != NONE16 && from as usize >= g.states) || to >= g.states {
+            let (from, to) = (
+                rd_u16(bytes, at),
+                (rd_u16(bytes, at + 2) & !INERTIAL) as usize,
+            );
+            let (lo, hi) = g.states_of(g.layer_of_transition(t));
+            if (from != NONE16 && !(lo..hi).contains(&(from as usize))) || !(lo..hi).contains(&to) {
                 return Err(GraphError::Corrupt);
             }
             if !sane(rd_f32(bytes, at + 4)) {
@@ -359,6 +434,140 @@ impl<'a> AnimGraph<'a> {
             g.check_cond(cond, 0)?;
         }
         Ok(g)
+    }
+
+    /// Validate state `s` (its kind, points, floats, triangles, events).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn check_state(&self, s: usize) -> Result<(), GraphError> {
+        let bytes = self.bytes;
+        let at = self.states_at() + s * STATE_BYTES;
+        let kind = rd_u8(bytes, at + 4);
+        let points = rd_u16(bytes, at + 6) as usize;
+        let speed_param = rd_u16(bytes, at + 12);
+        let param = rd_u16(bytes, at + 14);
+        let points_at = rd_u32(bytes, at + 20) as usize;
+        if kind > 2 || points == 0 || points > MAX_POINTS || (kind == 0 && points != 1) {
+            return Err(if points > MAX_POINTS {
+                GraphError::TooBig
+            } else {
+                GraphError::Corrupt
+            });
+        }
+        let sane = |v: f32| (0.0..1.0e6).contains(&v);
+        if !sane(rd_f32(bytes, at + 8)) || (kind != 2 && !sane(rd_f32(bytes, at + 16))) {
+            return Err(GraphError::Corrupt);
+        }
+        let stride = if kind == 2 { POINT2_BYTES } else { POINT_BYTES };
+        if (kind >= 1 && param as usize >= self.params)
+            || (speed_param != NONE16 && speed_param as usize >= self.params)
+            || bytes.len() < points_at + points * stride
+        {
+            return Err(GraphError::Corrupt);
+        }
+        let mut last = f32::MIN;
+        for p in 0..points {
+            let v = rd_f32(bytes, points_at + p * stride);
+            let clip = rd_u16(bytes, points_at + p * stride + stride - 4) as usize;
+            if clip >= self.clips || !v.is_finite() || (kind != 2 && v < last) {
+                return Err(GraphError::Corrupt);
+            }
+            if kind == 2 && !rd_f32(bytes, points_at + p * stride + 4).is_finite() {
+                return Err(GraphError::Corrupt);
+            }
+            last = v;
+        }
+        if kind == 2 {
+            let y = rd_u16(bytes, at + 16) as usize;
+            let tris = rd_u16(bytes, at + 18) as usize;
+            let tris_at = rd_u32(bytes, at + 28) as usize;
+            if y >= self.params
+                || tris > MAX_TRIANGLES
+                || (points >= 3) != (tris > 0)
+                || bytes.len() < tris_at + tris * 3
+                || bytes[tris_at..tris_at + tris * 3]
+                    .iter()
+                    .any(|&k| k as usize >= points)
+            {
+                return Err(GraphError::Corrupt);
+            }
+        }
+        let events = rd_u32(bytes, at + 24);
+        if events != NONE32 {
+            bytes
+                .get(events as usize..)
+                .and_then(EventTrack::parse)
+                .ok_or(GraphError::Corrupt)?;
+        }
+        Ok(())
+    }
+
+    /// The layer a transition belongs to (0 = the base).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn layer_of_transition(&self, t: usize) -> usize {
+        if t < self.base_transitions {
+            return 0;
+        }
+        (0..self.layers)
+            .find(|&l| {
+                let at = self.layers_at + l * LAYER_BYTES;
+                let (t0, tn) = (
+                    rd_u16(self.bytes, at + 20) as usize,
+                    rd_u16(self.bytes, at + 22) as usize,
+                );
+                (t0..t0 + tn).contains(&t)
+            })
+            .map_or(0, |l| l + 1)
+    }
+
+    /// States `lo..hi` of layer `l` (0 = the base).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn states_of(&self, l: usize) -> (usize, usize) {
+        if l == 0 {
+            (0, self.base_states)
+        } else {
+            let at = self.layers_at + (l - 1) * LAYER_BYTES;
+            let s0 = rd_u16(self.bytes, at + 16) as usize;
+            (s0, s0 + rd_u16(self.bytes, at + 18) as usize)
+        }
+    }
+
+    /// Transitions `lo..hi` of layer `l` (0 = the base).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn transitions_of(&self, l: usize) -> (usize, usize) {
+        if l == 0 {
+            (0, self.base_transitions)
+        } else {
+            let at = self.layers_at + (l - 1) * LAYER_BYTES;
+            let t0 = rd_u16(self.bytes, at + 20) as usize;
+            (t0, t0 + rd_u16(self.bytes, at + 22) as usize)
+        }
+    }
+
+    /// Layers over the base (0 for a v1 graph).
+    pub fn layer_count(&self) -> usize {
+        self.layers
+    }
+
+    /// Layer `l` over the base (`1..=layer_count()`).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn layer(&self, l: usize) -> GraphLayer {
+        let at = self.layers_at + (l.max(1) - 1) * LAYER_BYTES;
+        let b = self.bytes;
+        let wp = rd_u16(b, at + 10);
+        GraphLayer {
+            id: rd_u32(b, at),
+            mask: crate::anim::JointMask(rd_u32(b, at + 4)),
+            mode: if rd_u8(b, at + 8) == 1 {
+                crate::anim::LayerMode::Additive
+            } else {
+                crate::anim::LayerMode::Override
+            },
+            weight_param: (wp != NONE16).then_some(wp as usize),
+            weight: rd_f32(b, at + 12),
+            states: self.states_of(l),
+            transitions: self.transitions_of(l),
+            start: rd_u16(b, at + 24) as usize,
+        }
     }
 
     fn params_at(&self) -> usize {
@@ -493,13 +702,21 @@ impl<'a> AnimGraph<'a> {
         let flags = rd_u8(b, at + 5);
         let speed_param = rd_u16(b, at + 12);
         let events = rd_u32(b, at + 24);
+        let kind = rd_u8(b, at + 4);
         GraphState {
             id: StateId(rd_u32(b, at)),
-            param: (rd_u8(b, at + 4) == 1).then(|| rd_u16(b, at + 14) as usize),
+            param: (kind >= 1).then(|| rd_u16(b, at + 14) as usize),
+            param_y: (kind == 2).then(|| rd_u16(b, at + 16) as usize),
+            triangles: if kind == 2 {
+                rd_u16(b, at + 18) as usize
+            } else {
+                0
+            },
+            tris_at: rd_u32(b, at + 28) as usize,
             points: rd_u16(b, at + 6) as usize,
             speed: rd_f32(b, at + 8),
             speed_param: (speed_param != NONE16).then_some(speed_param as usize),
-            wrap: rd_f32(b, at + 16),
+            wrap: if kind == 2 { 0.0 } else { rd_f32(b, at + 16) },
             root_motion: flags & STATE_ROOT_MOTION != 0,
             looping: (flags & STATE_LOOP_SET != 0).then_some(flags & STATE_LOOP_ON != 0),
             points_at: rd_u32(b, at + 20) as usize,
@@ -523,6 +740,24 @@ impl<'a> AnimGraph<'a> {
         (rd_f32(self.bytes, at), rd_u16(self.bytes, at + 4) as usize)
     }
 
+    /// Point `p` of a 2D state: (x, y, clip index).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn point2(&self, s: &GraphState, p: usize) -> (f32, f32, usize) {
+        let at = s.points_at + p * POINT2_BYTES;
+        (
+            rd_f32(self.bytes, at),
+            rd_f32(self.bytes, at + 4),
+            rd_u16(self.bytes, at + 8) as usize,
+        )
+    }
+
+    /// Triangle `t` of a 2D state: three point indices.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn triangle(&self, s: &GraphState, t: usize) -> [usize; 3] {
+        let at = s.tris_at + t * 3;
+        [0, 1, 2].map(|k| rd_u8(self.bytes, at + k) as usize)
+    }
+
     /// Transition `t`: (from state or `None` = any, to, blend seconds,
     /// condition offset).
     pub fn transition(&self, t: usize) -> (Option<usize>, usize, f32, usize) {
@@ -530,10 +765,17 @@ impl<'a> AnimGraph<'a> {
         let from = rd_u16(self.bytes, at);
         (
             (from != NONE16).then_some(from as usize),
-            rd_u16(self.bytes, at + 2) as usize,
+            (rd_u16(self.bytes, at + 2) & !INERTIAL) as usize,
             rd_f32(self.bytes, at + 4),
             rd_u32(self.bytes, at + 8) as usize,
         )
+    }
+
+    /// Whether transition `t` is inertialized (v2).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn transition_inertial(&self, t: usize) -> bool {
+        let at = self.transitions_at() + t * TRANSITION_BYTES;
+        rd_u16(self.bytes, at + 2) & INERTIAL != 0
     }
 
     /// Whether the condition at `at` holds, and the length of its code.
@@ -634,16 +876,76 @@ pub struct Contribution {
     pub weight: f32,
 }
 
-/// A graph being played: parameters, the current state (and the one it is
-/// fading from), this update's events and root motion. `Copy`, fixed size,
-/// no allocation; the same updates give the same poses on every target.
-#[derive(Clone, Copy, Debug)]
-pub struct AnimGraphInstance {
-    params: [f32; MAX_PARAMS],
+impl Contribution {
+    pub const NONE: Contribution = Contribution {
+        clip: 0,
+        time: 0.0,
+        weight: 0.0,
+    };
+}
+
+/// One layer's state machine being played: the current state and the one
+/// it fades from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LayerPlay {
     cur: Playing,
     prev: Option<Playing>,
     fade: f32,
     fade_len: f32,
+}
+
+impl LayerPlay {
+    fn new(state: usize) -> LayerPlay {
+        LayerPlay {
+            cur: Playing::new(state),
+            prev: None,
+            fade: 0.0,
+            fade_len: 0.0,
+        }
+    }
+
+    fn fade_k(&self) -> f32 {
+        if self.fade_len > 0.0 {
+            (self.fade / self.fade_len).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+}
+
+/// An inertialized transition (v2): where the layer's pose was when it
+/// fired (`From`, at most three clips) and where its destination started
+/// (`To`), frozen; the pose adds their difference, decaying over `len`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inertia {
+    snaps: [Contribution; 6],
+    from: u8,
+    to: u8,
+    elapsed: f32,
+    len: f32,
+}
+
+/// A state's clips now: up to three (a 2D space's triangle), their
+/// weights (summing to 1) and the cycle length in seconds.
+#[derive(Clone, Copy, Debug)]
+struct Shape {
+    clip: [usize; 3],
+    w: [f32; 3],
+    n: usize,
+    dur: f32,
+}
+
+/// A graph being played: parameters, the current state (and the one it is
+/// fading from) of its base and of each layer, this update's events and
+/// root motion. `Copy`, fixed size, no allocation; the same updates give
+/// the same poses on every target.
+#[derive(Clone, Copy, Debug)]
+pub struct AnimGraphInstance {
+    params: [f32; MAX_PARAMS],
+    /// The base (0) and each layer's machine.
+    play: [LayerPlay; MAX_LAYERS + 1],
+    inertia: [Option<Inertia>; MAX_LAYERS + 1],
+    layers: u8,
     events: EventBuf,
     root: RootDelta,
     /// Transitions taken since the instance started (a test reads it).
@@ -651,8 +953,8 @@ pub struct AnimGraphInstance {
 }
 
 impl AnimGraphInstance {
-    /// An instance at the graph's start state, its parameters at their
-    /// defaults.
+    /// An instance at the graph's start state (each layer at its own), its
+    /// parameters at their defaults.
     pub fn new(graph: &AnimGraph) -> AnimGraphInstance {
         let mut params = [0.0; MAX_PARAMS];
         for (i, p) in params.iter_mut().enumerate().take(graph.param_count()) {
@@ -663,12 +965,16 @@ impl AnimGraphInstance {
                 default
             };
         }
+        let mut play = [LayerPlay::new(graph.start()); MAX_LAYERS + 1];
+        let layers = graph.layer_count().min(MAX_LAYERS);
+        for (l, p) in play.iter_mut().enumerate().take(layers + 1).skip(1) {
+            *p = LayerPlay::new(graph.layer(l).start);
+        }
         AnimGraphInstance {
             params,
-            cur: Playing::new(graph.start()),
-            prev: None,
-            fade: 0.0,
-            fade_len: 0.0,
+            play,
+            inertia: [None; MAX_LAYERS + 1],
+            layers: layers as u8,
             events: EventBuf::new(),
             root: RootDelta::ZERO,
             transitions: 0,
@@ -677,10 +983,11 @@ impl AnimGraphInstance {
 
     /// An instance starting in state `state` (an index, or the start when
     /// out of range): several entities sharing one graph, each mid-action.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn new_in(graph: &AnimGraph, state: usize) -> AnimGraphInstance {
         let mut i = AnimGraphInstance::new(graph);
-        if state < graph.state_count() {
-            i.cur = Playing::new(state);
+        if state < graph.states_of(0).1 {
+            i.play[0].cur = Playing::new(state);
         }
         i
     }
@@ -717,26 +1024,54 @@ impl AnimGraphInstance {
         self.params.get(param).copied().unwrap_or(0.0)
     }
 
-    /// The current state's index (the one being faded to, mid-transition).
+    /// The base layer's current state (the one being faded to,
+    /// mid-transition).
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn state(&self) -> usize {
-        self.cur.state as usize
+        self.play[0].cur.state as usize
     }
 
-    /// Mid-transition: (from state, 0..1 progress).
+    /// Layer `l`'s current state (0 = the base).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn layer_state(&self, l: usize) -> usize {
+        self.play.get(l).map_or(0, |p| p.cur.state as usize)
+    }
+
+    /// Layers over the base this instance plays.
+    pub fn layer_count(&self) -> usize {
+        self.layers as usize
+    }
+
+    /// The base mid-transition: (from state, 0..1 progress).
     pub fn transition(&self) -> Option<(usize, f32)> {
-        self.prev.map(|p| (p.state as usize, self.fade_k()))
+        self.layer_transition(0)
+    }
+
+    /// Layer `l` mid-crossfade: (from state, 0..1 progress).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn layer_transition(&self, l: usize) -> Option<(usize, f32)> {
+        let p = self.play.get(l)?;
+        p.prev.map(|x| (x.state as usize, p.fade_k()))
+    }
+
+    /// Layer `l`'s inertialized transition: how much of its offset is left
+    /// (1 → 0), `None` when none runs.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn inertia(&self, l: usize) -> Option<f32> {
+        let i = self.inertia.get(l).copied().flatten()?;
+        let k = if i.len > 0.0 { i.elapsed / i.len } else { 1.0 };
+        Some(crate::anim::inertial_decay(k))
     }
 
     /// Seconds in the current state.
     pub fn elapsed(&self) -> f32 {
-        self.cur.elapsed
+        self.play[0].cur.elapsed
     }
 
     /// The current state's clock: a clip state's seconds, a blend space's
     /// cycle (0..1).
     pub fn clock(&self) -> f32 {
-        self.cur.phase
+        self.play[0].cur.phase
     }
 
     /// The events the last update crossed, in timeline order.
@@ -745,29 +1080,90 @@ impl AnimGraphInstance {
     }
 
     /// The root motion of the last update (model units, in the
-    /// character's frame at its start): move the entity by it.
+    /// character's frame at its start): move the entity by it. Only the
+    /// base layer moves the root.
     pub fn root_motion(&self) -> RootDelta {
         self.root
     }
 
     /// Force a state (a respawn, a cutscene), with an optional crossfade.
     pub fn play(&mut self, state: usize, blend: f32) {
-        self.start_transition(state, blend);
+        self.start_transition(None, 0, state, blend, false);
     }
 
-    fn fade_k(&self) -> f32 {
-        if self.fade_len > 0.0 {
-            (self.fade / self.fade_len).clamp(0.0, 1.0)
-        } else {
-            1.0
+    /// A layer's weight now: its constant times its parameter (0..1).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn layer_weight(&self, graph: &AnimGraph, l: usize) -> f32 {
+        if l == 0 {
+            return 1.0;
         }
+        let g = graph.layer(l);
+        let p = g
+            .weight_param
+            .map_or(1.0, |i| self.params[i].clamp(0.0, 1.0));
+        g.weight * p
     }
 
-    fn start_transition(&mut self, to: usize, blend: f32) {
-        self.prev = (blend > 0.0).then_some(self.cur);
-        self.cur = Playing::new(to);
-        self.fade = 0.0;
-        self.fade_len = blend;
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn start_transition(
+        &mut self,
+        graph: Option<&AnimGraph>,
+        l: usize,
+        to: usize,
+        blend: f32,
+        inertial: bool,
+    ) {
+        match graph {
+            Some(g) if inertial && blend > 0.0 => {
+                let mut snaps = [Contribution::NONE; 6];
+                let mut from = [Contribution::NONE; MAX_CONTRIBUTIONS];
+                let n = self.layer_contributions(g, l, &mut from);
+                // The three heaviest, renormalized.
+                let mut keep = n.min(3);
+                let mut total = 0.0;
+                for k in 0..keep {
+                    let mut best = k;
+                    for j in k + 1..n {
+                        if from[j].weight > from[best].weight {
+                            best = j;
+                        }
+                    }
+                    from.swap(k, best);
+                    total += from[k].weight;
+                }
+                if total <= 0.0 {
+                    keep = 0;
+                }
+                for k in 0..keep {
+                    snaps[k] = Contribution {
+                        weight: from[k].weight / total,
+                        ..from[k]
+                    };
+                }
+                let p = &mut self.play[l];
+                p.prev = None;
+                p.cur = Playing::new(to);
+                p.fade = 0.0;
+                p.fade_len = 0.0;
+                let mut dest = [Contribution::NONE; MAX_CONTRIBUTIONS];
+                let m = self.layer_contributions(g, l, &mut dest).min(3);
+                snaps[keep..keep + m].copy_from_slice(&dest[..m]);
+                self.inertia[l] = (keep > 0 && m > 0).then_some(Inertia {
+                    snaps,
+                    from: keep as u8,
+                    to: m as u8,
+                    elapsed: 0.0,
+                    len: blend,
+                });
+            }
+            _ => {
+                let p = &mut self.play[l];
+                p.prev = (blend > 0.0).then_some(p.cur);
+                p.cur = Playing::new(to);
+                p.fade = 0.0;
+                p.fade_len = blend;
+            }
+        }
         self.transitions = self.transitions.wrapping_add(1);
     }
 
@@ -804,14 +1200,98 @@ impl AnimGraphInstance {
         (last.1, last.1, 0.0)
     }
 
-    /// The two clips of a state now, the second's weight, and its cycle
-    /// length in seconds.
+    /// A 2D blend space's clips at `(x, y)`: the barycentric weights of
+    /// the baked triangle holding it, else of the nearest point on the
+    /// triangles' edges (outside the hull). Continuous across edges.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn shape(&self, graph: &AnimGraph, s: &GraphState) -> (usize, usize, f32, f32) {
+    fn blend_tri(
+        graph: &AnimGraph,
+        s: &GraphState,
+        x: f32,
+        y: f32,
+    ) -> ([usize; 3], [f32; 3], usize) {
+        let pt = |i: usize| graph.point2(s, i);
+        if s.triangles == 0 {
+            return ([pt(0).2, 0, 0], [1.0, 0.0, 0.0], 1);
+        }
+        let mut best = (f32::MAX, [0usize; 3], [0.0f32; 3]);
+        for t in 0..s.triangles {
+            let [i, j, k] = graph.triangle(s, t);
+            let (a, b, c) = (pt(i), pt(j), pt(k));
+            let (v0x, v0y, v1x, v1y) = (b.0 - a.0, b.1 - a.1, c.0 - a.0, c.1 - a.1);
+            let (v2x, v2y) = (x - a.0, y - a.1);
+            let den = v0x * v1y - v1x * v0y;
+            if den.abs() > 1e-12 {
+                let v = (v2x * v1y - v1x * v2y) / den;
+                let w = (v0x * v2y - v2x * v0y) / den;
+                let u = 1.0 - v - w;
+                if u >= -1e-6 && v >= -1e-6 && w >= -1e-6 {
+                    let (u, v, w) = (u.max(0.0), v.max(0.0), w.max(0.0));
+                    let sum = u + v + w;
+                    return ([a.2, b.2, c.2], [u / sum, v / sum, w / sum], 3);
+                }
+            }
+            for (p, q) in [(a, b), (b, c), (c, a)] {
+                let (ex, ey) = (q.0 - p.0, q.1 - p.1);
+                let len2 = ex * ex + ey * ey;
+                let k = if len2 > 0.0 {
+                    (((x - p.0) * ex + (y - p.1) * ey) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let (dx, dy) = (x - (p.0 + ex * k), y - (p.1 + ey * k));
+                let d = dx * dx + dy * dy;
+                if d < best.0 {
+                    best = (d, [p.2, q.2, 0], [1.0 - k, k, 0.0]);
+                }
+            }
+        }
+        (best.1, best.2, 2)
+    }
+
+    /// A state's clips now, their weights and its cycle length in seconds.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn shape(&self, graph: &AnimGraph, s: &GraphState) -> Shape {
+        let dur = |c: usize| graph.clip(c).duration;
+        if let (Some(px), Some(py)) = (s.param, s.param_y) {
+            let (mut clip, mut w, mut n) =
+                Self::blend_tri(graph, s, self.params[px], self.params[py]);
+            // One share per clip (two points may play the same clip).
+            let mut i = 0;
+            while i < n {
+                let mut j = i + 1;
+                while j < n {
+                    if clip[j] == clip[i] {
+                        w[i] += w[j];
+                        clip[j] = clip[n - 1];
+                        w[j] = w[n - 1];
+                        n -= 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                i += 1;
+            }
+            let mut d = 0.0;
+            for k in 0..n {
+                d += dur(clip[k]) * w[k];
+            }
+            return Shape { clip, w, n, dur: d };
+        }
         let v = s.param.map_or(0.0, |p| self.params[p]);
         let (a, b, w) = Self::blend_pair(graph, s, v);
-        let (da, db) = (graph.clip(a).duration, graph.clip(b).duration);
-        (a, b, w, da + (db - da) * w)
+        let (da, db) = (dur(a), dur(b));
+        let n = if a == b { 1 } else { 2 };
+        Shape {
+            clip: [a, b, b],
+            w: if n == 1 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [1.0 - w, w, 0.0]
+            },
+            n,
+            dur: da + (db - da) * w,
+        }
     }
 
     fn looping(graph: &AnimGraph, s: &GraphState, clip: usize) -> bool {
@@ -849,9 +1329,10 @@ impl AnimGraphInstance {
         weight: f32,
     ) -> RootDelta {
         let s = graph.state(p.state as usize);
-        let (a, b, w, dur) = self.shape(graph, &s);
+        let sh = self.shape(graph, &s);
+        let dur = sh.dur;
         let rate = s.speed * s.speed_param.map_or(1.0, |i| self.params[i]);
-        let looping = Self::looping(graph, &s, a);
+        let looping = Self::looping(graph, &s, sh.clip[0]);
         p.elapsed += dt;
         let step = if dt * rate > 0.0 { dt * rate } else { 0.0 };
         // The clock: a clip state's seconds (unwrapped, like a game's own
@@ -870,14 +1351,17 @@ impl AnimGraphInstance {
             (ph, 1.0)
         };
         let mut root = RootDelta::ZERO;
-        // Each clip of the shape: its share of root motion; the heavier one
-        // fires its events (a walk and a run blended don't both step).
-        let (heavy, heavy_w) = if w > 0.5 { (b, w) } else { (a, 1.0 - w) };
-        let pair = [(a, 1.0 - w), (b, w)];
-        let clips = if a == b { &pair[..1] } else { &pair[..] };
-        for &(clip, k) in clips {
-            let k = if a == b { 1.0 } else { k };
-            if k <= 0.0 {
+        // Each clip of the shape: its share of root motion; the heaviest
+        // one fires its events (a walk and a run blended don't both step).
+        let mut heavy = 0;
+        for k in 1..sh.n {
+            if sh.w[k] > sh.w[heavy] {
+                heavy = k;
+            }
+        }
+        for k in 0..sh.n {
+            let (clip, wk) = (sh.clip[k], sh.w[k]);
+            if wk <= 0.0 {
                 continue;
             }
             let c = graph.clip(clip);
@@ -890,10 +1374,10 @@ impl AnimGraphInstance {
             if s.root_motion
                 && let Some(track) = c.root
             {
-                root = root.then(track.delta(t0, t1, c.duration, lp).scaled(k));
+                root = root.then(track.delta(t0, t1, c.duration, lp).scaled(wk));
             }
-            if fire && clip == heavy {
-                let ew = weight * if a == b { 1.0 } else { heavy_w };
+            if fire && k == heavy {
+                let ew = weight * wk;
                 c.events
                     .fire(t0, t1, p.first, c.duration, lp, c.id, ew, &mut self.events);
                 if s.param.is_none() {
@@ -922,60 +1406,85 @@ impl AnimGraphInstance {
         root
     }
 
+    /// Advance layer `l`'s clocks; fire its events (scaled by the layer's
+    /// weight `lw`); its root motion.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn advance_layer(&mut self, graph: &AnimGraph, l: usize, dt: f32, lw: f32) -> RootDelta {
+        let mut lp = self.play[l];
+        let k = if lp.prev.is_some() {
+            lp.fade += dt;
+            lp.fade_k()
+        } else {
+            1.0
+        };
+        let fire = lw > 0.0;
+        let mut cur = lp.cur;
+        let mut root = self.advance(graph, &mut cur, dt, fire, k * lw);
+        lp.cur = cur;
+        if let Some(mut prev) = lp.prev {
+            let from = self.advance(graph, &mut prev, dt, false, 1.0 - k);
+            root = root.scaled(k).then(from.scaled(1.0 - k));
+            lp.prev = if k >= 1.0 { None } else { Some(prev) };
+        }
+        self.play[l] = lp;
+        if let Some(i) = &mut self.inertia[l] {
+            i.elapsed += dt;
+            if i.elapsed >= i.len {
+                self.inertia[l] = None;
+            }
+        }
+        root
+    }
+
     /// One step: advance the clocks by `dt` seconds, collect events and
     /// root motion, then take the first transition whose condition holds
     /// (in the graph's order; transitions from any state skip the state
-    /// they lead to). Triggers nothing consumed are cleared.
+    /// they lead to), the base first, then each layer. Triggers nothing
+    /// consumed are cleared.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn update(&mut self, graph: &AnimGraph, dt: f32) {
         self.events.clear();
         let dt = if dt > 0.0 { dt } else { 0.0 };
-        let k = if self.prev.is_some() {
-            self.fade += dt;
-            self.fade_k()
-        } else {
-            1.0
-        };
-        let mut cur = self.cur;
-        let mut root = self.advance(graph, &mut cur, dt, true, k);
-        self.cur = cur;
-        if let Some(mut prev) = self.prev {
-            let from = self.advance(graph, &mut prev, dt, false, 1.0 - k);
-            root = root.scaled(k).then(from.scaled(1.0 - k));
-            self.prev = if k >= 1.0 { None } else { Some(prev) };
+        let layers = (self.layers as usize).min(graph.layer_count());
+        self.root = self.advance_layer(graph, 0, dt, 1.0);
+        for l in 1..=layers {
+            let lw = self.layer_weight(graph, l);
+            self.advance_layer(graph, l, dt, lw);
         }
-        self.root = root;
 
         // Transitions, evaluated after the clocks moved.
-        let ctx_finished = self.cur.cycles > 0;
-        let mut fired = None;
-        {
-            let ctx = EvalCtx {
-                params: &self.params,
-                finished: ctx_finished,
-                elapsed: self.cur.elapsed,
-            };
-            for t in 0..graph.transition_count() {
-                let (from, to, blend, cond) = graph.transition(t);
-                match from {
-                    Some(f) if f != self.cur.state as usize => continue,
-                    None if to == self.cur.state as usize => continue,
-                    _ => {}
-                }
-                let mut used = 0u16;
-                if graph.eval(cond, &ctx, &mut used).0 {
-                    fired = Some((to, blend, used));
-                    break;
-                }
-            }
-        }
-        if let Some((to, blend, used)) = fired {
-            for (i, p) in self.params.iter_mut().enumerate() {
-                if used & (1 << i) != 0 {
-                    *p = 0.0;
+        for l in 0..=layers {
+            let cur = self.play[l].cur;
+            let mut fired = None;
+            {
+                let ctx = EvalCtx {
+                    params: &self.params,
+                    finished: cur.cycles > 0,
+                    elapsed: cur.elapsed,
+                };
+                let (lo, hi) = graph.transitions_of(l);
+                for t in lo..hi {
+                    let (from, to, blend, cond) = graph.transition(t);
+                    match from {
+                        Some(f) if f != cur.state as usize => continue,
+                        None if to == cur.state as usize => continue,
+                        _ => {}
+                    }
+                    let mut used = 0u16;
+                    if graph.eval(cond, &ctx, &mut used).0 {
+                        fired = Some((to, blend, used, graph.transition_inertial(t)));
+                        break;
+                    }
                 }
             }
-            self.start_transition(to, blend);
+            if let Some((to, blend, used, inertial)) = fired {
+                for (i, p) in self.params.iter_mut().enumerate() {
+                    if used & (1 << i) != 0 {
+                        *p = 0.0;
+                    }
+                }
+                self.start_transition(Some(graph), l, to, blend, inertial);
+            }
         }
         // A trigger lives one update.
         for i in 0..graph.param_count() {
@@ -985,38 +1494,45 @@ impl AnimGraphInstance {
         }
     }
 
-    /// Each clip's share of the pose, at most four (two states of two
-    /// clips), fading-from state first; weights sum to 1.
+    /// Each clip's share of the base layer's pose (two states of up to
+    /// three clips), fading-from state first; weights sum to 1.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    pub fn contributions(&self, graph: &AnimGraph, out: &mut [Contribution; 4]) -> usize {
-        let mut n = 0;
-        let k = if self.prev.is_some() {
-            self.fade_k()
-        } else {
-            1.0
+    pub fn contributions(&self, graph: &AnimGraph, out: &mut [Contribution]) -> usize {
+        self.layer_contributions(graph, 0, out)
+    }
+
+    /// [`contributions`](Self::contributions) of layer `l`.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn layer_contributions(
+        &self,
+        graph: &AnimGraph,
+        l: usize,
+        out: &mut [Contribution],
+    ) -> usize {
+        let Some(lp) = self.play.get(l) else {
+            return 0;
         };
+        let mut n = 0;
+        let k = if lp.prev.is_some() { lp.fade_k() } else { 1.0 };
         let mut push = |p: &Playing, scale: f32| {
             let s = graph.state(p.state as usize);
-            let (a, b, w, _) = self.shape(graph, &s);
-            for (clip, cw) in [(a, 1.0 - w), (b, w)] {
-                let weight = cw * scale;
-                if weight > 0.0 && n < 4 {
+            let sh = self.shape(graph, &s);
+            for i in 0..sh.n {
+                let weight = sh.w[i] * scale;
+                if weight > 0.0 && n < out.len() {
                     out[n] = Contribution {
-                        clip,
-                        time: Self::clip_time(graph, &s, clip, p.phase),
+                        clip: sh.clip[i],
+                        time: Self::clip_time(graph, &s, sh.clip[i], p.phase),
                         weight,
                     };
                     n += 1;
                 }
-                if a == b {
-                    break;
-                }
             }
         };
-        if let Some(prev) = &self.prev {
+        if let Some(prev) = &lp.prev {
             push(prev, 1.0 - k);
         }
-        push(&self.cur, k);
+        push(&lp.cur, k);
         n
     }
 
@@ -1026,11 +1542,7 @@ impl AnimGraphInstance {
     /// without IK chains.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn feet(&self, graph: &AnimGraph) -> Option<[crate::math::Vec3; 2]> {
-        let mut c = [Contribution {
-            clip: 0,
-            time: 0.0,
-            weight: 0.0,
-        }; 4];
+        let mut c = [Contribution::NONE; MAX_CONTRIBUTIONS];
         let n = self.contributions(graph, &mut c);
         let mut out = [crate::math::Vec3::ZERO; 2];
         for x in &c[..n] {
@@ -1049,28 +1561,35 @@ impl AnimGraphInstance {
         (n > 0).then_some(out)
     }
 
-    /// The pose to draw: up to three clips as an [`AnimRef`] (a fourth,
-    /// lightest one is dropped and the rest renormalized — only while a
-    /// blend space fades into another).
+    /// Whether the pose needs more than an `AnimRef`'s model: layers or an
+    /// inertialized transition.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn layered(&self) -> bool {
+        self.layers > 0 || self.inertia.iter().any(Option::is_some)
+    }
+
+    /// The pose to draw as an [`AnimRef`]: up to three clips (the lightest
+    /// dropped and the rest renormalized past three — only while a blend
+    /// space fades into another). A graph with layers or an inertialized
+    /// transition gives [`pose`](Self::pose) folded to the base N64's tier.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn anim(&self, graph: &AnimGraph) -> AnimRef {
-        let mut c = [Contribution {
-            clip: 0,
-            time: 0.0,
-            weight: 0.0,
-        }; 4];
+        if self.layered() {
+            return self.pose(graph).to_ref();
+        }
+        let mut c = [Contribution::NONE; MAX_CONTRIBUTIONS];
         let mut n = self.contributions(graph, &mut c);
-        if n == 4 {
+        while n > 3 {
             let mut min = 0;
-            for i in 1..4 {
+            for i in 1..n {
                 if c[i].weight < c[min].weight {
                     min = i;
                 }
             }
-            for i in min..3 {
+            for i in min..n - 1 {
                 c[i] = c[i + 1];
             }
-            n = 3;
+            n -= 1;
         }
         let total: f32 = c[..n].iter().map(|x| x.weight).sum();
         let id = |x: &Contribution| graph.clip(x.clip).id;
@@ -1090,28 +1609,96 @@ impl AnimGraphInstance {
         a
     }
 
+    /// The whole pose (issue #112): every layer's clips with its mask,
+    /// mode and weight (a layer at weight 0 is left out), inertialized
+    /// offsets with their decay. Hand it to
+    /// [`Renderer::push_pose`](crate::Renderer::push_pose), which folds it
+    /// to the platform's tier.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn pose(&self, graph: &AnimGraph) -> crate::anim::AnimPose {
+        use crate::anim::{AnimPose, PoseLayer, SampleRole};
+        let mut p = AnimPose::EMPTY;
+        let layers = (self.layers as usize).min(graph.layer_count());
+        for l in 0..=layers {
+            let li = if l == 0 {
+                0
+            } else {
+                let w = self.layer_weight(graph, l);
+                if w <= 0.0 {
+                    continue;
+                }
+                let g = graph.layer(l);
+                match p.add_layer(PoseLayer {
+                    mask: g.mask,
+                    mode: g.mode,
+                    weight: w.min(1.0),
+                    decay: 0.0,
+                }) {
+                    Some(i) => i,
+                    None => break,
+                }
+            };
+            let mut c = [Contribution::NONE; MAX_CONTRIBUTIONS];
+            let n = self.layer_contributions(graph, l, &mut c);
+            for x in &c[..n] {
+                p.push(
+                    li,
+                    SampleRole::Pose,
+                    graph.clip(x.clip).id,
+                    x.time,
+                    x.weight,
+                );
+            }
+            if let (Some(i), Some(decay)) = (self.inertia[l], self.inertia(l))
+                && decay > 0.0
+            {
+                for (k, x) in i.snaps[..(i.from + i.to) as usize].iter().enumerate() {
+                    let role = if k < i.from as usize {
+                        SampleRole::From
+                    } else {
+                        SampleRole::To
+                    };
+                    p.push(li, role, graph.clip(x.clip).id, x.time, x.weight);
+                }
+                p.layers[li as usize].decay = decay;
+            }
+        }
+        p
+    }
+
     /// A digest of the playback state (state, clocks quantized to 1/4096
-    /// of a cycle, fade, parameters): the self-test compares it across
-    /// targets.
+    /// of a cycle, fade, parameters; layers and inertia when the graph has
+    /// them): the self-test compares it across targets.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn digest(&self) -> u32 {
         let mut h = Fnv::new();
         let q = |v: f32| crate::math3d::to_i32(v * 4096.0) as u32;
-        h.u32(self.cur.state as u32);
-        h.u32(q(self.cur.phase));
-        h.u32(self.cur.cycles as u32);
-        match self.prev {
-            Some(p) => {
-                h.u32(p.state as u32 + 1);
-                h.u32(q(p.phase));
-                h.u32(q(self.fade_k()));
+        let play = |h: &mut Fnv, lp: &LayerPlay| {
+            h.u32(lp.cur.state as u32);
+            h.u32(q(lp.cur.phase));
+            h.u32(lp.cur.cycles as u32);
+            match lp.prev {
+                Some(p) => {
+                    h.u32(p.state as u32 + 1);
+                    h.u32(q(p.phase));
+                    h.u32(q(lp.fade_k()));
+                }
+                None => h.u32(0),
             }
-            None => h.u32(0),
-        }
+        };
+        play(&mut h, &self.play[0]);
         for p in &self.params {
             h.u32(q(*p));
         }
         h.u32(self.transitions);
+        if self.layered() {
+            for lp in &self.play[1..=self.layers as usize] {
+                play(&mut h, lp);
+            }
+            for i in &self.inertia {
+                h.u32(i.map_or(0, |i| q(i.elapsed) + 1));
+            }
+        }
         h.0
     }
 }

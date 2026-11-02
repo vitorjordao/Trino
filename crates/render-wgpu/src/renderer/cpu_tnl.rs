@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use trino_core::anim::AnimPose;
 use trino_core::render3d::{
     MeshLayout, ScreenTri, SurfaceScratch, TnlContext, TnlScratch, TnlStats, tessellate_surface,
     tessellate_with,
@@ -87,6 +88,7 @@ pub struct ChunkOut {
 pub fn run(
     meshes: &HashMap<u32, (Vec<u8>, MeshLayout)>,
     ctxs: &[TnlContext],
+    poses: &[AnimPose],
     jobs: &[CpuJob],
     pool: &mut Vec<Scratch>,
     threads: usize,
@@ -101,7 +103,7 @@ pub fn run(
         pool.push(Scratch::new());
     }
     if workers == 1 {
-        return vec![run_chunk(meshes, ctxs, jobs, &mut pool[0])];
+        return vec![run_chunk(meshes, ctxs, poses, jobs, &mut pool[0])];
     }
     let chunks = split(jobs, workers, total);
     std::thread::scope(|s| {
@@ -116,7 +118,7 @@ pub fn run(
                     let _lane =
                         trace::bind_thread(trace::track::on(trace::track::WORKER, i as u8 + 1));
                     trino_core::zone!("tnl chunk");
-                    run_chunk(meshes, ctxs, part, scratch)
+                    run_chunk(meshes, ctxs, poses, part, scratch)
                 })
             })
             .collect();
@@ -150,13 +152,14 @@ fn split(jobs: &[CpuJob], workers: usize, total: u32) -> Vec<std::ops::Range<usi
 fn run_chunk(
     meshes: &HashMap<u32, (Vec<u8>, MeshLayout)>,
     ctxs: &[TnlContext],
+    poses: &[AnimPose],
     jobs: &[CpuJob],
     scratch: &mut Scratch,
 ) -> ChunkOut {
     let mut out = ChunkOut::default();
     for job in jobs {
         let before = out.tris.len();
-        let stats = run_job(meshes, ctxs, job, scratch, &mut out);
+        let stats = run_job(meshes, ctxs, poses, job, scratch, &mut out);
         out.per_job.push(((out.tris.len() - before) as u32, stats));
     }
     out
@@ -165,6 +168,7 @@ fn run_chunk(
 fn run_job(
     meshes: &HashMap<u32, (Vec<u8>, MeshLayout)>,
     ctxs: &[TnlContext],
+    poses: &[AnimPose],
     job: &CpuJob,
     scratch: &mut Scratch,
     out: &mut ChunkOut,
@@ -177,7 +181,7 @@ fn run_job(
     let Some((blob, layout)) = meshes.get(&job.model) else {
         return TnlStats::default();
     };
-    let mesh = Mesh::from_layout(blob, layout);
+    let mesh = Mesh::from_layout(blob, layout).with_poses(poses);
     let ctx = &ctxs[job.ctx as usize];
     let ChunkOut { tris, surf, .. } = out;
     let mut surface = |tri: ScreenTri, v: &[trino_core::render3d::SurfaceVert; 3], s: SurfTri| {
@@ -353,15 +357,15 @@ mod tests {
             (tris, per_job)
         };
         let mut pool = Vec::new();
-        let serial = flat(run(&meshes, &ctxs, &jobs, &mut pool, 1));
+        let serial = flat(run(&meshes, &ctxs, &[], &jobs, &mut pool, 1));
         assert!(serial.0.len() > 10_000, "a real workload");
         for threads in [2, 3, 8, 64] {
-            let chunks = run(&meshes, &ctxs, &jobs, &mut pool, threads);
+            let chunks = run(&meshes, &ctxs, &[], &jobs, &mut pool, threads);
             assert_eq!(chunks.len(), threads.min(jobs.len()), "{threads} workers");
             assert_eq!(flat(chunks), serial, "{threads} workers");
         }
         // A small batch stays on one thread.
-        let small = run(&meshes, &ctxs, &jobs[..1], &mut pool, 8);
+        let small = run(&meshes, &ctxs, &[], &jobs[..1], &mut pool, 8);
         assert_eq!(small.len(), 1);
     }
 

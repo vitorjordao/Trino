@@ -85,7 +85,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_ANIM=<model>:<clip>@<time>` | the Animation tab previews that clip, paused at that time |
 | `TRINO_EDITOR_ANIM_VIEW=ghosts=3,blend=wave:0.5,look=n64,palette,ik=12:0.2:force` | its view options (onion skin, crossfade, look, palette; foot IK on a slope in degrees, a step in metres under the left foot, forced on the N64 look) |
 | `TRINO_EDITOR_ANIM_GRAPH=<graph>[:param=v,..]` | the Animation tab in Graph mode on `assets/anim/<graph>.anim.ron`, parameters set once it bakes |
-| `TRINO_EDITOR_ANIM_SELECT=state:<name>\|transition:<i>` | selects a state or a transition in Graph mode |
+| `TRINO_EDITOR_ANIM_SELECT=state:<name>\|transition:<i>\|layer:<name>[,..]` | selects a state or a transition in Graph mode; `layer:` shows a layer's machine first (issue #112: `layer:upper,state:aim`) |
 | `TRINO_EDITOR_OPEN=fake-object` / `array` / `material:<logical>` / `model:<logical>` / `prefab:<logical>` / `particles:<name>[@pc\|n64\|3ds]` / `audio:<sounds/x\|music/x>[@pc\|n64\|3ds\|web]` | open the fake-object or array dialog, an asset inspector (`audio:`: the waveform overlays that platform's decode), or a prefab in edit mode |
 | `TRINO_EDITOR_PALETTE=<query>` | open the command palette (Ctrl+K) with that query |
 | `TRINO_EDITOR_PLAY=here` | start **Play here** on the first frame: the scene runs inside the Game view (CI smoke) |
@@ -187,6 +187,7 @@ Live-edit check: start the editor with `TRINO_EDITOR_ECHO_LOG=1` in the backgrou
 | `palette.rs` | command-palette matcher (the app builds the item list from its menus) |
 | `budget.rs` | Game-view budget HUD rows from `FrameStats` vs `Caps` |
 | `anim_panel.rs` | the Animation tab: its own preview renderer, clips, transport, crossfade, measurements (`trino_asset_pipeline::anim`), onion skin, palette, looks, console pose export |
+| `anim_graph_panel.rs` | Graph mode: the canvas of one machine at a time (`GraphEdit::layer`: 0 the base, `k` layer `k-1`; `states_in`/`transitions_in` pick its vectors), parameters, the layer list with mode, weight and the mask (`mask_view`: the rest skeleton from the front, click a joint; or the per-joint boxes), the 2D blend space (`blend_2d`: drag points, click or drag the value), the transition mode, the fold notes of the previewed look; the preview pushes `GraphEdit::layered_pose` into its renderer (the look's tier folds it) |
 | `panels/particles.rs` | Assets › Particles inspector: fields, caps per platform, the live preview (`ParticlesView`) with Burst |
 | `preview.rs` | a small offscreen preview with its own `PcRenderer` (Animation tab, particle inspector) |
 | `panels/lod.rs` | Inspector › Model › LOD: the chain (mesh / impostor / cull), per-platform starts, cost per level, the preview slider |

@@ -18,6 +18,7 @@ pub mod anmc;
 mod clip;
 pub mod graph;
 pub mod ik;
+pub mod pose;
 
 pub use clip::{
     AnimEvent, ClipMeta, ClipTable, EVENT_BYTES, EventBuf, EventId, EventTrack, MAX_EVENTS,
@@ -28,6 +29,10 @@ pub use graph::{
     ParamKind, StateId,
 };
 pub use ik::{FootIk, IkPose};
+pub use pose::{
+    AnimLayers, AnimPose, FoldReport, FootSlope, JointMask, LayerMode, MAX_POSE_LAYERS,
+    MAX_POSE_SAMPLES, PoseLayer, PoseSample, SampleRole, inertial_decay,
+};
 
 // Readers over blobs the parsers validated: out of range reads 0 instead of
 // panicking, which keeps every read one branch (and no panic site) on the

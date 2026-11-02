@@ -533,7 +533,7 @@ fn preview(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         );
     }
     let hovered = resp.hover_pos().and_then(|pos| p.slot_at(pos));
-    let slots = p.ui.slots().to_vec();
+    let slots: Vec<_> = p.ui.slots().copied().collect();
     for (i, slot) in slots.iter().enumerate() {
         if p.hidden(i) {
             continue;

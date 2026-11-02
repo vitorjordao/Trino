@@ -35,6 +35,23 @@ fn every_graph_bakes_on_every_platform_and_rides_the_ui_bake() {
     }
 }
 
+/// A #65 graph still bakes to `TANG` v1, byte for byte what main baked
+/// (`crates/core/tests/fixtures/strider_v1.tang`, issue #112): its pinned
+/// self-test hash can't move.
+#[test]
+fn v1_graphs_bake_the_bytes_they_always_did() {
+    let root = root();
+    let manifest = Manifest::load(&root.join("assets/manifest.toml")).unwrap();
+    let def =
+        trino_scene::anim::AnimGraphDef::load(&root.join("assets/anim/strider.anim.ron")).unwrap();
+    assert!(!def.uses_v2());
+    let now = anim_graph::bake(&root, &manifest, Platform::Pc, &def)
+        .unwrap()
+        .unwrap();
+    let then = std::fs::read(root.join("crates/core/tests/fixtures/strider_v1.tang")).unwrap();
+    assert_eq!(now, then);
+}
+
 #[test]
 fn a_graph_entity_plays_and_walks_with_no_game_code() {
     let root = root();

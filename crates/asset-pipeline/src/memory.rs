@@ -307,14 +307,17 @@ pub fn plan(assets_root: &Path, platform: Platform, tier: HwTier) -> Result<Memo
     let manifest = Manifest::load(&assets_root.join("manifest.toml"))?;
     let (reserve, game) = manifest.memory_reserve(platform, tier)?;
     let mut assets = Vec::new();
-    let mut add = |logical: &str, kind: &'static str, category, bytes: u64| {
+    let mut assets_of = |logical: &str, follows: &str, kind: &'static str, category, bytes: u64| {
         assets.push(AssetMemory {
             logical: logical.to_string(),
             kind,
             category,
-            groups: manifest.groups_of(logical),
+            groups: manifest.groups_of(follows),
             bytes,
         })
+    };
+    let mut add = |logical: &str, kind: &'static str, category, bytes: u64| {
+        assets_of(logical, logical, kind, category, bytes)
     };
     let texture = |logical: &str| -> Result<u64, String> {
         let (settings, m) = crate::texture::master(assets_root, &manifest, logical, platform)?;
@@ -417,9 +420,13 @@ pub fn plan(assets_root: &Path, platform: Platform, tier: HwTier) -> Result<Memo
     }
     // UI screens and string tables (issue #58), resident like the mix.
     let root = assets_root.parent().unwrap_or(assets_root);
+    let console = matches!(platform, Platform::N64 | Platform::N3ds);
     for b in crate::ui::bake(root, &manifest, platform)? {
-        add(
+        // An animation graph rides its model's groups on the consoles.
+        let follows = b.follows.as_deref().filter(|_| console);
+        assets_of(
             &b.logical,
+            follows.unwrap_or(&b.logical),
             "blob",
             MemoryCategory::Data,
             b.bytes.len() as u64,

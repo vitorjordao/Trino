@@ -624,11 +624,77 @@ fn strider(dir: &Path) {
         }
         Clip { name, tracks }
     };
+    // Upper-body clips (issue #112), for a masked layer over the legs: an
+    // aim held in five directions (a 2D blend space by aim yaw × pitch), a
+    // shot's recoil, and a breath (an additive layer: its motion from its
+    // first frame). Their legs stand idle; the head turns with the aim.
+    // (torso yaw, torso pitch, head pitch, arm_l, arm_r) in radians.
+    type Upper = (f32, f32, f32, f32, f32);
+    let upper = |name: &'static str, dur: f32, f: &dyn Fn(f32) -> Upper| -> Clip {
+        let n = (dur * 60.0).round() as usize;
+        let times: Vec<f32> = (0..=n).map(|i| i as f32 / 60.0).collect();
+        let stand = idle(0.0);
+        let poses: Vec<Upper> = (0..=n).map(|i| f(i as f32 / n as f32)).collect();
+        let (x, y) = (v3(1.0, 0.0, 0.0), v3(0.0, 1.0, 0.0));
+        let qmul = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+            [
+                a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+            ]
+        };
+        let rot = |node: usize, q: &dyn Fn(&Upper) -> [f32; 4]| Track {
+            node,
+            times: times.clone(),
+            rotations: poses.iter().map(q).collect(),
+            translations: Vec::new(),
+        };
+        let mut tracks = vec![Track {
+            node: 0,
+            times: times.clone(),
+            rotations: Vec::new(),
+            translations: vec![stand.hips; times.len()],
+        }];
+        // (torso yaw, torso pitch, head pitch, arm_l, arm_r) in radians.
+        tracks.push(rot(1, &|p| {
+            qmul(quat(y, p.0.to_degrees()), quat(x, p.1.to_degrees()))
+        }));
+        tracks.push(rot(2, &|p| quat(x, p.2.to_degrees())));
+        tracks.push(rot(3, &|p| quat(x, p.3.to_degrees())));
+        tracks.push(rot(4, &|p| quat(x, p.4.to_degrees())));
+        for (side, base) in [(0usize, 5usize), (1, 8)] {
+            for seg in 0..3 {
+                let a = stand.legs[side][seg];
+                tracks.push(rot(base + seg, &move |_| quat(x, a.to_degrees())));
+            }
+        }
+        Clip { name, tracks }
+    };
+    // Arms forward (pitch about +X swings the bottom backward: forward is
+    // negative), the head along.
+    let aim = |yaw: f32, pitch: f32| {
+        move |_u: f32| (yaw, -0.1 * pitch, -0.3 * pitch, -1.5 - pitch, -1.5 - pitch)
+    };
     let clips = vec![
         clip("idle", 2.0, &idle),
         clip("walk", 1.0, &|u| gait(&walk, u)),
         clip("run", 0.6, &|u| gait(&run, u)),
         clip("hop", 1.0, &hop),
+        upper("aim", 0.5, &aim(0.0, 0.0)),
+        upper("aim_left", 0.5, &aim(0.7, 0.0)),
+        upper("aim_right", 0.5, &aim(-0.7, 0.0)),
+        upper("aim_up", 0.5, &aim(0.0, 0.6)),
+        upper("aim_down", 0.5, &aim(0.0, -0.5)),
+        upper("shoot", 0.4, &|u| {
+            // A kick up and back, then settling.
+            let k = (std::f32::consts::PI * (u / 0.35).min(1.0)).sin() * (1.0 - u);
+            (0.0, -0.12 * k, -0.1 * k, -1.5 - 0.5 * k, -1.5 - 0.5 * k)
+        }),
+        upper("breathe", 2.0, &|u| {
+            let b = (std::f32::consts::TAU * u).sin();
+            (0.0, 0.05 * b, -0.04 * b, 0.08 * b, 0.08 * b)
+        }),
     ];
     write_glb(&dir.join("strider.glb"), &nodes, &[0], &clips);
 }

@@ -44,6 +44,8 @@ pub struct ModelAsset {
     pub verts: usize,
     pub tris: usize,
     pub joints: usize,
+    /// The joints' names (glTF nodes, TMDL order): what layer masks name.
+    pub joint_names: Vec<String>,
     pub clips: Vec<String>,
     /// Bind-pose AABB (model space).
     pub min: [f32; 3],
@@ -260,10 +262,15 @@ impl Project {
                 .bounds()
                 .map(|(c, r)| ([c.x, c.y, c.z], r))
                 .unwrap_or(([0.0; 3], 1.0));
+            let joint_names = match (&src_path, mesh.joint_count() > 0) {
+                (Some(p), true) => pipeline::joint_names(p, &opts).unwrap_or_default(),
+                _ => Vec::new(),
+            };
             let asset = ModelAsset {
                 verts: mesh.vertex_count,
                 tris: mesh.index_count / 3,
                 joints: mesh.joint_count(),
+                joint_names,
                 logical: m.logical.clone(),
                 name,
                 id: m.id,

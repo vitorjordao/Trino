@@ -251,6 +251,11 @@ pub struct AnimRef {
     /// Foot IK (issue #65, [`crate::anim::FootIk`]): the ground under each
     /// foot; [`IkPose::NONE`](crate::anim::IkPose::NONE) is the clip's pose.
     pub ik: crate::anim::IkPose,
+    /// A layered pose (issue #112): `k` is entry `k - 1` of the renderer's
+    /// pose table this frame ([`Renderer::push_pose`]), which the backend
+    /// draws instead of the three clips above (they are the pose folded to
+    /// the base N64's tier: what a backend without the table draws). 0: none.
+    pub pose: u16,
 }
 
 /// Second clip of a crossfade (see [`AnimRef::blend`]).
@@ -280,6 +285,7 @@ impl AnimRef {
             blend: None,
             over: AnimBlend::NONE,
             ik: crate::anim::IkPose::NONE,
+            pose: 0,
         }
     }
 
@@ -584,6 +590,31 @@ pub trait Renderer {
     /// the draws they light. Draws made before the call keep the lights
     /// they had.
     fn set_local_lights(&mut self, _lights: &[crate::light::LocalLight]) {}
+
+    /// A layered pose for the next draws (issue #112, [`crate::anim::AnimPose`]):
+    /// the backend folds it to its [`Caps::anim_layers`], keeps it in a
+    /// table **cleared at `begin_frame`** (append-only within a frame, so
+    /// the returned slot stays valid until `end_frame`), and returns the
+    /// [`AnimRef`] to put in [`ModelParams::anim`]: its `pose` slot points
+    /// at the entry, its three clips are the pose folded to the base N64's
+    /// tier. A pose that fits an `AnimRef` gets no slot (the old path, bit
+    /// for bit). The default keeps no table: the folded `AnimRef`.
+    fn push_pose(&mut self, pose: &crate::anim::AnimPose) -> AnimRef {
+        pose.to_ref()
+    }
+
+    /// The model-space joint matrices this backend draws `model` with for
+    /// `anim` (its pose table included), foot IK applied; the joint count
+    /// (0: not loaded, not skinned, or a backend that can't say). The
+    /// self-test hashes them across targets.
+    fn pose_joints(
+        &self,
+        _model: ModelId,
+        _anim: &AnimRef,
+        _out: &mut [crate::math3d::Mat34; crate::render3d::MAX_JOINTS],
+    ) -> usize {
+        0
+    }
 
     /// How wet the world looks, 0 (dry) to 1 (soaked): on the per-pixel
     /// tier (PC), surfaces facing up darken and turn glossy, mirroring the

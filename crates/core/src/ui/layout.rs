@@ -10,9 +10,10 @@
 use super::node::{Align, AxisAnchor, Dir, ImageFit, Justify, NodeKind, Overflow, Scaling, Size};
 use super::values::{NO_ITEM, lookup};
 use super::{
-    Frame, Insets, MAX_DEPTH, MAX_SCROLLS, NONE, ScrollBox, Slot, TextMeasure, Ui, UiEnv, UiNode,
+    Frame, Insets, MAX_DEPTH, MAX_SCROLLS, NONE, ScrollBox, Slot, TextMeasure, UiEnv, UiNode,
     UiScreen, UiStats, flags,
 };
+use super::{SlotData, UiCore};
 use crate::math::{Rect, Vec2};
 use crate::render::{FontId, Screen};
 use crate::text::TextBuf;
@@ -45,7 +46,8 @@ impl MemoKey {
 /// `table`'s entry for `key`, or `measure` stored there (direct-mapped:
 /// one 32-bit hash per lookup, cheap on the N64).
 fn memo(
-    table: &[core::cell::Cell<(MemoKey, Vec2)>],
+    table: &[SlotData],
+    cell: fn(&SlotData) -> &core::cell::Cell<(MemoKey, Vec2)>,
     key: MemoKey,
     measure: impl FnOnce() -> Vec2,
 ) -> Vec2 {
@@ -53,7 +55,7 @@ fn memo(
         return measure();
     }
     let h = (key.node ^ key.a.rotate_left(11) ^ key.b.rotate_left(22)).wrapping_mul(0x9e37_79b1);
-    let slot = &table[(h >> 16) as usize % table.len()];
+    let slot = cell(&table[(h >> 16) as usize % table.len()]);
     let (k, size) = slot.get();
     if k == key {
         return size;
@@ -180,7 +182,7 @@ pub(super) fn fit_prefix<'t>(text: &'t str, max: f32, width: &dyn Fn(&str) -> f3
     &text[..best]
 }
 
-impl<const N: usize> Ui<N> {
+impl UiCore<[SlotData]> {
     /// Lay `screen` out for `env`, measuring text with `measure`. [`draw`]
     /// does it on its own when anything changed; call it to read rects
     /// before the first draw (tools, tests).
@@ -223,8 +225,9 @@ impl<const N: usize> Ui<N> {
             s.max = 0.0;
         }
         self.tracks = [(NONE, 0, Rect::new(0.0, 0.0, 0.0, 0.0)); super::MAX_SLIDERS];
-        for m in self.text_memo.iter().chain(self.size_memo.iter()) {
-            m.set((MemoKey::EMPTY, Vec2::ZERO));
+        for d in self.per.iter() {
+            d.text_memo.set((MemoKey::EMPTY, Vec2::ZERO));
+            d.size_memo.set((MemoKey::EMPTY, Vec2::ZERO));
         }
         if !screen.is_empty() {
             let mut solver = Solver {
@@ -292,14 +295,14 @@ impl<const N: usize> Ui<N> {
     }
 }
 
-struct Solver<'s, 'a, 'e, M: ?Sized, const N: usize> {
-    ui: &'s mut Ui<N>,
+struct Solver<'s, 'a, 'e, M: ?Sized> {
+    ui: &'s mut UiCore<[SlotData]>,
     screen: &'s UiScreen<'a>,
     env: &'s UiEnv<'e>,
     measure: &'s M,
 }
 
-impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
+impl<M: TextMeasure + ?Sized> Solver<'_, '_, '_, M> {
     fn visible(&self, n: &UiNode<'_>, item: u16) -> bool {
         n.visible_on.contains(self.env.family)
             && (n.visible_if.is_empty()
@@ -357,9 +360,12 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
             a: wrap_w,
             b: 0,
         };
-        memo(&self.ui.text_memo, key, || {
-            self.measure_label(n, item, max_w)
-        })
+        memo(
+            &self.ui.per,
+            |d| &d.text_memo,
+            key,
+            || self.measure_label(n, item, max_w),
+        )
     }
 
     fn measure_label(&self, n: &UiNode<'_>, item: u16, max_w: f32) -> Vec2 {
@@ -407,9 +413,12 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
             a: avail.x.to_bits(),
             b: avail.y.to_bits(),
         };
-        memo(&self.ui.size_memo, key, || {
-            self.measure_outer(i, item, avail, depth)
-        })
+        memo(
+            &self.ui.per,
+            |d| &d.size_memo,
+            key,
+            || self.measure_outer(i, item, avail, depth),
+        )
     }
 
     fn measure_outer(&self, i: usize, item: u16, avail: Vec2, depth: usize) -> Vec2 {
@@ -601,7 +610,7 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
     }
 
     fn alloc(&mut self, node: usize, item: u16, parent: u16, on: Screen) -> Option<usize> {
-        if self.ui.count >= N {
+        if self.ui.count >= self.ui.per.len() {
             self.ui.stats.dropped = self.ui.stats.dropped.saturating_add(1);
             return None;
         }
@@ -609,11 +618,11 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
         self.ui.count += 1;
         // A node without a depth of its own floats with its parent.
         let own = self.screen.node(node).depth;
-        let depth = match (own, self.ui.slots.get(parent as usize)) {
+        let depth = match (own, self.ui.per.get(parent as usize).map(|d| &d.slot)) {
             (0, Some(p)) if parent != NONE => p.depth,
             _ => own,
         };
-        self.ui.slots[i] = Slot {
+        self.ui.per[i].slot = Slot {
             node: node as u16,
             item,
             parent,
@@ -686,8 +695,8 @@ impl<M: TextMeasure + ?Sized, const N: usize> Solver<'_, '_, '_, M, N> {
                 self.ui.stats.overflow = self.ui.stats.overflow.saturating_add(1);
             }
         }
-        self.ui.slots[slot].flags = f;
-        self.ui.rects[slot] = self.to_px(rect, on);
+        self.ui.per[slot].slot.flags = f;
+        self.ui.per[slot].rect = self.to_px(rect, on);
         if let NodeKind::Slider { .. } = n.kind
             && let Some(k) = self.ui.tracks.iter().position(|t| t.0 == NONE)
         {

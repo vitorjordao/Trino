@@ -133,6 +133,12 @@ impl castle64::selftest::GroupHost for GroupHost<'_> {
     fn heap_tolerance(&self) -> u32 {
         u32::MAX
     }
+
+    /// The GPU T&L path against the CPU's (issue #112's parity check).
+    fn set_hardware_tnl(&mut self, on: bool) -> bool {
+        self.0.renderer.set_hw_tnl(on);
+        true
+    }
 }
 
 /// Frames the soak loads and unloads `selftest_level` for, and the frames

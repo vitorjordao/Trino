@@ -63,6 +63,7 @@ cargo xtask anim check [name] [--platform n64] [--json]   # names, kinds, limits
 cargo xtask anim simulate strider --script s.ron --out trace.json [--json]   # states, transitions, events, root motion, pose samples
 cargo xtask anim new <name> --model models/x              # one state per clip
 cargo xtask anim export <name> --out x.tang [--platform p]  # the baked blob, for a game that embeds it
+cargo xtask anim export <name> --rust x.rs [--static NAME]  # its decoded tables as static Rust: no parser linked (#138)
 # every anim command takes --dir <project> (another project's assets/, e.g. examples/solid-eleven)
 cargo xtask model inspect models/strider --anim --compressed [--json]   # stride, slide (constant vs carried), events, ANMC bytes and errors
 TRINO_SCENE=scenes/striders.scene.ron cargo run -p trino-app-pc         # entities play their graphs, carried by root motion
@@ -178,16 +179,61 @@ miss, and the N64 Expansion Pak's layered draw went 1 568 → 1 930 µs (8
 paddings) — the draw locates them again anyway. A cache in front of work
 must cost only its lookup on a hit.
 
+## Crowds: tables and sized instances (issue #138, ADR 0040)
+
+Reading the `TANG` blob byte by byte cost a crowd member ~280 µs an update
+and ~105 µs a pose on the N64 (Solid Eleven's player graph, 8 layouts), and
+an `AnimGraphInstance` is ~800 B. For a crowd:
+
+```rust
+// Static tables (a console build: no parser, no decode at run time):
+//   cargo xtask anim export player --dir examples/solid-eleven \
+//       --rust examples/solid-eleven/src/render/player_graph.rs --static PLAYER_GRAPH
+include!("player_graph.rs");                         // pub static PLAYER_GRAPH: GraphTables
+type Crowd = GraphInstance<3, 0, 0>;                 // base + 2 layers, no inertia, no events
+let mut players = [Crowd::new(&PLAYER_GRAPH); 22];  // ~220 B each (host 224)
+p.update(&PLAYER_GRAPH, dt); let pose = p.pose(&PLAYER_GRAPH);
+// Or at run time from a blob (live reload, tools): an Arena of bytes_for.
+let t = GraphTables::decode_in(&g, &arena).unwrap(); // ~2 KB for the player graph
+```
+
+- **Every instance method takes `impl Into<GraphRef>`**: `&AnimGraph` (the
+  blob) or `&GraphTables`. Both play the same arithmetic in the same order:
+  digests, poses, events and root motion are identical
+  (`trino_scene::anim::compare_tables`, the fuzz target, the `graph crowd`
+  step's three variants on every target).
+- **`GraphInstance<L, I, E>`**: `L` machines (base + `L - 1` layers; a graph
+  with more plays the first ones), `I` inertia slots (an inertialized
+  transition of a layer without one crossfades over the same time — see
+  `target/evidence/graph138/no_inertia.png`), `E` = 0 (no events: nothing is
+  fired, `events()` is empty) or 1. `AnimGraphInstance` is `<4, 4, 1>`.
+  Digests of any size agree while no inertia runs.
+- **Measured (ares, Expansion Pak, mean of 8 layouts), per crowd member:**
+  blob 280 + 111 µs (update + pose) → tables 110 + 50 → `GraphInstance<3,
+  0, 0>` over tables 86 + 46 (ADR 0040 §6, `N64_COST.us_per_graph_update`/
+  `us_per_graph_pose`): 22 players ≈ 2.9 ms;
+  `cargo xtask test n64` prints the three variants and fails when the crowd
+  line passes twice `N64_COST`.
+- **`sync: true` on a layer** (TANG v3): its looping states land, every
+  update, at the fraction of a cycle the base's looping state is at (a carry
+  layer in step with the walk). `GraphInstance::seek_layer(l, clock)` moves a
+  layer's clock by hand (fires nothing).
+- **`models: ["models/x_with_tray"]`** (TANG v3): one graph for rigs that
+  differ by joints; each layer mask is resolved by joint name per model at
+  the bake (a missing clip, another duration or a missing joint fails it);
+  the game asks `g.for_model(model_id)` (and decodes that view's tables).
+- The bake writes v2 (bytes unchanged) unless a graph uses `sync` or
+  `models`.
+
 ## Layers read as data (Solid Eleven, Plan & Party, #136)
 
-**A graph instance per character doesn't fit a crowd on the N64.** Measured
-in ares: one `AnimGraphInstance::update` of a three-machine graph ~400 µs
-(the runtime decodes the `TANG` blob byte by byte: ~1 000 reads an update),
-`pose()` ~110 µs, an instance 0.8–0.9 KB. Solid Eleven's 22 players took the
-football template from 30.4 to 39.9 ms (gate 33.3) and past the 60 KB stack
-gate. One or two instances (castle64's strider) are fine.
+**Before #138 a graph instance per character didn't fit a crowd on the N64**
+(~400 µs an update, 0.8 KB an instance: Solid Eleven's 22 players took the
+football template from 30.4 to 39.9 ms). Solid Eleven still reads its kick
+layers as data — its picking is the base — now from static tables
+(`render::graph::PLAYER_GRAPH`). See the section above for running instances.
 
-For a crowd, or a game that poses its own rig, read the layers as data:
+For a game that poses its own rig, read the layers as data:
 `AnimGraph::layer_named("strike")` → `layer(l).mask` (rig joint bits) and
 `layer(l).states` → `state_clip(s)` (a clip state's clip), once (a match, a
 level), and lay the clip over the game's own picking with the game's own
@@ -199,12 +245,12 @@ Solid Eleven: `render::graph::KickLayers`, `AnimState::pose_with` (a kick's
 Party: a `carry` layer pushed with `Renderer::push_pose` over the walk, at the
 walk's clock. Notes:
 
-- A mask counts its model's joints: rigs that differ by a prop joint need a
-  graph each.
-- A layer machine has no seek or sync to the base: a layer that must stay in
-  step with the base's clock is read as data, not run.
-- `GraphBlob` links the parser where it is called: gate it out of a console
-  build that never has the blob.
+- A mask counts its model's joints: rigs that differ by a prop joint list the
+  others in `models` (#138) and pick theirs with `for_model`.
+- A layer that must stay in step with the base: `sync: true`, or
+  `seek_layer` (#138).
+- `GraphBlob` links the parser where it is called: a console build that never
+  has the blob plays `anim export --rust` tables instead (#138).
 
 ## Root motion
 
@@ -264,6 +310,14 @@ frames, the hardware T&L (RSP, PC GPU) against the CPU via
 `xtask/tests/asset_groups.rs` panics with the measured values when they move.
 
 
+`graph crowd` (`castle64::graph_crowd`, issue #138, last in `anim_steps`): 22
+instances of Solid Eleven's player graph (embedded) through a scripted match,
+three variants — `AnimGraphInstance` over the blob, over the tables,
+`GraphInstance<3, 0, 0>` over the tables — whose hashes must agree and equal
+`CROWD_HASH`; `TRINO_GRAPH_COST: scene=micro-graph variant=… update_us=…
+pose_us=… instance_bytes=…` on every target (gated on the N64). The digest is
+taken outside the timed spans (it was once inside and doubled `pose_us`).
+
 `anim graph` (pose hash pinned in `castle64::selftest::ANIM_GRAPH_HASH`;
 `xtask/tests/engine_checks.rs::the_anim_graph_hash_is_pinned` prints a moved
 one) and `foot ik` (tier, forced, frame read-back, `TRINO_IK_COST:`), on PC,
@@ -298,6 +352,15 @@ ares, Azahar and the browsers.
   `stats().tris == 0` on the N64.
 - Validate every float a blob feeds to `clamp` or a division at parse: a
   corrupt duration made `f32::clamp` panic (`min > max`) in the fuzz test.
+- **Generic playback is a copy per source, per instance size and per
+  crate on the N64** (#138's first cut: anim code 27 → 70 KB of text). The
+  instance methods take `impl Into<GraphRef>` and call non-generic code over
+  slices; the `GraphInstance<L, I, E>` wrappers stay thin. Keep it that way.
+- **`optimize(size)` cost the graph crowd ~25%** (#138): the per-update path
+  (advance, shape, transitions, pose) is compiled for speed; cold code
+  (init, digest, transitions' setup, decode) stays `size`. The recursive
+  condition evaluator cost ~400 cycles an edge: leaves under `And`/`Or` are
+  now read in the loop.
 - **Never keep a float-carrying `Option<ClipSample>` in a hot pose path**
   (#136): LLVM hoisted `f0 as f32 + k` of an absent blend above its test,
   and the unset `k` (a denormal) trapped the VR4300 — "Generic floating

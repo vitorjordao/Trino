@@ -129,3 +129,28 @@ fn a_graph_entity_plays_and_walks_with_no_game_code() {
     let errors = play.step(&mut r.items, 1.0 / 60.0);
     assert!(errors.iter().any(|e| e.contains("nope")), "{errors:?}");
 }
+
+/// Every graph the repo bakes (the engine's and Solid Eleven's, on every
+/// platform) plays the same through its decoded tables as through its blob
+/// (issue #138): digests, poses, root motion, events and feet, update by
+/// update, over long pseudo-random scripts; so does a crowd-sized
+/// instance.
+#[test]
+fn every_graph_plays_the_same_from_its_tables() {
+    let root = root();
+    let se = root.join("examples/solid-eleven");
+    let mut n = 0;
+    for dir in [root.clone(), se] {
+        let manifest = Manifest::load(&dir.join("assets/manifest.toml")).unwrap();
+        for p in [Platform::Pc, Platform::N64, Platform::N3ds, Platform::Web] {
+            for (name, b) in anim_graph::bake_all(&dir, &manifest, p).unwrap() {
+                for seed in [1, 7, 1234, 0xdead] {
+                    trino_scene::anim::compare_tables(&b, seed, 2000)
+                        .unwrap_or_else(|e| panic!("{name} {p:?} seed {seed}: {e}"));
+                }
+                n += 1;
+            }
+        }
+    }
+    assert!(n >= 8, "{n} graphs");
+}

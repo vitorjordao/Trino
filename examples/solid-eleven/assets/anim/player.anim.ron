@@ -8,14 +8,17 @@
 // the speed). The base below is a stand-in for the game's picking, so `anim
 // simulate` and the editor show the layers over a run.
 //
-// No graph instance runs per player: one update costs ~400 µs on the N64,
-// and 22 of them broke the football template's frame gate.
+// No graph instance runs per player (the game's own picking is the base).
 //
 // Baked against the PC-only QA rig (`models/se_player_rig`: the same clips,
-// joints named `rig_*`) and embedded as `src/render/player.tang`:
+// joints named `rig_*`), embedded as `src/render/player.tang` and as static
+// tables in `src/render/player_graph.rs` (issue #138: the game reads those,
+// so no build links the blob parser). After an edit:
 // `cargo xtask anim export player --dir examples/solid-eleven --out
-// examples/solid-eleven/src/render/player.tang` after an edit
-// (`solid_eleven_layers` fails on a stale blob).
+// examples/solid-eleven/src/render/player.tang` and `cargo xtask anim export
+// player --dir examples/solid-eleven --rust
+// examples/solid-eleven/src/render/player_graph.rs --static PLAYER_GRAPH`
+// (`solid_eleven_layers` fails on a stale copy).
 AnimGraph(
     version: 2,
     model: "models/se_player_rig",

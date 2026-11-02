@@ -1158,6 +1158,7 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     let mut perf_scenes = Vec::new();
     let mut micro_scenes = Vec::new();
     let mut frame_lines = Vec::new();
+    let mut graph_lines: Vec<String> = Vec::new();
     let mut hw_line = None;
     let mut tier_step = None;
     let mut quality_step = None;
@@ -1204,6 +1205,9 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
                 }
                 if let Some(f) = parse_frame_line(&line) {
                     frame_lines.push(f);
+                }
+                if line.contains("TRINO_GRAPH_COST:") {
+                    graph_lines.push(line.clone());
                 }
                 if hw_line.is_none() && line.contains("TRINO_HW n64") {
                     hw_line = Some(line.clone());
@@ -1299,7 +1303,14 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
             }
         })
     } else if p.is_engine {
-        verdict.and_then(|()| engine_gates(root, &frames, &perf_scenes, &micro_scenes, bless))
+        verdict
+            .and_then(|()| engine_gates(root, &frames, &perf_scenes, &micro_scenes, bless))
+            .and_then(|()| {
+                let t = crate::perf::graph_report(&graph_lines, true)
+                    .map_err(|e| format!("graph crowd (micro-graph): {e}"))?;
+                println!("[n64] animation graph crowd (micro-graph, per instance):\n{t}");
+                Ok(())
+            })
     } else {
         verdict.and_then(|()| {
             project_gates(p, "n64", &p.test.n64_goldens, &frames, bless, None)?;

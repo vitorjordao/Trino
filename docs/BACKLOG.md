@@ -313,6 +313,20 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — animation graphs for crowds: decoded tables, sized instances, synced layers, one graph per rig family (2026-11-02, branch `feat/138-graph-runtime`, GitHub #138, ADR 0040)
+
+| Item | Evidence |
+|---|---|
+| A graph decoded once into native tables (`GraphTables::decode_in` into an `Arena` of `bytes_for`; conditions flattened, `And`/`Or` short-circuited without changing the triggers consumed) | `anim_tables.rs::short_circuited_conditions_consume_the_same_triggers`, `tables_take_what_bytes_for_says_and_hold_the_graph`; `anim_graph_bake.rs::every_graph_plays_the_same_from_its_tables` (every repo graph, every platform, 4 × 2 000 random updates); the fuzz target `tang` (differential) |
+| One playback over a blob or its tables (`impl Into<GraphRef>`, one copy of code on the N64) | the `graph crowd` step's three variants hash `0x50a5e8bb` (= `main`'s) on the PC, ares (both tiers), Azahar (New and old), Chromium and Firefox |
+| Sized instances `GraphInstance<L, I, E>` (`AnimGraphInstance` = `<4, 4, 1>`): a crowd member 220 B on the N64 (was 800) | `anim_tables.rs::a_crowd_instance_is_small_and_crossfades_without_inertia_slots`; `target/evidence/graph138/crowd.png`, `no_inertia.png` |
+| A `micro-graph` N64 measurement and `N64_COST` entries | `TRINO_GRAPH_COST: scene=micro-graph`, gated in `test n64`; per crowd member 388.5 → 131.2 µs (update + pose, 8 layouts); `perf.rs::a_crowd_of_graphs_costs_what_the_step_measured` |
+| P&P: a layer in step with the base (`sync: true`, `seek_layer`) | `anim_tables.rs::a_synced_layer_lands_on_the_bases_cycle` |
+| P&P: one graph for rigs that differ by prop joints (`models`, masks by joint name per model, `for_model`; TANG v3 only when used) | `anim_tables.rs::one_graph_serves_rigs_that_differ_by_a_prop_joint` |
+| P&P: no parser in a console build without the blob (`anim export --rust`; Solid Eleven's `PLAYER_GRAPH`) | `solid_eleven_layers.rs::the_players_graph_is_its_bake_and_the_rig_joints_match`; the football template's N64/3DS self-tests |
+
+Not done: Solid Eleven keeps reading its kick layers as data (its own picking is the base); real-hardware timing (#123).
+
 ## Done — animation layers follow-ups: stored inertial offsets, mask subtrees, the 3D mask picker, games on layers (2026-11-02, branch `feat/136-anim-followups`, GitHub #136, ADR 0039 › Follow-ups)
 
 | Item | Evidence |

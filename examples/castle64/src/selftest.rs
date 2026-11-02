@@ -4672,6 +4672,9 @@ pub fn anim_steps(host: &mut dyn GroupHost) -> Result<u32, &'static str> {
         let (_, platform) = host.parts();
         log_anim_layers(platform, &layers);
         platform.unload_group(STRIDER_GROUP);
+        platform.log("TRINO_STEP:graph crowd\n");
+        let crowd = crate::graph_crowd::run(platform)?;
+        crate::graph_crowd::log(platform, &crowd);
     }
     // Frames for the backends to free what the RSP or the GPU may still
     // read (the N64's grave keeps an unloaded mesh's copies 4 frames).

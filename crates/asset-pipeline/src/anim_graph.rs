@@ -85,12 +85,45 @@ pub fn bake(
         ));
     };
     // Only a graph with layer masks pays for reading the joint names.
-    let joints = if def.layers.iter().any(|l| !l.mask.is_empty()) {
+    let masked = def.layers.iter().any(|l| !l.mask.is_empty());
+    let joints = if masked {
         model_joints(root, manifest, platform, &def.model_path())?
     } else {
         None
     };
-    anim::to_tang_with(def, &clips, joints.as_deref(), &|s| has_sound(manifest, s)).map(Some)
+    // The other models it serves (v3, issue #138), on this platform.
+    let mut bound = Vec::new();
+    if !def.layers.is_empty() {
+        for path in def.model_paths() {
+            let Some(c) = model_clips(root, manifest, platform, &path)? else {
+                if manifest
+                    .models
+                    .contains_key(path.trim_start_matches("models/"))
+                {
+                    continue;
+                }
+                return Err(format!("models: `{path}` is not in the manifest"));
+            };
+            let j = if masked {
+                model_joints(root, manifest, platform, &path)?
+            } else {
+                None
+            };
+            bound.push((path, c, j));
+        }
+    }
+    let binds: Vec<anim::BoundModel> = bound
+        .iter()
+        .map(|(path, clips, joints)| anim::BoundModel {
+            path: path.clone(),
+            clips,
+            joints: joints.as_deref(),
+        })
+        .collect();
+    anim::to_tang_bound(def, &clips, joints.as_deref(), &binds, &|s| {
+        has_sound(manifest, s)
+    })
+    .map(Some)
 }
 
 /// Every graph of the project for `platform`: (logical `anim/<name>`, blob).

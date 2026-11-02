@@ -35,7 +35,7 @@ use trino_core::{ClipId, Mesh};
 
 /// 2: layers, `Blend2D`, `mode: Inertial` (issue #112); a version-1 file
 /// reads unchanged.
-pub const GRAPH_VERSION: u32 = 2;
+pub const GRAPH_VERSION: u32 = 3;
 
 /// Where graphs live, under the project root.
 pub const DIR: &str = "assets/anim";
@@ -458,6 +458,11 @@ pub struct LayerDef {
     /// The editor's canvas for this layer.
     #[serde(default, with = "ordered", skip_serializing_if = "Vec::is_empty")]
     pub layout: Vec<(String, (f32, f32))>,
+    /// Its looping states follow the base's cycle (v3, issue #138): every
+    /// update lands them at the fraction of a cycle the base's looping
+    /// state is at (arms that carry in step with the legs' walk).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub sync: bool,
 }
 
 impl LayerDef {
@@ -493,6 +498,7 @@ impl LayerDef {
             )],
             transitions: Vec::new(),
             layout: Vec::new(),
+            sync: false,
         }
     }
 }
@@ -525,6 +531,12 @@ pub struct AnimGraphDef {
     /// Layers over the base (issue #112), bottom to top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<LayerDef>,
+    /// Other models the graph serves (v3, issue #138): rigs with the same
+    /// clips whose joints differ (a prop, a tool). The bake resolves each
+    /// layer's mask by joint name against each one; a game picks one with
+    /// `AnimGraph::for_model`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 impl AnimGraphDef {
@@ -616,11 +628,31 @@ impl AnimGraphDef {
             transitions: Vec::new(),
             layout: Vec::new(),
             layers: Vec::new(),
+            models: Vec::new(),
         }
     }
 
     /// Whether it needs `TANG` v2: layers, a 2D blend space or an
     /// inertialized transition (else it bakes to v1, byte for byte).
+    /// Whether it needs `TANG` v3: a synced layer, or other models' masks.
+    pub fn uses_v3(&self) -> bool {
+        !self.layers.is_empty() && (!self.models.is_empty() || self.layers.iter().any(|l| l.sync))
+    }
+
+    /// Other models' paths (`models/x`).
+    pub fn model_paths(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .map(|m| {
+                if m.starts_with("models/") {
+                    m.clone()
+                } else {
+                    format!("models/{m}")
+                }
+            })
+            .collect()
+    }
+
     pub fn uses_v2(&self) -> bool {
         !self.layers.is_empty()
             || self
@@ -1407,6 +1439,64 @@ pub fn to_tang_with(
     joints: Option<&[Joint]>,
     sound: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<u8>, String> {
+    to_tang_bound(def, clips, joints, &[], sound)
+}
+
+/// One more model a graph serves ([`AnimGraphDef::models`]): its path, its
+/// clips and its joints.
+pub struct BoundModel<'a> {
+    pub path: String,
+    pub clips: &'a [ClipFacts],
+    pub joints: Option<&'a [Joint]>,
+}
+
+/// Each bound model has every clip the graph plays, as long, and each
+/// layer mask's joints.
+pub fn check_binds(
+    def: &AnimGraphDef,
+    clips: &[ClipFacts],
+    binds: &[BoundModel],
+) -> Result<(), String> {
+    let used: Vec<&str> = def
+        .machines()
+        .iter()
+        .flat_map(|m| m.states.iter().flat_map(|(_, s)| s.clips()))
+        .collect();
+    for b in binds {
+        for c in &used {
+            let id = ClipId::from_name(c);
+            let own = clips.iter().find(|f| f.id == id);
+            match b.clips.iter().find(|f| f.id == id) {
+                None => return Err(format!("models: `{}` has no clip `{c}`", b.path)),
+                Some(f) if own.is_some_and(|o| (o.duration - f.duration).abs() > 1e-4) => {
+                    return Err(format!(
+                        "models: `{}`'s clip `{c}` lasts {:.3} s, the graph's model's {:.3} s \
+                         (a graph keeps one duration per clip)",
+                        b.path,
+                        f.duration,
+                        own.map_or(0.0, |o| o.duration)
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        for l in &def.layers {
+            mask_bits(&l.mask, b.joints.unwrap_or(&[]))
+                .map_err(|e| format!("models: `{}`, layer `{}`: {e}", b.path, l.name))?;
+        }
+    }
+    Ok(())
+}
+
+/// [`to_tang_with`] for a graph that serves more models (v3 binds).
+pub fn to_tang_bound(
+    def: &AnimGraphDef,
+    clips: &[ClipFacts],
+    joints: Option<&[Joint]>,
+    binds: &[BoundModel],
+    sound: &dyn Fn(&str) -> bool,
+) -> Result<Vec<u8>, String> {
+    check_binds(def, clips, binds)?;
     let errors: Vec<String> = check_with(def, Some(clips), joints, sound)
         .into_iter()
         .filter(|i| i.level == Level::Error)
@@ -1416,6 +1506,7 @@ pub fn to_tang_with(
         return Err(errors.join("\n"));
     }
     let v2 = def.uses_v2();
+    let v3 = def.uses_v3();
     let machines = def.machines();
     // Each machine's first state and transition in the shared tables.
     let mut s0 = Vec::new();
@@ -1462,7 +1553,13 @@ pub fn to_tang_with(
     let u32le = |v: u32| v.to_le_bytes();
     let mut table = Vec::with_capacity(head);
     table.extend_from_slice(g::TANG_MAGIC);
-    table.extend_from_slice(&u32le(if v2 { g::TANG_VERSION } else { 1 }));
+    table.extend_from_slice(&u32le(if v3 {
+        3
+    } else if v2 {
+        2
+    } else {
+        1
+    }));
     table.extend_from_slice(&u32le(trino_core::asset_id(&def.model_path())));
     for n in [
         def.params.len(),
@@ -1687,7 +1784,8 @@ pub fn to_tang_with(
             };
             rec.extend_from_slice(&u32le(trino_core::asset_id(&l.name)));
             rec.extend_from_slice(&u32le(mask));
-            rec.extend_from_slice(&[(l.mode == LayerModeDef::Additive) as u8, 0]);
+            let flags = if l.sync { g::LAYER_SYNC } else { 0 };
+            rec.extend_from_slice(&[(l.mode == LayerModeDef::Additive) as u8, flags]);
             rec.extend_from_slice(&wp.to_le_bytes());
             rec.extend_from_slice(&w.to_le_bytes());
             for v in [
@@ -1699,6 +1797,17 @@ pub fn to_tang_with(
                 0,
             ] {
                 rec.extend_from_slice(&(v as u16).to_le_bytes());
+            }
+        }
+        if v3 {
+            // The binds: each other model's id and its mask per layer.
+            rec.extend_from_slice(&(binds.len() as u16).to_le_bytes());
+            rec.extend_from_slice(&[0, 0]);
+            for b in binds {
+                rec.extend_from_slice(&u32le(trino_core::asset_id(&b.path)));
+                for l in &def.layers {
+                    rec.extend_from_slice(&u32le(mask_bits(&l.mask, b.joints.unwrap_or(&[]))?));
+                }
             }
         }
         let at = put(&rec);
@@ -2184,4 +2293,251 @@ pub fn scene_problems(root: &Path, items: &[crate::DrawItem]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Play `tang` through its blob and through its decoded tables (issue
+/// #138) with a pseudo-random parameter script of `updates` steps from
+/// `seed`: every update's digest, pose, root motion and events must agree,
+/// and so must a crowd-sized instance (no events) over the tables. `Err`
+/// names the first update that differs.
+pub fn compare_tables(tang: &[u8], seed: u32, updates: usize) -> Result<(), String> {
+    use trino_core::anim::{GraphInstance, GraphTables, ParamKind};
+    let g = AnimGraph::parse(tang).map_err(|e| format!("graph: {e:?}"))?;
+    let mut memory = vec![std::mem::MaybeUninit::<u8>::uninit(); GraphTables::bytes_for(&g)];
+    let arena = trino_core::mem::Arena::new(&mut memory);
+    let t = GraphTables::decode_in(&g, &arena).ok_or("the tables outgrew bytes_for")?;
+    let mut a = AnimGraphInstance::new(&g);
+    let mut b = AnimGraphInstance::new(&t);
+    let mut c = GraphInstance::<4, 4, 0>::new(&t);
+    let mut rng = seed | 1;
+    let mut next = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        rng
+    };
+    for step in 0..updates {
+        for p in 0..g.param_count() {
+            let r = next();
+            let v = match g.param_info(p).1 {
+                ParamKind::Float if r % 6 == 0 => (next() % 1000) as f32 / 100.0 - 1.0,
+                ParamKind::Bool if r % 9 == 0 => (next() % 2) as f32,
+                ParamKind::Trigger if r % 17 == 0 => 1.0,
+                _ => continue,
+            };
+            a.set_float(p, v);
+            b.set_float(p, v);
+            c.set_float(p, v);
+        }
+        let dt = match next() % 20 {
+            0 => 0.0,
+            1 => 0.25,
+            _ => 1.0 / 60.0,
+        };
+        a.update(&g, dt);
+        b.update(&t, dt);
+        c.update(&t, dt);
+        let fail = |what: &str| Err(format!("update {step}: {what} differs"));
+        if a.digest() != b.digest() || a.digest() != c.digest() {
+            return fail("the digest");
+        }
+        let pa = a.pose(&g).digest();
+        if pa != b.pose(&t).digest() || pa != c.pose(&t).digest() {
+            return fail("the pose");
+        }
+        if a.anim(&g) != b.anim(&t) {
+            return fail("the AnimRef");
+        }
+        if a.root_motion() != b.root_motion() || a.root_motion() != c.root_motion() {
+            return fail("the root motion");
+        }
+        if a.events().as_slice() != b.events().as_slice() {
+            return fail("the events");
+        }
+        if a.feet(&g) != b.feet(&t) {
+            return fail("the feet");
+        }
+        if (a.state(), a.transitions) != (b.state(), b.transitions) {
+            return fail("the state");
+        }
+    }
+    Ok(())
+}
+
+/// A baked graph's decoded tables as static Rust data (issue #138, `cargo
+/// xtask anim export <name> --rust <out.rs>`): one `pub static <NAME>:
+/// GraphTables<'static>` a game `include!`s. A build that plays only
+/// exported tables never links the blob parser (`AnimGraph::parse`).
+pub fn tables_to_rust(tang: &[u8], name: &str, source: &str) -> Result<String, String> {
+    use std::fmt::Write;
+    use trino_core::anim::{GraphTables, LayerMode, ParamKind};
+    let g = AnimGraph::parse(tang).map_err(|e| format!("graph: {e:?}"))?;
+    let mut memory = vec![std::mem::MaybeUninit::<u8>::uninit(); GraphTables::bytes_for(&g)];
+    let arena = trino_core::mem::Arena::new(&mut memory);
+    let t = GraphTables::decode_in(&g, &arena).ok_or("the tables outgrew bytes_for")?;
+    let f = |v: f32| format!("f32::from_bits({:#010x})", v.to_bits());
+    let bytes = |b: &[u8]| {
+        let mut s = String::from("&[");
+        for (i, x) in b.iter().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            let _ = write!(s, "{x}");
+        }
+        s.push(']');
+        s
+    };
+    let opt = |o: Option<usize>| o.map_or("None".to_string(), |v| format!("Some({v})"));
+    const A: &str = "trino_core::anim";
+    let mut o = String::new();
+    let _ = writeln!(
+        o,
+        "// Generated by `cargo xtask anim export {source} --rust`: the graph's\n\
+         // decoded tables (issue #138). Do not edit; export again after a\n\
+         // change to the graph. `include!` it: playing these tables links no\n\
+         // blob parser.\n\
+         #[rustfmt::skip]\n\
+         pub static {name}: {A}::GraphTables<'static> = {A}::GraphTables {{"
+    );
+    let _ = writeln!(o, "    model: {:#010x},", t.model);
+    o.push_str("    params: &[\n");
+    for (id, kind, d) in t.params {
+        let k = match kind {
+            ParamKind::Float => "Float",
+            ParamKind::Bool => "Bool",
+            ParamKind::Trigger => "Trigger",
+        };
+        let _ = writeln!(
+            o,
+            "        ({A}::ParamId({:#010x}), {A}::ParamKind::{k}, {}),",
+            id.0,
+            f(*d)
+        );
+    }
+    o.push_str("    ],\n    clips: &[\n");
+    for c in t.clips {
+        let _ = writeln!(
+            o,
+            "        {A}::tables::ClipRec {{ id: trino_core::ClipId({:#010x}), duration: {}, looping: {}, \
+             events: {A}::EventTrack::from_records({}), root: {A}::RootTrack::from_parts({}, {}, {}), \
+             feet: {A}::FeetTrack::from_parts({}, {}, {}) }},",
+            c.id.0,
+            f(c.duration),
+            c.looping,
+            bytes(c.events.records()),
+            f(c.root.fps()),
+            c.root.frames(),
+            bytes(c.root.records()),
+            f(c.feet.fps()),
+            c.feet.frames(),
+            bytes(c.feet.records()),
+        );
+    }
+    o.push_str("    ],\n    states: &[\n");
+    for s in t.states {
+        let _ = writeln!(
+            o,
+            "        {A}::GraphState {{ id: {A}::StateId({:#010x}), param: {}, param_y: {}, triangles: {}, \
+             tris_at: {}, points: {}, speed: {}, speed_param: {}, wrap: {}, root_motion: {}, looping: {:?}, \
+             points_at: {}, events: {A}::EventTrack::from_records({}) }},",
+            s.id.0,
+            opt(s.param),
+            opt(s.param_y),
+            s.triangles,
+            s.tris_at,
+            s.points,
+            f(s.speed),
+            opt(s.speed_param),
+            f(s.wrap),
+            s.root_motion,
+            s.looping,
+            s.points_at,
+            bytes(s.events.records()),
+        );
+    }
+    o.push_str("    ],\n    points: &[\n");
+    for p in t.points {
+        let _ = writeln!(
+            o,
+            "        {A}::tables::Point {{ x: {}, y: {}, clip: {} }},",
+            f(p.x),
+            f(p.y),
+            p.clip
+        );
+    }
+    o.push_str("    ],\n    triangles: &[\n");
+    for tr in t.triangles {
+        let _ = writeln!(o, "        {tr:?},");
+    }
+    o.push_str("    ],\n    edges: &[\n");
+    for e in t.edges {
+        let _ = writeln!(
+            o,
+            "        {A}::tables::Edge {{ from: {}, to: {}, inertial: {}, blend: {}, cond: {} }},",
+            e.from,
+            e.to,
+            e.inertial,
+            f(e.blend),
+            e.cond
+        );
+    }
+    o.push_str("    ],\n    conds: &[\n");
+    for c in t.conds {
+        let _ = writeln!(
+            o,
+            "        {A}::tables::CondNode {{ op: {}, param: {}, children: {}, trigger: {}, end: {}, value: {} }},",
+            c.op,
+            c.param,
+            c.children,
+            c.trigger,
+            c.end,
+            f(c.value)
+        );
+    }
+    o.push_str("    ],\n    layers: &[\n");
+    for l in t.layers {
+        let mode = match l.mode {
+            LayerMode::Override => "Override",
+            LayerMode::Additive => "Additive",
+        };
+        let _ = writeln!(
+            o,
+            "        {A}::GraphLayer {{ id: {:#010x}, mask: {A}::JointMask({:#010x}), mode: {A}::LayerMode::{mode}, \
+             weight_param: {}, weight: {}, states: {:?}, transitions: {:?}, start: {}, sync: {} }},",
+            l.id,
+            l.mask.0,
+            opt(l.weight_param),
+            f(l.weight),
+            l.states,
+            l.transitions,
+            l.start,
+            l.sync
+        );
+    }
+    let _ = writeln!(
+        o,
+        "    ],\n    start: {},\n    base_states: {},\n    base_transitions: {},\n    triggers: {:#06x},\n}};",
+        t.start, t.base_states, t.base_transitions, t.triggers
+    );
+    Ok(o)
+}
+
+/// What a baked graph costs at run time (issue #138, `anim check`): its
+/// decoded tables' bytes and an instance's (`AnimGraphInstance`, and a
+/// crowd's `GraphInstance` sized to its layers without inertia or events),
+/// as this host lays them out (a console's are a little smaller).
+pub fn runtime_bytes(tang: &[u8]) -> Result<(usize, usize, usize), String> {
+    use std::mem::size_of;
+    use trino_core::anim::{GraphInstance, GraphTables};
+    let g = AnimGraph::parse(tang).map_err(|e| format!("graph: {e:?}"))?;
+    let mut memory = vec![std::mem::MaybeUninit::<u8>::uninit(); GraphTables::bytes_for(&g)];
+    let arena = trino_core::mem::Arena::new(&mut memory);
+    let t = GraphTables::decode_in(&g, &arena).ok_or("the tables outgrew bytes_for")?;
+    let crowd = match g.layer_count() {
+        0 => size_of::<GraphInstance<1, 0, 0>>(),
+        1 => size_of::<GraphInstance<2, 0, 0>>(),
+        2 => size_of::<GraphInstance<3, 0, 0>>(),
+        _ => size_of::<GraphInstance<4, 0, 0>>(),
+    };
+    Ok((t.bytes(), size_of::<AnimGraphInstance>(), crowd))
 }

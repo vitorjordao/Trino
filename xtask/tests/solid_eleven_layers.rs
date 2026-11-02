@@ -165,6 +165,16 @@ fn the_players_graph_is_its_bake_and_the_rig_joints_match() {
         baked == committed,
         "src/render/player.tang is stale: cargo xtask anim export player --dir examples/solid-eleven --out examples/solid-eleven/src/render/player.tang"
     );
+    // Its exported tables, which the game plays (issue #138), are fresh
+    // and read the same layers as the blob.
+    let rust = trino_scene::anim::tables_to_rust(&baked, "PLAYER_GRAPH", "player").unwrap();
+    let committed = std::fs::read_to_string(root.join("src/render/player_graph.rs")).unwrap();
+    assert!(
+        rust == committed,
+        "src/render/player_graph.rs is stale: cargo xtask anim export player --dir examples/solid-eleven --rust examples/solid-eleven/src/render/player_graph.rs --static PLAYER_GRAPH"
+    );
+    let blob = trino_core::AnimGraph::parse(&baked).unwrap();
+    assert_eq!(KickLayers::of(&blob), Some(KickLayers::load()));
     let joints = anim_graph::model_joints(&root, &manifest, Platform::Pc, "models/se_player_rig")
         .unwrap()
         .unwrap();

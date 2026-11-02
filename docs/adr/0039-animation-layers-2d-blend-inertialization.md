@@ -46,7 +46,8 @@ plus the `IkPose` and a `FootSlope`. 268 bytes (host): far too big for `ModelPar
 - A pose that fits an `AnimRef` (one layer, ≤ 3 clips, no offsets, flat feet) gets no slot and
   draws on #65's path bit for bit; a backend without a table (or a stale slot) draws the folded
   clips: a defined pose, never garbage.
-- `ModelParams` grows 4 bytes (`AnimRef` 40 → 44; an `EntityStore<128>` +512 B). Animated
+- `ModelParams` grows 4 bytes (measured against main: `AnimRef` 40 → 44, `ModelParams` 132 →
+  136; an `EntityStore<128>` +512 B). Animated
   draws are still never memoized (`memo.rs::only_plain_draws_are_memoized`).
 - `Renderer::pose_joints(model, &AnimRef, &mut [Mat34; 32])` returns the joints the backend
   poses (its table included): the self-test hashes them across targets.
@@ -128,8 +129,8 @@ in every `AnimRef`); the base N64's fold drops it (its IK is off by default anyw
 ### 7. Graphs ride their model's groups on the consoles
 
 `UiBlob::follows`: a graph is routed with its model's asset groups by the N64 and 3DS stagers
-and the memory plan (the PC and the Web keep it resident). The strider's two graphs (3.2 KB and
-4.1 KB) now load with `[groups.strider]` instead of sitting in boot RAM; games read them with
+and the memory plan (the PC and the Web keep it resident). The strider's two graphs (3 153 and
+3 628 bytes) now load with `[groups.strider]` instead of sitting in boot RAM; games read them with
 `Platform::group_blob` after loading the group (`GraphBlob` keeps the boot path). The bake writes
 feet and root tracks only for clips the base plays (layers' clips need neither).
 

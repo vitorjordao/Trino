@@ -103,6 +103,46 @@ pub fn tmdl(data: &[u8]) {
         {
             let blend = AnimRef::new(clip.id, 0.2).blend_to(next.id, 0.1, 0.5);
             keep(mesh.pose(Some(blend), &mut joints));
+            // A layered pose over the two clips (issue #112): masks and
+            // weights from the blob's own bytes, every role and mode.
+            use trino_core::anim::{AnimPose, JointMask, LayerMode, PoseLayer, SampleRole};
+            let byte = |i: usize| data.get(i % data.len().max(1)).copied().unwrap_or(0);
+            let mut p = AnimPose::clip(clip.id, 0.3);
+            p.push(0, SampleRole::From, next.id, 0.1, 1.0);
+            p.push(0, SampleRole::To, clip.id, 0.0, 1.0);
+            p.layers[0].decay = byte(c) as f32 / 255.0;
+            for (k, mode) in [LayerMode::Override, LayerMode::Additive]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(l) = p.add_layer(PoseLayer {
+                    mask: JointMask(u32::from_le_bytes([
+                        byte(k),
+                        byte(k + 1),
+                        byte(k + 2),
+                        byte(k + 3),
+                    ])),
+                    mode,
+                    weight: byte(k + 4) as f32 / 255.0,
+                    decay: 0.0,
+                }) {
+                    p.push(l, SampleRole::Pose, next.id, 0.25 * k as f32, 1.0);
+                }
+            }
+            p.slope = trino_core::anim::FootSlope {
+                left: [byte(7) as i8, byte(8) as i8],
+                right: [byte(9) as i8, byte(10) as i8],
+            };
+            let table = [p];
+            let layered = mesh.with_poses(&table);
+            let a = AnimRef {
+                pose: 1,
+                ..p.to_ref()
+            };
+            let n = layered.pose(Some(a), &mut joints);
+            for i in 0..v.min(64) {
+                keep(layered.posed_position(i, &joints, n));
+            }
         }
     }
     draw_mesh(&mesh);
@@ -479,6 +519,32 @@ pub fn tang(data: &[u8]) {
         keep(inst.anim(&g));
         keep(inst.root_motion());
         keep(inst.digest());
+        // Layers, 2D spaces and inertia (issue #112): the whole pose and
+        // its folds.
+        let pose = inst.pose(&g);
+        for caps in [
+            trino_core::anim::AnimLayers::AREF,
+            trino_core::anim::AnimLayers {
+                layers: 2,
+                clips: 6,
+            },
+            trino_core::anim::AnimLayers::MAX,
+        ] {
+            keep(pose.fold(caps));
+            keep(pose.table_entry(caps, 3));
+        }
+        keep((pose.to_ref(), pose.digest()));
+        for l in 0..=g.layer_count() {
+            keep(inst.layer_contributions(&g, l, &mut c));
+            keep((
+                inst.layer_state(l),
+                inst.layer_transition(l),
+                inst.inertia(l),
+            ));
+        }
+    }
+    for l in 1..=g.layer_count() {
+        keep(g.layer(l));
     }
 }
 

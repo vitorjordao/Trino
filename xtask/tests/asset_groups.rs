@@ -39,6 +39,11 @@ impl GroupHost for PcHost {
     fn heap_tolerance(&self) -> u32 {
         64 * 1024
     }
+
+    fn set_hardware_tnl(&mut self, on: bool) -> bool {
+        self.renderer.set_hw_tnl(on);
+        true
+    }
 }
 
 /// A strict renderer with the boot assets, a platform reporting the
@@ -99,8 +104,17 @@ fn asset_groups_load_draw_and_unload_on_pc() {
             r.cycles > 0 && r.level_bytes > 0,
             "{profile:?} {tier:?}: {r:?}"
         );
-        // The animation steps (issue #65), as the hosts run them last.
-        selftest::anim_steps(&mut host).unwrap_or_else(|e| panic!("{profile:?} {tier:?}: {e}"));
+        // The animation steps (issue #65), as the hosts run them last;
+        // `anim layers` (issue #112) prints its values for each tier.
+        selftest::anim_steps(&mut host).unwrap_or_else(|e| {
+            let (_, p) = host.parts();
+            p.load_group(selftest::STRIDER_GROUP);
+            for _ in 0..60 {
+                host.pump();
+            }
+            let m = selftest::anim_layers_measure(&mut host);
+            panic!("{profile:?} {tier:?}: {e}\nanim layers measured: {m:?}")
+        });
         assert!(r.heap_baseline > 0, "the counting allocator reports a heap");
         // The bar animates: a load takes at least the frame it was asked in.
         let m = host.platform.memory();

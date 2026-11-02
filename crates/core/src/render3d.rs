@@ -194,6 +194,10 @@ struct Skeleton<'a> {
     compressed: bool,
     /// Foot IK chains (`IKCH`; `legs == 0`: none).
     ik: crate::anim::ik::Chains,
+    /// The renderer's pose table this frame ([`Mesh::with_poses`]): what
+    /// an [`AnimRef::pose`] slot points at. Empty: every pose is its
+    /// `AnimRef`'s three clips.
+    poses: &'a [crate::anim::AnimPose],
 }
 
 /// Where each part of a validated TMDL blob lives (byte spans), so a
@@ -606,6 +610,7 @@ impl<'a> Mesh<'a> {
                 clip_count: k.clip_count,
                 compressed: k.compressed,
                 ik: k.ik,
+                poses: &[],
             }),
             uvs: l.uvs.map(|u| u.get(blob).as_chunks().0),
             texture: l.texture,
@@ -683,6 +688,7 @@ impl<'a> Mesh<'a> {
             clip_count: 0,
             compressed: false,
             ik: crate::anim::ik::Chains::default(),
+            poses: &[],
         })
     }
 
@@ -792,6 +798,31 @@ impl<'a> Mesh<'a> {
         }
     }
 
+    /// This mesh posing [`AnimRef::pose`] slots from `poses` (the
+    /// renderer's table this frame, [`Renderer::push_pose`](crate::Renderer::push_pose)).
+    /// Every backend attaches its table where it builds a mesh to draw, so
+    /// the CPU T&L, the RSP plan and the GPU paths pose the same joints.
+    #[inline]
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn with_poses(mut self, poses: &'a [crate::anim::AnimPose]) -> Mesh<'a> {
+        if let Some(s) = &mut self.skeleton {
+            s.poses = poses;
+        }
+        self
+    }
+
+    /// The layered pose an `AnimRef` points at in this mesh's table.
+    #[inline]
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn layered(&self, anim: Option<AnimRef>) -> Option<&'a crate::anim::AnimPose> {
+        let slot = anim?.pose as usize;
+        let skel = self.skeleton?;
+        if slot == 0 {
+            return None;
+        }
+        skel.poses.get(slot - 1)
+    }
+
     /// Joints of the rigid skeleton (0 = static mesh).
     pub fn joint_count(&self) -> usize {
         self.skeleton.map_or(0, |s| s.joint_count)
@@ -880,6 +911,9 @@ impl<'a> Mesh<'a> {
         let Some(skel) = self.skeleton else {
             return 0;
         };
+        if let Some(p) = self.layered(anim) {
+            return Self::pose_world_layered(&skel, p, out);
+        }
         let j_count = skel.joint_count;
 
         // Locate the clip(s) and the two frames of each to interpolate.
@@ -940,6 +974,176 @@ impl<'a> Mesh<'a> {
             crate::anim::ik::solve(out, j_count, &parent, &skel.ik, a.ik);
         }
         j_count
+    }
+
+    /// [`pose_world`](Self::pose_world) for a layered pose (issue #112):
+    /// per joint, each layer's samples blended by weight (rotations summed
+    /// on one hemisphere and normalized), an inertialized offset added, the
+    /// layers over the base by mask (override: lerp; additive: the clip's
+    /// motion from its first frame), then foot IK and slopes. Out of line:
+    /// only layered draws pay for it.
+    #[inline(never)]
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn pose_world_layered(
+        skel: &Skeleton,
+        pose: &crate::anim::AnimPose,
+        out: &mut [Mat34; MAX_JOINTS],
+    ) -> usize {
+        use crate::anim::{LayerMode, MAX_POSE_SAMPLES, SampleRole};
+        let j_count = skel.joint_count;
+        let samples = pose.samples();
+        let layers = pose.layers();
+        let mut loc: [Option<ClipSample>; MAX_POSE_SAMPLES] = [None; MAX_POSE_SAMPLES];
+        let mut refs: [Option<ClipSample>; MAX_POSE_SAMPLES] = [None; MAX_POSE_SAMPLES];
+        let mut offs = [[0u16; MAX_JOINTS]; MAX_POSE_SAMPLES];
+        for (i, s) in samples.iter().enumerate() {
+            let Some(layer) = layers.get(s.layer as usize) else {
+                continue;
+            };
+            loc[i] = Self::locate(skel, s.clip, s.time);
+            if layer.mode == LayerMode::Additive && s.layer > 0 {
+                refs[i] = Self::locate(skel, s.clip, 0.0);
+            }
+            if skel.compressed {
+                Self::offsets_of(skel, loc[i], &mut offs[i]);
+            }
+        }
+        let blend = |j: usize, l: usize, role: SampleRole, at_ref: bool| {
+            let at = if at_ref { &refs } else { &loc };
+            Self::blend_role(skel, samples, at, &offs, j, l, role)
+        };
+        for j in 0..j_count {
+            let jat = j * JOINT_BYTES;
+            let mut cur = rd_trs(skel.joints, jat + 4 + 48);
+            for (l, layer) in layers.iter().enumerate() {
+                if l > 0 && (!layer.mask.has(j) || layer.weight <= 0.0) {
+                    continue;
+                }
+                let Some(mut v) = blend(j, l, SampleRole::Pose, false) else {
+                    continue;
+                };
+                if layer.decay > 0.0
+                    && let (Some(f), Some(t)) = (
+                        blend(j, l, SampleRole::From, false),
+                        blend(j, l, SampleRole::To, false),
+                    )
+                {
+                    // Inertialization: the offset from where the source was
+                    // to where the destination started, decaying.
+                    let d = layer.decay.min(1.0);
+                    let off = Quat::IDENTITY.nlerp(f.1 * t.1.conjugate(), d);
+                    v = (
+                        v.0 + (f.0 - t.0) * d,
+                        (off * v.1).normalized(),
+                        v.2 + (f.2 - t.2) * d,
+                    );
+                }
+                if l == 0 {
+                    cur = v;
+                    continue;
+                }
+                let w = layer.weight.min(1.0);
+                cur = match layer.mode {
+                    LayerMode::Override => lerp_trs(cur, v, w),
+                    LayerMode::Additive => match blend(j, l, SampleRole::Pose, true) {
+                        Some(r) => {
+                            let dq = Quat::IDENTITY.nlerp(r.1.conjugate() * v.1, w);
+                            (
+                                cur.0 + (v.0 - r.0) * w,
+                                (cur.1 * dq).normalized(),
+                                cur.2 + (v.2 - r.2) * w,
+                            )
+                        }
+                        None => cur,
+                    },
+                };
+            }
+            let local = Mat34::from_trs(cur.0, cur.1, cur.2);
+            let parent = rd_u32(skel.joints, jat) as i32;
+            out[j] = if parent >= 0 && (parent as usize) < j {
+                out[parent as usize].mul(&local)
+            } else {
+                local
+            };
+        }
+        if skel.ik.legs > 0 && (!pose.ik.is_none() || !pose.slope.is_flat()) {
+            let joints = skel.joints;
+            let parent = |j: usize| {
+                let p = rd_u32(joints, j * JOINT_BYTES) as i32;
+                (p >= 0 && (p as usize) < j).then_some(p as usize)
+            };
+            if !pose.ik.is_none() {
+                crate::anim::ik::solve(out, j_count, &parent, &skel.ik, pose.ik);
+            }
+            if !pose.slope.is_flat() {
+                crate::anim::ik::align_feet(out, j_count, &parent, &skel.ik, pose.slope);
+            }
+        }
+        j_count
+    }
+
+    /// Joint `j`'s parent (`None`: a root, or no such joint). Tools (the
+    /// editor's mask picker draws the skeleton).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn joint_parent(&self, j: usize) -> Option<usize> {
+        let skel = self.skeleton?;
+        if j >= skel.joint_count {
+            return None;
+        }
+        let p = rd_u32(skel.joints, j * JOINT_BYTES) as i32;
+        (p >= 0 && (p as usize) < j).then_some(p as usize)
+    }
+
+    /// A layer's samples of one role at joint `j`, blended by weight
+    /// (rotations summed on the first one's hemisphere, normalized);
+    /// `None` when the layer has none located. Out of line, small: the
+    /// layered path's inner loop.
+    #[inline(never)]
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn blend_role(
+        skel: &Skeleton,
+        samples: &[crate::anim::PoseSample],
+        at: &[Option<ClipSample>; crate::anim::MAX_POSE_SAMPLES],
+        offs: &[[u16; MAX_JOINTS]; crate::anim::MAX_POSE_SAMPLES],
+        j: usize,
+        l: usize,
+        role: crate::anim::SampleRole,
+    ) -> Option<(Vec3, Quat, Vec3)> {
+        let mut w_sum = 0.0f32;
+        let (mut t, mut s) = (Vec3::ZERO, Vec3::ZERO);
+        let mut q = Quat::new(0.0, 0.0, 0.0, 0.0);
+        let mut first: Option<Quat> = None;
+        for (i, x) in samples.iter().enumerate() {
+            if x.layer as usize != l || x.role != role {
+                continue;
+            }
+            let Some(c) = at[i] else {
+                continue;
+            };
+            let (st, sq, ss) = Self::sample_any(skel, c, j, &offs[i]);
+            let w = x.weight;
+            let sq = match first {
+                Some(f) if f.dot(sq) < 0.0 => Quat::new(-sq.x, -sq.y, -sq.z, -sq.w),
+                Some(_) => sq,
+                None => {
+                    first = Some(sq);
+                    sq
+                }
+            };
+            t += st * w;
+            s += ss * w;
+            q = Quat::new(
+                q.x + sq.x * w,
+                q.y + sq.y * w,
+                q.z + sq.z * w,
+                q.w + sq.w * w,
+            );
+            w_sum += w;
+        }
+        (w_sum > 0.0).then(|| {
+            let k = 1.0 / w_sum;
+            (t * k, q.normalized(), s * k)
+        })
     }
 
     /// The model's foot IK chains (`IKCH`).
@@ -4629,6 +4833,89 @@ pub(crate) mod tests {
         // Weights clamp; an unknown blend clip leaves the main clip alone.
         assert_eq!(pose(base.blend_to(slide, 1.0, 7.0)), (4.0, 0.0));
         assert_eq!(pose(base.blend_to(ClipId(1), 0.0, 0.5)), (0.0, 1.0));
+    }
+
+    #[test]
+    fn layered_poses_mask_add_and_inertialize() {
+        use crate::anim::{AnimPose, JointMask, LayerMode, PoseLayer, SampleRole};
+        let blob = skinned_cube();
+        let lift = ClipId::from_name("lift");
+        let slide = ClipId::from_name("slide");
+        let at = |table: &[AnimPose], a: AnimRef| {
+            let mesh = Mesh::from_tmdl(&blob).unwrap().with_poses(table);
+            let mut m = [Mat34::IDENTITY; MAX_JOINTS];
+            assert_eq!(mesh.pose_world(Some(a), &mut m), 2);
+            (m[1].m[0][3], m[1].m[1][3])
+        };
+        let near = |a: (f32, f32), b: (f32, f32)| {
+            assert!(
+                (a.0 - b.0).abs() < 1e-5 && (a.1 - b.1).abs() < 1e-5,
+                "{a:?} vs {b:?}"
+            )
+        };
+        // A slot with no table: the AnimRef's own clips.
+        let slot = AnimRef {
+            pose: 1,
+            ..AnimRef::new(lift, 0.5)
+        };
+        near(at(&[], slot), (0.0, 1.0));
+        // One layer of two clips: the crossfade's pose.
+        let mut two = AnimPose::EMPTY;
+        two.push(0, SampleRole::Pose, lift, 0.5, 0.75);
+        two.push(0, SampleRole::Pose, slide, 1.0, 0.25);
+        near(at(&[two], slot), (1.0, 0.75));
+        near(
+            at(&[], AnimRef::new(lift, 0.5).blend_to(slide, 1.0, 0.25)),
+            (1.0, 0.75),
+        );
+        // An override layer: its mask decides.
+        let over = |mask: JointMask, mode: LayerMode, w: f32| {
+            let mut p = AnimPose::clip(lift, 0.5);
+            let l = p
+                .add_layer(PoseLayer {
+                    mask,
+                    mode,
+                    weight: w,
+                    decay: 0.0,
+                })
+                .unwrap();
+            p.push(l, SampleRole::Pose, slide, 1.0, 1.0);
+            p
+        };
+        near(
+            at(&[over(JointMask::NONE, LayerMode::Override, 1.0)], slot),
+            (0.0, 1.0),
+        );
+        near(
+            at(&[over(JointMask(0b10), LayerMode::Override, 1.0)], slot),
+            (4.0, 0.0),
+        );
+        near(
+            at(&[over(JointMask(0b10), LayerMode::Override, 0.5)], slot),
+            (2.0, 0.5),
+        );
+        // Additive: the slide's motion from its first frame, on the lift.
+        near(
+            at(&[over(JointMask::ALL, LayerMode::Additive, 0.5)], slot),
+            (2.0, 1.0),
+        );
+        // Inertialized: the slide plays whole, plus the offset from where
+        // the lift was to where the slide started, decaying.
+        let inert = |decay: f32| {
+            let mut p = AnimPose::clip(slide, 1.0);
+            p.push(0, SampleRole::From, lift, 0.5, 1.0);
+            p.push(0, SampleRole::To, slide, 0.0, 1.0);
+            p.layers[0].decay = decay;
+            p
+        };
+        near(at(&[inert(1.0)], slot), (4.0, 1.0));
+        near(at(&[inert(0.5)], slot), (4.0, 0.5));
+        near(at(&[inert(0.0)], slot), (4.0, 0.0));
+        // The slot picks its entry.
+        let second = AnimRef { pose: 2, ..slot };
+        near(at(&[inert(1.0), two], second), (1.0, 0.75));
+        // Out of range: the AnimRef again.
+        near(at(&[two], second), (0.0, 1.0));
     }
 
     #[test]

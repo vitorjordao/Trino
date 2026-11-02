@@ -74,6 +74,7 @@ fn only_plain_draws_are_memoized() {
                 blend: None,
                 over: trino_core::AnimBlend::NONE,
                 ik: trino_core::anim::IkPose::NONE,
+                pose: 0,
             }),
             ..ModelParams::DEFAULT
         },

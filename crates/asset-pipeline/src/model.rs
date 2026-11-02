@@ -911,6 +911,20 @@ pub fn clip_names(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The skeleton's joint names in TMDL joint order (glTF node names; what a
+/// layer mask or `ik` names). Empty for a model without a skeleton or a
+/// fake object. Tools only: the TMDL keeps no names.
+pub fn joint_names(path: &Path, opts: &ModelOptions) -> Result<Vec<String>, String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    if name.ends_with(".prim.ron") {
+        return Ok(Vec::new());
+    }
+    Ok(load_gltf(path, opts)?.joint_names)
+}
+
 /// Interpolation-aware sample of a keyframed channel at time `t`.
 fn sample_channel<const N: usize>(
     times: &[f32],

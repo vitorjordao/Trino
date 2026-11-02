@@ -21,6 +21,9 @@ pub const I18N_DIR: &str = "i18n";
 pub struct UiBlob {
     pub logical: String,
     pub bytes: Vec<u8>,
+    /// The asset whose groups this blob rides on the consoles (an animation
+    /// graph follows its model, issue #112); `None`: resident from boot.
+    pub follows: Option<String>,
 }
 
 /// The project's `ui/*.ui.ron` files, sorted.
@@ -105,6 +108,7 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
             Ok(UiBlob {
                 logical: trino_scene::ui::blob_path(&def.name),
                 bytes,
+                follows: None,
             })
         })();
         match result {
@@ -129,6 +133,7 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
                     Ok(bytes) => out.push(UiBlob {
                         logical: trino_scene::ui::strings_blob_path(&table.lang),
                         bytes,
+                        follows: None,
                     }),
                     Err(e) => errors.push(e),
                 }
@@ -138,6 +143,7 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
                 out.push(UiBlob {
                     logical: trino_scene::i18n::LANGUAGES_BLOB_PATH.into(),
                     bytes: list.into_bytes(),
+                    follows: None,
                 });
             }
         }
@@ -149,6 +155,7 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
         Ok(Some(bytes)) => out.push(UiBlob {
             logical: crate::access::LOGICAL.to_string(),
             bytes,
+            follows: None,
         }),
         Ok(None) => {}
         Err(e) => errors.push(e),
@@ -159,28 +166,31 @@ pub fn bake(root: &Path, manifest: &Manifest, platform: Platform) -> Result<Vec<
         Ok(Some(bytes)) => out.push(UiBlob {
             logical: crate::services::LOGICAL.to_string(),
             bytes,
+            follows: None,
         }),
         Ok(None) => {}
         Err(e) => errors.push(e),
     }
     // Animation graphs (issue #65): `anim/<name>` per graph whose model is
     // on this platform, resident like the screens.
-    match crate::anim_graph::bake_all(root, manifest, platform) {
-        Ok(graphs) => out.extend(
-            graphs
-                .into_iter()
-                .map(|(logical, bytes)| UiBlob { logical, bytes }),
-        ),
+    // On the consoles a graph rides its model's groups (a model loaded
+    // with a level brings its graph; issue #112).
+    match crate::anim_graph::bake_all_models(root, manifest, platform) {
+        Ok(graphs) => out.extend(graphs.into_iter().map(|(logical, bytes, model)| UiBlob {
+            logical,
+            bytes,
+            follows: Some(model),
+        })),
         Err(e) => errors.push(e),
     }
     // Collision meshes and the layer matrix (issue #66), resident: the
     // game's controller and queries read them while it plays.
     match crate::collision::blobs(root, manifest, platform) {
-        Ok(blobs) => out.extend(
-            blobs
-                .into_iter()
-                .map(|(logical, bytes)| UiBlob { logical, bytes }),
-        ),
+        Ok(blobs) => out.extend(blobs.into_iter().map(|(logical, bytes)| UiBlob {
+            logical,
+            bytes,
+            follows: None,
+        })),
         Err(e) => errors.push(e),
     }
     if errors.is_empty() {

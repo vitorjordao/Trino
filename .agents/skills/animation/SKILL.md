@@ -1,6 +1,6 @@
 ---
 name: animation
-description: Animate Trino characters without hand-written clip logic — animation graphs (state machines and 1D blend spaces) as `assets/anim/<name>.anim.ron`, clip events and root motion in the manifest, keyframe compression (`anim_compression`, TMDL `ANMC`) for console RAM, and tiered foot IK (`ik`, `FootIk`, `Caps::anim_ik`) — checked with `cargo xtask anim check`, run headless with `anim simulate`, measured with `model inspect --anim --compressed`, edited in the Animation tab's Graph mode. Use for "state machine", "blend walk/run", "animation graph", "footstep sound/event", "root motion", "foot sliding", "compress animations / save RAM", "feet on slopes / IK", or porting a game's own clip-picking code to a graph.
+description: Animate Trino characters without hand-written clip logic — animation graphs (state machines, 1D and 2D blend spaces, layers with joint masks — override and additive —, inertialized transitions) as `assets/anim/<name>.anim.ron`, folded per platform by `Caps::anim_layers`, clip events and root motion in the manifest, keyframe compression (`anim_compression`, TMDL `ANMC`) for console RAM, and tiered foot IK (`ik`, `FootIk`, `Caps::anim_ik`) — checked with `cargo xtask anim check`, run headless with `anim simulate`, measured with `model inspect --anim --compressed`, edited in the Animation tab's Graph mode. Use for "state machine", "blend walk/run", "animation graph", "footstep sound/event", "root motion", "foot sliding", "compress animations / save RAM", "feet on slopes / IK", or porting a game's own clip-picking code to a graph.
 ---
 
 # animation: graphs, events, root motion, compression, foot IK
@@ -93,8 +93,62 @@ params.anim = Some(inst.anim(&g).with_ik(ik));
   for a start state of its own.
 - Events: a blend fires only its heavier clip's (walk and run don't both
   step); a transition fires only the state it goes to.
-- A pose mixes at most three clips (`AnimRef::blend` + `AnimRef::over`); a
-  blend space fading into another drops its lightest clip.
+- An `AnimRef` mixes at most three clips (`AnimRef::blend` + `AnimRef::over`);
+  a pose beyond that (layers, a 2D space fading into another, inertia) is an
+  `AnimPose` through the renderer's pose table (below), folded per tier.
+
+## Layers, 2D blend spaces, inertialized transitions (issue #112, ADR 0039)
+
+```ron
+AnimGraph(
+    version: 2,                                  // written by to_ron when needed
+    model: "models/strider",
+    params: { "speed": Float(0.0), "aim_x": Float(0.0), "aim_y": Float(0.0), "aiming": Float(0.0), "fire": Trigger },
+    states: { "locomotion": Blend1D(param: "speed", points: [(0.0, "idle"), (0.8, "walk"), (2.0, "run")]) },
+    transitions: [(from: "locomotion", to: "hop", when: Trigger("hop"), blend: 0.15, mode: Inertial)],
+    layers: [
+        (name: "upper", mask: ["torso", "head", "arm_l", "arm_r"], weight: "aiming",   // or 0.6
+         states: { "aim": Blend2D(x: "aim_x", y: "aim_y", points: [(0.0, 0.0, "aim"), (-1.0, 0.0, "aim_left"), ..]) },
+         transitions: [..]),
+        (name: "breath", mode: Additive, weight: 0.6, states: { "breathe": Clip(clip: "breathe") }),
+    ],
+)
+```
+
+- **Masks name joints** (glTF node names, exactly; empty = every joint):
+  `cargo xtask model inspect models/x` lists them. The bake resolves them
+  against the model (`trino_asset_pipeline::joint_names`): without the
+  model's joints a mask is a `check` error, never a silent all-joints mask.
+- **Layers are machines** of their own (states, transitions, start, layout),
+  evaluated bottom to top after the base; a trigger a lower machine consumed
+  is gone for the layers above. Only the base moves the root and gives
+  `feet()`; every layer fires its events.
+- **Override** lerps the masked joints toward the layer's pose by its weight;
+  **Additive** adds each clip's motion from **its first frame** (author a
+  breath or a recoil as full poses). Two override layers on the same joints:
+  a `check` warning.
+- **`Blend2D`**: Delaunay triangles baked from the points (no duplicates, not
+  all on a line — `check` errors), barycentric weights, the nearest edge
+  outside the hull, phase-synced like `Blend1D`.
+- **`mode: Inertial`**: the destination plays alone from frame one plus the
+  offset from where the source was, decaying over `blend` (`blend` > 0).
+- **Game code:** `let anim = renderer.push_pose(&inst.pose(&g).with_ik(ik));`
+  after `begin_frame`, then `ModelParams { anim: Some(anim), .. }`. The
+  renderer folds it to its `Caps::anim_layers` (base N64 1 layer / 3 clips,
+  Expansion Pak and 3DS 2 / 6, New 3DS / PC / Web 4 / 12) and keeps it until
+  the next `begin_frame`. `inst.anim(&g)` still works: the base N64's fold.
+- **The fold** (`AnimPose::fold`, the same on every target): layers past the
+  count, then inertia → a crossfade from the frozen source, then the lightest
+  samples. `cargo xtask anim check <g> --platform n64` prints it per tier;
+  the editor's N64 look shows it (and its notes).
+- **Foot slopes**: `FootIk::slope(caps, &m, feet, |p| ground_normal(p))` →
+  `pose.with_slope(..)`; feet turn onto the ground at most 30°; layered poses
+  only (the base N64 drops it).
+- **Graphs ride their model's groups on the consoles**: a grouped model's
+  graph is not in boot RAM; read it with `platform.group_blob(id)` once the
+  group is loaded (`GraphBlob` is the boot path).
+- `cargo xtask anim simulate` traces each layer (`layer` on segments and
+  transitions, `layers` and the pose digest on samples, `inertial` marks).
 
 ## Root motion
 
@@ -140,12 +194,32 @@ the N64 look has IK off). Inspector › Animation graph on a model entity.
 
 ## Self-test steps
 
+`anim layers` (`castle64::selftest::anim_layers`, inside `anim_steps` with the
+strider's group): `anim/strider_layers` plays a script whose whole-pose hash
+and folds to two tiers are pinned (`ANIM_LAYERS_HASH`), the renderer's joints
+for the busiest pose per tier (`ANIM_LAYERS_JOINTS`), layered vs folded
+frames, the hardware T&L (RSP, PC GPU) against the CPU via
+`GroupHost::set_hardware_tnl`, `TRINO_LAYER_COST:`.
+`xtask/tests/asset_groups.rs` panics with the measured values when they move.
+
+
 `anim graph` (pose hash pinned in `castle64::selftest::ANIM_GRAPH_HASH`;
 `xtask/tests/engine_checks.rs::the_anim_graph_hash_is_pinned` prints a moved
 one) and `foot ik` (tier, forced, frame read-back, `TRINO_IK_COST:`), on PC,
 ares, Azahar and the browsers.
 
 ## Traps
+
+- **A layered pose's slot lives one frame**: `push_pose` after `begin_frame`,
+  never cache the returned `AnimRef` across frames (a stale slot draws the
+  folded clips, or another pose).
+- **A backend's new draw path must build its mesh with `with_poses`**, or it
+  draws the folded `AnimRef` silently (`Renderer::pose_joints` tells).
+- **Code is RAM on the base N64:** #112's first build was +33 KB of text and the
+  base console ran out at the micro scenes. `optimize(size)` on every new
+  console function (closures don't inherit it: make them `fn`s), and look for
+  duplicated monomorphizations (`mips64-elf-nm -S --size-sort -C` against
+  main's ELF): one `Ui` per size was 60 KB (now `UiCore`).
 
 - **The base N64 has little heap to spare** (the self-test gates 128 KB free): a
   test-only model goes in its own group, loaded where nothing big allocates

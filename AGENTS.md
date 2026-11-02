@@ -944,6 +944,32 @@ since #122.
     `foot ik`; `xtask/tests/anim_showcase.rs`, `anim_cli.rs`, the pipeline's
     `anim_compression`/`foot_ik`/`anim_graph_bake`, the scene crate's `anim_graph`.
 
+- **Animation layers (2026-10-30, ADR 0039, GitHub #112, the `animation` skill):** poses
+  past an `AnimRef`'s three clips, tiered per platform.
+  - **Pose (`trino_core::anim::pose`):** `AnimPose` (≤ 12 samples in ≤ 4 layers: a
+    `JointMask(u32)`, `Override`/`Additive` from each clip's first frame, a weight, an
+    inertialized decay; `IkPose`, `FootSlope`). `Renderer::push_pose` (after
+    `begin_frame`) folds it to `Caps::anim_layers` (base N64 1 layer / 3 clips; Expansion
+    Pak and 3DS 2 / 6; New 3DS, PC, Web 4 / 12), keeps it in a table cleared at
+    `begin_frame` and returns an `AnimRef` whose `pose` slot points at it (its own clips:
+    the base N64's fold). Backends attach the table with `Mesh::with_poses`; the layered
+    `pose_world` is out of line. `Renderer::pose_joints` says what a backend poses.
+  - **Graphs (`TANG` v2; v1 loads and v1 graphs bake the same bytes):** `layers: [(name,
+    mask: [joint names], mode, weight: 0.5 | "param", states, transitions)]`, `Blend2D(x:, y:,
+    points:)` (Delaunay baked), `mode: Inertial` transitions; `AnimGraphInstance::pose()`.
+    Graphs ride their model's asset groups on the consoles (`Platform::group_blob`).
+  - **Tools:** `anim check --platform` prints each tier's fold; `anim simulate` traces each
+    layer; `model inspect` lists joint names; the editor's Graph mode has the layer list,
+    the mask picked on the skeleton, the 2D blend space editor, the transition mode and the
+    preview folded by the look.
+  - **Reference:** the strider's upper-body clips (aim ×5, shoot, breathe) and
+    `assets/anim/strider_layers.anim.ron`; self-test step `anim layers` (hashes and joints
+    equal on PC, ares, Azahar, browsers; RSP vs CPU parity); `TRINO_LAYER_COST:`,
+    `N64_COST.us_per_layer_sample`.
+  - **Found on the way:** every `Ui<N>` size duplicated the UI code (60–110 KB on the N64):
+    `Ui<N>` now derefs to one `UiCore<[SlotData]>`; the N64 ROM is 38 KB smaller than
+    before #112.
+
 - **Physics 2.0 (2026-10-25, ADR 0035, GitHub #66):** `trino_core::physics`, core-only
   and the same bits on every target.
   - **Queries:**
@@ -1666,6 +1692,12 @@ cargo test --workspace
 - **The engine's own `assets/i18n/` holds the self-test's strings.** Scaffolds that copy
   the engine's assets (the castle64 and showcase templates) put the starter's tables
   back (`trino-scaffold::copy_demo`), so a project's `ui/` screens keep their keys.
+- **One `Ui<N>` size used to be one copy of the UI's code** (layout solver, draw,
+  navigation): 60 KB for a `Ui<128>`, 110 KB for a `Ui<16>` with its headless layout, RAM on
+  the N64. `Ui<N>` is a newtype over `UiCore<[SlotData; N]>` that derefs to
+  `UiCore<[SlotData]>` (#112): put new UI methods on `UiCore<[SlotData]>`, never `impl<const
+  N: usize> Ui<N>`, and keep `N` out of anything heavy. `slots()` is a `Slots` view
+  (indexes and iterates; `.copied().collect()` for a `Vec`).
 - **A UI kind with settings needs its parentheses in RON even without any:** `Stack()`,
   `Grid()`, `Rect()`, `Slider()`; a bare `Stack` is a parse error (the message says so).
   Unknown fields are errors too.
@@ -1890,6 +1922,16 @@ cargo test --workspace
 - **`platforms = [...]` keeps big PC-only models out of console RAM.** A console loads
   every model at boot: animated rigs once made the N64 fail `display_init` (allocation
   failed).
+- **A layered pose's `AnimRef` slot lives one frame** (`Renderer::push_pose`, #112): push
+  after `begin_frame`, never keep the `AnimRef` across frames, and build every mesh a draw
+  path poses with `Mesh::with_poses(&self.poses)`, or that path silently draws the folded
+  clips (`Renderer::pose_joints` shows what a backend poses).
+- **A grouped model's animation graph is grouped too on the consoles** (#112): `platform.blob`
+  misses it; read it with `platform.group_blob` once the group is loaded.
+- **Measure the N64 ROM's text against main for any core feature:** #112's first build
+  added 33 KB and the base console failed a 79 KB allocation in the micro scenes.
+  `mips64-elf-nm -S --size-sort -C` on both ELFs, diffed by name, finds the cost (and
+  duplicated monomorphizations); closures don't inherit `optimize(size)`.
 - **Never fold a new per-vertex feature into `tessellate_joints`.** Even never-taken
   branches and zero-sized generics grew its static body past the N64's 16 KB I-cache
   (15.6 → 18.0 KB) and made unlit draws 10–35 % slower in ares (local lights, 2026-10-15).

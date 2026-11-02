@@ -374,7 +374,12 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
         let id = trino_core::asset_id(&b.logical);
         std::fs::write(fsdir.join(format!("{id:08x}.blob")), &b.bytes)
             .map_err(|e| e.to_string())?;
-        index.push_str(&format!("{id:08x}\tblob\t{id:08x}.blob\n"));
+        let line = format!("{id:08x}\tblob\t{id:08x}.blob\n");
+        match &b.follows {
+            // An animation graph rides its model's groups (issue #112).
+            Some(model) => groups.route(&manifest, model, &line, &mut index)?,
+            None => index.push_str(&line),
+        }
     }
     for (name, decl) in &manifest.models {
         // A model only the expanded tier names is in the image too, loaded

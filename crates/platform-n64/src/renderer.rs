@@ -68,6 +68,10 @@ pub struct N64Renderer {
     /// Local lights of this frame (per vertex, `Caps::N64` cap). A draw
     /// one reaches runs the CPU T&L (`RspReject::LocalLight`).
     locals: LightList,
+    /// This frame's layered poses (`push_pose`, issue #112): cleared at
+    /// `begin_frame`, empty on the base console (its tier folds every pose
+    /// into an `AnimRef`).
+    poses: Vec<trino_core::anim::AnimPose>,
     /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
     /// changes.
     tnl_ctx: TnlContext,
@@ -446,6 +450,7 @@ impl N64Renderer {
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
+            poses: Vec::new(),
             // The Expansion Pak's table when the boot found one (issue #54).
             caps: crate::hw::caps_of_memory(crate::runtime::memory_size()),
             profile: None,
@@ -596,7 +601,7 @@ impl N64Renderer {
             return;
         }
         let t0 = self.tick();
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         let ctx = &self.tnl_ctx;
         if let Some(d) = self.shadows.planar(ctx, sphere.0, matrix, params) {
             let before = self.pending_shadow.len();
@@ -1491,6 +1496,7 @@ impl Renderer for N64Renderer {
         if !self.grave.is_empty() {
             self.bury();
         }
+        self.poses.clear();
         if self.locals.set(&[], 0) {
             self.rebuild_tnl();
         }
@@ -1552,6 +1558,30 @@ impl Renderer for N64Renderer {
             self.tex_filter = f;
             self.memo_gen = self.memo_gen.wrapping_add(1);
         }
+    }
+
+    #[cfg_attr(target_os = "none", optimize(size))]
+    fn push_pose(&mut self, pose: &trino_core::anim::AnimPose) -> trino_core::AnimRef {
+        let (a, entry) = pose.table_entry(self.caps.anim_layers, self.poses.len());
+        if let Some(e) = entry {
+            self.poses.push(e);
+        }
+        a
+    }
+
+    #[cfg_attr(target_os = "none", optimize(size))]
+    fn pose_joints(
+        &self,
+        model: ModelId,
+        anim: &trino_core::AnimRef,
+        out: &mut [Mat34; MAX_JOINTS],
+    ) -> usize {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return 0;
+        };
+        Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .pose_world(Some(*anim), out)
     }
 
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
@@ -1715,7 +1745,7 @@ impl Renderer for N64Renderer {
             self.frame_stats.not_loaded += 1;
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         self.frame_stats.models += 1;
         // `view · model` once: the eligibility test and the command share it.
         let eligible_zone = trino_core::trace::Zone::begin("eligible");
@@ -2105,7 +2135,10 @@ impl N64Renderer {
         // SAFETY: the mesh map is only changed by `upload_mesh`, which a draw
         // never calls; the blob outlives this draw.
         let (tmdl, layout): &(Vec<u8>, MeshLayout) = unsafe { &*(entry as *const _) };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        // SAFETY: the pose table only changes in `push_pose` and
+        // `begin_frame`, which a draw never calls.
+        let poses: &[trino_core::anim::AnimPose] = unsafe { &*(self.poses.as_slice() as *const _) };
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(poses);
         let t0 = self.tick();
         // The pose and the parts in scratch the renderer keeps (5 KB a draw
         // to initialize on the stack otherwise).

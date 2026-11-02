@@ -260,6 +260,11 @@ impl Quat {
         }
     }
 
+    /// The inverse of a unit quaternion.
+    pub const fn conjugate(self) -> Quat {
+        Quat::new(-self.x, -self.y, -self.z, self.w)
+    }
+
     /// Normalized lerp along the shortest arc. For the small per-sample
     /// steps of a baked clip it is indistinguishable from slerp, and needs no
     /// trigonometry (deterministic and cheap on every target).
@@ -276,6 +281,19 @@ impl Quat {
             self.w + (o.w - self.w) * t,
         )
         .normalized()
+    }
+}
+
+/// The Hamilton product `a * b` (apply `b`, then `a`).
+impl core::ops::Mul for Quat {
+    type Output = Quat;
+    fn mul(self, o: Quat) -> Quat {
+        Quat::new(
+            self.w * o.x + self.x * o.w + self.y * o.z - self.z * o.y,
+            self.w * o.y - self.x * o.z + self.y * o.w + self.z * o.x,
+            self.w * o.z + self.x * o.y - self.y * o.x + self.z * o.w,
+            self.w * o.w - self.x * o.x - self.y * o.y - self.z * o.z,
+        )
     }
 }
 

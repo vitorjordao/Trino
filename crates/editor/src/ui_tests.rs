@@ -2017,6 +2017,7 @@ fn animation_graph_mode_drives_writes_and_reloads() {
             to: "locomotion".into(),
             when: trino_scene::anim::CondDef::Finished,
             blend: 0.3,
+            mode: Default::default(),
         });
         edited.save(file).unwrap();
         let start = std::time::Instant::now();
@@ -2028,6 +2029,99 @@ fn animation_graph_mode_drives_writes_and_reloads() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert_eq!(h.state().anim.graph.as_ref().unwrap().def, edited);
+        leave_temp_project(&repo);
+    }
+}
+
+/// The Animation tab's Graph mode on a layered graph (issue #112):
+/// `anim/strider_layers` opens with the model's joints (its masks check),
+/// the preview pushes the layered pose (folded on the N64 look, whose
+/// notes show), the layer list switches the canvas to the upper layer, its
+/// 2D blend space takes a click as the aim, a mask joint unticked and a
+/// layer added land in the file; then the layout audit at both sizes.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn animation_layers_edit_preview_and_write() {
+    use crate::app::{Cmd, Tab};
+    for size in [egui::vec2(1600.0, 1000.0), egui::vec2(960.0, 600.0)] {
+        let Some((mut h, _tmp, repo)) = temp_project_app(size) else {
+            return;
+        };
+        h.state_mut().anim.model = Some("models/strider".into());
+        h.state_mut().anim.mode = crate::anim_panel::AnimMode::Graph;
+        h.state_mut().anim.graph_hook = Some((
+            "strider_layers".into(),
+            vec![("aiming".into(), 1.0), ("speed".into(), 0.8)],
+            Some("layer:upper,state:aim".into()),
+        ));
+        h.state_mut().cmds.push(Cmd::FocusTab(Tab::Animation));
+        h.run_steps(8);
+        let g = h
+            .state()
+            .anim
+            .graph
+            .as_ref()
+            .expect("the layered graph opens");
+        assert_eq!(g.name, "strider_layers");
+        assert!(
+            !g.joints.is_empty(),
+            "the model's joint names reach the panel"
+        );
+        assert!(g.inst.is_some() && g.issues.is_empty(), "{:?}", g.issues);
+        assert_eq!(g.layer, 1, "the hook shows the upper layer");
+        let pose = g
+            .layered_pose()
+            .expect("a layered graph poses through the table");
+        assert_eq!(pose.layer_count, 3, "base, upper, breath");
+        assert_eq!(g.live_state(), Some(0), "the upper layer aims");
+        // The N64 look folds it, and says so.
+        h.state_mut().anim.profile = trino_platform_pc::SimProfile::N64;
+        h.run_steps(3);
+        assert!(
+            h.state()
+                .anim
+                .graph
+                .as_ref()
+                .unwrap()
+                .folds
+                .iter()
+                .any(|f| f.at == "layer \"upper\""),
+            "the N64 look's fold notes"
+        );
+        // A click at the 2D space's middle aims straight ahead.
+        click(&mut h, "2D blend space");
+        h.run_steps(2);
+        let ax = h
+            .state()
+            .anim
+            .graph
+            .as_ref()
+            .unwrap()
+            .param("aim_x")
+            .unwrap();
+        assert!(ax.abs() < 0.2, "aim_x {ax}");
+        crate::layout_audit::assert_clean(
+            &mut h,
+            size,
+            true,
+            &format!("Animation layers at {}x{}", size.x, size.y),
+        );
+        if size.x < 1000.0 {
+            leave_temp_project(&repo);
+            continue;
+        }
+        let file = std::path::Path::new("assets/anim/strider_layers.anim.ron");
+        // Untick the head: the mask in the file loses it.
+        click(&mut h, "head");
+        h.run_steps(2);
+        let def = trino_scene::anim::AnimGraphDef::load(file).unwrap();
+        assert_eq!(def.layers[0].mask, ["torso", "arm_l", "arm_r"]);
+        // A layer added in the panel is in the file, and shown.
+        click(&mut h, "Add a layer");
+        h.run_steps(2);
+        let def = trino_scene::anim::AnimGraphDef::load(file).unwrap();
+        assert_eq!(def.layers.len(), 3);
+        assert_eq!(h.state().anim.graph.as_ref().unwrap().layer, 3);
         leave_temp_project(&repo);
     }
 }

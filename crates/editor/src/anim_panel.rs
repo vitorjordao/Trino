@@ -489,6 +489,10 @@ fn preview(
     let a = &mut app.anim;
     // What to draw, before the preview borrows the panel.
     let anim = a.anim_ref();
+    let layered = match a.mode {
+        AnimMode::Graph => a.graph.as_ref().and_then(|g| g.layered_pose()),
+        _ => None,
+    };
     let step = a
         .current_metrics()
         .map_or(0.1, |m| m.duration / m.frames.max(1) as f32);
@@ -600,6 +604,16 @@ fn preview(
                     Some(a0.with_ik(pose))
                 }
                 (a0, ..) => a0,
+            };
+            // A layered pose through the renderer's table: the previewed
+            // look's tier folds it (the N64 look draws one layer of three
+            // clips), with the IK the AnimRef got.
+            let anim = match (layered, anim) {
+                (Some(p), a0) => {
+                    let ik = a0.map_or(trino_core::anim::IkPose::NONE, |x| x.ik);
+                    Some(r.push_pose(&p.with_ik(ik)))
+                }
+                (None, a0) => a0,
             };
             // Onion skin: earlier frames, fainter the older.
             for k in (1..=ghosts as i32).rev() {
@@ -1051,6 +1065,31 @@ fn graph_mode(
         return;
     };
     let facts = trino_scene::anim::clip_facts(tmdl).ok();
+    // The model's joints (layer masks) and its rest skeleton (the mask
+    // picker), the fold report of the previewed look (issue #112).
+    if let Some(m) = app.project.models.get(model)
+        && g.joints != m.joint_names
+    {
+        g.joints = m.joint_names.clone();
+        g.rest = Mesh::from_tmdl(tmdl)
+            .ok()
+            .map(|mesh| {
+                let mut w = [trino_core::Mat34::IDENTITY; trino_core::MAX_JOINTS];
+                let n = mesh.pose_world(None, &mut w);
+                (0..n)
+                    .map(|j| {
+                        let m = &w[j].m;
+                        (
+                            trino_core::Vec3::new(m[0][3], m[1][3], m[2][3]),
+                            mesh.joint_parent(j),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        g.mark_dirty();
+    }
+    g.folds = trino_scene::anim::fold_report(&g.def, a.profile.caps().anim_layers);
     g.poll_file();
     g.rebake(facts.as_deref(), sounds, generation);
     if let Some((name, params, select)) = a.graph_hook.clone()

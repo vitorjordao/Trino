@@ -107,6 +107,9 @@ pub struct N3dsRenderer {
     light: Light,
     /// Local lights of this frame (per vertex, `Caps::N3DS` cap).
     locals: LightList,
+    /// This frame's layered poses (`push_pose`, issue #112): cleared at
+    /// `begin_frame`, kept across both eyes' replays.
+    poses: Vec<trino_core::anim::AnimPose>,
     /// T&L constants of `camera` + `light` + `locals`, rebuilt when one
     /// changes.
     tnl_ctx: TnlContext,
@@ -224,6 +227,7 @@ impl N3dsRenderer {
             tnl_scratch: Box::new(TnlScratch::new()),
             light: DEFAULT_LIGHT,
             locals: LightList::EMPTY,
+            poses: Vec::new(),
             // The New 3DS's table when the boot turned its speedup on.
             caps: crate::runtime::hw().caps(),
             water_state: WaterState::NONE,
@@ -485,7 +489,7 @@ impl N3dsRenderer {
         let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         let sphere = sh::caster_sphere(mesh.bounds(), matrix);
         let ctx = &self.tnl_ctx;
         match plan {
@@ -1023,6 +1027,7 @@ impl Renderer for N3dsRenderer {
         // top again) or with local lights (cleared every frame).
         let was_bottom = self.screen != 0;
         self.screen = 0;
+        self.poses.clear();
         let had_lights = self.locals.set(&[], 0);
         if was_bottom || had_lights {
             self.rebuild_tnl();
@@ -1165,6 +1170,28 @@ impl Renderer for N3dsRenderer {
         };
     }
 
+    fn push_pose(&mut self, pose: &trino_core::anim::AnimPose) -> trino_core::AnimRef {
+        let (a, entry) = pose.table_entry(self.caps.anim_layers, self.poses.len());
+        if let Some(e) = entry {
+            self.poses.push(e);
+        }
+        a
+    }
+
+    fn pose_joints(
+        &self,
+        model: ModelId,
+        anim: &trino_core::AnimRef,
+        out: &mut [Mat34; trino_core::MAX_JOINTS],
+    ) -> usize {
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            return 0;
+        };
+        Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .pose_world(Some(*anim), out)
+    }
+
     fn set_local_lights(&mut self, lights: &[LocalLight]) {
         if let Some(r) = self.recording_state() {
             let s = r.lights(lights);
@@ -1237,7 +1264,7 @@ impl Renderer for N3dsRenderer {
             self.frame_stats.not_loaded += 1;
             return;
         };
-        let mesh = Mesh::from_layout(tmdl, layout);
+        let mesh = Mesh::from_layout(tmdl, layout).with_poses(&self.poses);
         self.frame_stats.models += 1;
         let plan = match self.gpu_on {
             true => match self.gpu_plan(model, &mesh, matrix, params) {

@@ -497,9 +497,24 @@ pub const MAX_DEPTH: usize = 24;
 /// the screen's values. Keep one per open screen (in the game struct, not
 /// on the stack: about 2 KB at N = 64).
 #[derive(Clone)]
-pub struct Ui<const N: usize = 64> {
-    slots: [Slot; N],
-    rects: [Rect; N],
+pub struct Ui<const N: usize = 64>(UiCore<[SlotData; N]>);
+
+/// What a laid-out node keeps: its slot, its rect and the layout's memo
+/// cells. One array of them is the only part of a [`Ui`] sized by `N`.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct SlotData {
+    slot: Slot,
+    rect: Rect,
+    text_memo: core::cell::Cell<(layout::MemoKey, Vec2)>,
+    size_memo: core::cell::Cell<(layout::MemoKey, Vec2)>,
+}
+
+/// A [`Ui`] of any size: what `Ui<N>` derefs to, where every method lives.
+/// The code is the same for every `N` (on the N64, code is RAM: one copy
+/// for a game's 16-node pause menu and its 128-node options page).
+#[derive(Clone)]
+pub struct UiCore<S: ?Sized> {
     count: usize,
     frames: [Frame; 2],
     focus: Option<(u16, u16)>,
@@ -525,16 +540,87 @@ pub struct Ui<const N: usize = 64> {
     /// The focus was set from outside: scroll it into view at the next
     /// draw.
     reveal: bool,
-    /// Label sizes measured by the current layout, by node and list item
-    /// (issue #95): a fit size asks a text at every level of its tree, and
-    /// building a label (a value, a format) is the expensive part on the
-    /// N64. Cleared at each layout.
-    text_memo: [core::cell::Cell<(layout::MemoKey, Vec2)>; N],
-    /// Outer sizes measured by the current layout, by node, item and the
-    /// room offered: a fit size measures its content once for its width
-    /// and once for its height, so nested fit containers would measure
-    /// their subtrees 2^depth times.
-    size_memo: [core::cell::Cell<(layout::MemoKey, Vec2)>; N],
+    /// Each slot's data (its slot, rect and memo cells), last: a
+    /// `UiCore<[SlotData; N]>` coerces to the `UiCore<[SlotData]>` the code
+    /// takes. The memos: label sizes measured by the current layout, by
+    /// node and list item (issue #95: a fit size asks a text at every level
+    /// of its tree, and building a label is the expensive part on the N64),
+    /// and outer sizes by node, item and room offered (a fit size measures
+    /// its content once for its width and once for its height, so nested
+    /// fit containers would measure their subtrees 2^depth times). Cleared
+    /// at each layout.
+    per: S,
+}
+
+impl<const N: usize> core::ops::Deref for Ui<N> {
+    type Target = UiCore<[SlotData]>;
+    fn deref(&self) -> &UiCore<[SlotData]> {
+        &self.0
+    }
+}
+
+impl<const N: usize> core::ops::DerefMut for Ui<N> {
+    fn deref_mut(&mut self) -> &mut UiCore<[SlotData]> {
+        &mut self.0
+    }
+}
+
+/// The laid-out slots ([`UiCore::slots`]): indexable, iterable.
+#[derive(Clone, Copy)]
+pub struct Slots<'a>(&'a [SlotData]);
+
+impl<'a> Slots<'a> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &'a Slot> + ExactSizeIterator + Clone + 'a {
+        self.0.iter().map(|d| &d.slot)
+    }
+    pub fn get(&self, i: usize) -> Option<&'a Slot> {
+        self.0.get(i).map(|d| &d.slot)
+    }
+    pub fn first(&self) -> Option<&'a Slot> {
+        self.get(0)
+    }
+    pub fn last(&self) -> Option<&'a Slot> {
+        self.0.last().map(|d| &d.slot)
+    }
+    /// The slots copied out (`alloc` users: tools, tests).
+    pub fn copied(&self) -> impl Iterator<Item = Slot> + 'a {
+        self.0.iter().map(|d| d.slot)
+    }
+}
+
+impl<'a> core::ops::Index<usize> for Slots<'a> {
+    type Output = Slot;
+    fn index(&self, i: usize) -> &Slot {
+        &self.0[i].slot
+    }
+}
+
+impl<'a> IntoIterator for Slots<'a> {
+    type Item = &'a Slot;
+    type IntoIter = core::iter::Map<core::slice::Iter<'a, SlotData>, fn(&'a SlotData) -> &'a Slot>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().map(|d| &d.slot)
+    }
+}
+
+impl PartialEq for Slots<'_> {
+    fn eq(&self, o: &Self) -> bool {
+        self.len() == o.len() && self.iter().eq(o.iter())
+    }
+}
+
+impl core::fmt::Debug for Slots<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
 }
 
 /// A [`UiEnv`] without its string table, kept across frames.
@@ -603,6 +689,9 @@ impl TextMeasure for CellMeasure {
     }
 }
 
+/// Most slots [`UiCore::unreachable`] walks.
+const MAX_REACH: usize = 512;
+
 impl<const N: usize> Default for Ui<N> {
     fn default() -> Self {
         Self::new()
@@ -611,9 +700,7 @@ impl<const N: usize> Default for Ui<N> {
 
 impl<const N: usize> Ui<N> {
     pub const fn new() -> Self {
-        Ui {
-            slots: [Slot::EMPTY; N],
-            rects: [Rect::new(0.0, 0.0, 0.0, 0.0); N],
+        Ui(UiCore {
             count: 0,
             frames: [Frame::NONE; 2],
             focus: None,
@@ -638,11 +725,19 @@ impl<const N: usize> Ui<N> {
             last_env: None,
             text_mul: 1.0,
             reveal: false,
-            text_memo: [const { core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)) }; N],
-            size_memo: [const { core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)) }; N],
-        }
+            per: [const {
+                SlotData {
+                    slot: Slot::EMPTY,
+                    rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+                    text_memo: core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)),
+                    size_memo: core::cell::Cell::new((layout::MemoKey::EMPTY, Vec2::ZERO)),
+                }
+            }; N],
+        })
     }
+}
 
+impl UiCore<[SlotData]> {
     // ---- values -------------------------------------------------------
 
     /// Set an int value (`Text(bind: "money")` shows it).
@@ -683,13 +778,13 @@ impl<const N: usize> Ui<N> {
     // ---- what the layout made ------------------------------------------
 
     /// The laid-out slots, in drawing order.
-    pub fn slots(&self) -> &[Slot] {
-        &self.slots[..self.count]
+    pub fn slots(&self) -> Slots<'_> {
+        Slots(&self.per[..self.count])
     }
 
     /// Slot `i`'s rect, pixels of its screen.
     pub fn rect(&self, i: usize) -> Rect {
-        self.rects[i]
+        self.per[i].rect
     }
 
     /// How one screen maps virtual units to pixels (after a layout).
@@ -711,7 +806,7 @@ impl<const N: usize> Ui<N> {
     /// Where the node named `id` is: its screen and pixel rect.
     pub fn rect_of(&self, screen: &UiScreen<'_>, id: &str) -> Option<(Screen, Rect)> {
         let i = self.find(screen, id)?;
-        Some((self.slots[i].on, self.rects[i]))
+        Some((self.per[i].slot.on, self.per[i].rect))
     }
 
     /// The focused slot.
@@ -732,8 +827,8 @@ impl<const N: usize> Ui<N> {
     /// isn't a laid-out, enabled control.
     pub fn set_focus(&mut self, screen: &UiScreen<'_>, id: &str) -> bool {
         match self.find(screen, id) {
-            Some(i) if self.slots[i].has(flags::FOCUSABLE) => {
-                self.focus = Some((self.slots[i].node, self.slots[i].item));
+            Some(i) if self.per[i].slot.has(flags::FOCUSABLE) => {
+                self.focus = Some((self.per[i].slot.node, self.per[i].slot.item));
                 self.reveal = true;
                 true
             }
@@ -794,7 +889,7 @@ impl<const N: usize> Ui<N> {
             .slots()
             .iter()
             .position(|s| s.node == node && s.item == item)?;
-        (!self.hidden(i)).then_some((self.slots[i].on, self.rects[i]))
+        (!self.hidden(i)).then_some((self.per[i].slot.on, self.per[i].rect))
     }
 
     /// No focus: nothing highlighted (a game whose cursor is on something
@@ -828,12 +923,12 @@ impl<const N: usize> Ui<N> {
     }
 
     pub(super) fn hidden(&self, i: usize) -> bool {
-        if self.slots[i].has(flags::CUT) {
+        if self.per[i].slot.has(flags::CUT) {
             return true;
         }
         let mut at = i;
         loop {
-            let s = self.slots[at];
+            let s = self.per[at].slot;
             if s.has(flags::CLIPPED) {
                 return true;
             }
@@ -856,8 +951,12 @@ impl<const N: usize> Ui<N> {
     /// focus, if any (the layout must be done).
     pub fn unreachable(&self, screen: &UiScreen<'_>) -> Option<usize> {
         let start = self.initial_focus(screen)?;
-        let mut seen = [false; N];
-        let mut queue = [0u16; N];
+        // Up to `MAX_REACH` slots (more: not checked).
+        if self.count > MAX_REACH {
+            return None;
+        }
+        let mut seen = [false; MAX_REACH];
+        let mut queue = [0u16; MAX_REACH];
         let (mut head, mut tail) = (0, 1);
         queue[0] = start as u16;
         seen[start] = true;
@@ -874,6 +973,6 @@ impl<const N: usize> Ui<N> {
                 }
             }
         }
-        (0..self.count).find(|&i| self.slots[i].has(flags::FOCUSABLE) && !seen[i])
+        (0..self.count).find(|&i| self.per[i].slot.has(flags::FOCUSABLE) && !seen[i])
     }
 }

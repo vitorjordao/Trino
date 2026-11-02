@@ -40,6 +40,25 @@ pub fn model_tmdl(
     crate::bake_model(&source, &decl.options()).map(Some)
 }
 
+/// The model's joint names on `platform` (glTF node order; `None`: not
+/// baked there): what layer masks name.
+pub fn model_joints(
+    root: &Path,
+    manifest: &Manifest,
+    platform: Platform,
+    model: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let short = model.strip_prefix("models/").unwrap_or(model);
+    let Some(decl) = manifest.models.get(short) else {
+        return Ok(None);
+    };
+    if !decl.bakes_for(platform) {
+        return Ok(None);
+    }
+    let source = crate::resolve_source(&root.join("assets"), platform, &decl.file)?;
+    crate::joint_names(&source, &decl.options()).map(Some)
+}
+
 /// Whether `sounds/<name>` is declared.
 pub fn has_sound(manifest: &Manifest, name: &str) -> bool {
     manifest.sounds.contains_key(name) || manifest.music.contains_key(name)
@@ -65,7 +84,13 @@ pub fn bake(
             def.model_path()
         ));
     };
-    anim::to_tang(def, &clips, &|s| has_sound(manifest, s)).map(Some)
+    // Only a graph with layer masks pays for reading the joint names.
+    let joints = if def.layers.iter().any(|l| !l.mask.is_empty()) {
+        model_joints(root, manifest, platform, &def.model_path())?
+    } else {
+        None
+    };
+    anim::to_tang_with(def, &clips, joints.as_deref(), &|s| has_sound(manifest, s)).map(Some)
 }
 
 /// Every graph of the project for `platform`: (logical `anim/<name>`, blob).
@@ -74,12 +99,27 @@ pub fn bake_all(
     manifest: &Manifest,
     platform: Platform,
 ) -> Result<Vec<(String, Vec<u8>)>, String> {
+    Ok(bake_all_models(root, manifest, platform)?
+        .into_iter()
+        .map(|(l, b, _)| (l, b))
+        .collect())
+}
+
+/// [`bake_all`] with each graph's model (`models/x`): the consoles route a
+/// graph with its model's groups.
+pub fn bake_all_models(
+    root: &Path,
+    manifest: &Manifest,
+    platform: Platform,
+) -> Result<Vec<(String, Vec<u8>, String)>, String> {
     let mut out = Vec::new();
     let mut errors = Vec::new();
     for (name, path) in anim::graph_files(root) {
-        let r = AnimGraphDef::load(&path).and_then(|def| bake(root, manifest, platform, &def));
+        let r = AnimGraphDef::load(&path).and_then(|def| {
+            Ok(bake(root, manifest, platform, &def)?.map(|b| (b, def.model_path())))
+        });
         match r {
-            Ok(Some(bytes)) => out.push((anim::blob_path(&name), bytes)),
+            Ok(Some((bytes, model))) => out.push((anim::blob_path(&name), bytes, model)),
             Ok(None) => {}
             Err(e) => errors.push(format!("{}: {e}", path.display())),
         }

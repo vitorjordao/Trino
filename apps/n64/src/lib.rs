@@ -102,6 +102,13 @@ mod n64 {
             self.audio.poll();
             self.platform.sample_heap();
         }
+
+        /// The RSP's skeleton path against the CPU T&L (issue #112's parity
+        /// check for layered poses).
+        fn set_hardware_tnl(&mut self, on: bool) -> bool {
+            self.renderer.set_rsp(on);
+            true
+        }
     }
 
     /// Asset groups (issue #56): load behind a loading bar, draw, unload,

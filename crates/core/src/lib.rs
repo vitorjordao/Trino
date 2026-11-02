@@ -150,7 +150,7 @@ pub use stereo::{
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use threads::ThreadSetting;
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
-pub use ui::{Insets, Ui, UiEnv, UiEvent, UiEvents, UiScreen, UiStats};
+pub use ui::{Insets, Slots, Ui, UiCore, UiEnv, UiEvent, UiEvents, UiScreen, UiStats};
 pub use version::BuildInfo;
 pub use vis::{CellGroups, Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
 pub use water::{MAX_RIPPLES, Ripple, RippleBuffer, Water, WaterState, WaterTier};

@@ -222,7 +222,7 @@ anim_compression = true
 [models.strider]
 file = "models/showcase/strider.glb"
 anim_fps = 20
-once = ["hop"]
+once = ["hop", "shoot"]
 root_motion = ["walk", "run"]
 anim_compression = true
 ik = { pelvis = "hips", left = ["thigh_l", "shin_l", "foot_l"], right = ["thigh_r", "shin_r", "foot_r"] }

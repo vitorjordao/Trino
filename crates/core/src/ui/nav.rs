@@ -5,7 +5,8 @@
 use super::layout::{abs, floor};
 use super::node::NodeKind;
 use super::values::UiValue;
-use super::{NONE, Slot, Ui, UiEvent, UiEvents, UiScreen, flags};
+use super::{NONE, Slot, UiEvent, UiEvents, UiScreen, flags};
+use super::{SlotData, UiCore};
 use crate::input::{Button, InputState, Key, PointerButton};
 use crate::math::{Rect, Vec2};
 use crate::render::Screen;
@@ -51,7 +52,7 @@ fn held_dir(input: &InputState) -> Option<u8> {
     None
 }
 
-impl<const N: usize> Ui<N> {
+impl UiCore<[SlotData]> {
     /// One frame of input against the last layout: focus moves, presses,
     /// value changes. `prev` is the previous frame's input (edges), `dt`
     /// the frame time (held directions repeat). Returns what happened.
@@ -83,11 +84,11 @@ impl<const N: usize> Ui<N> {
         }
         if self
             .focus_slot()
-            .is_none_or(|i| !self.slots[i].has(flags::FOCUSABLE))
+            .is_none_or(|i| !self.per[i].slot.has(flags::FOCUSABLE))
         {
             self.focus = self
                 .initial_focus(screen)
-                .map(|i| (self.slots[i].node, self.slots[i].item));
+                .map(|i| (self.per[i].slot.node, self.per[i].slot.item));
         }
         let before = self.focus;
 
@@ -116,12 +117,12 @@ impl<const N: usize> Ui<N> {
         if let (true, Some(d)) = (fire, dir)
             && let Some(at) = self.focus_slot()
         {
-            let node = screen.node_at(self.slots[at].node as usize);
+            let node = screen.node_at(self.per[at].slot.node as usize);
             let adjusts = matches!(node.kind, NodeKind::Slider { .. } | NodeKind::Toggle);
             if adjusts && (d == LEFT || d == RIGHT) {
                 self.adjust(screen, at, if d == LEFT { -1 } else { 1 }, &mut events);
             } else if let Some(next) = self.nav_target(screen, at, d, screen.wrap) {
-                self.focus = Some((self.slots[next].node, self.slots[next].item));
+                self.focus = Some((self.per[next].slot.node, self.per[next].slot.item));
             }
         }
 
@@ -144,7 +145,7 @@ impl<const N: usize> Ui<N> {
         if self.focus != before
             && let Some(at) = self.focus_slot()
         {
-            let s = self.slots[at];
+            let s = self.per[at].slot;
             events.push(UiEvent::Moved {
                 id: screen.node_at(s.node as usize).id,
                 item: s.item,
@@ -174,17 +175,17 @@ impl<const N: usize> Ui<N> {
         if let (Some(p), Some(h)) = (p, hit)
             && last != Some(p)
         {
-            self.focus = Some((self.slots[h].node, self.slots[h].item));
+            self.focus = Some((self.per[h].slot.node, self.per[h].slot.item));
         }
         if input.pointer_pressed(prev, PointerButton::Primary)
             && let Some(h) = hit
         {
-            self.pressed = Some((self.slots[h].node, self.slots[h].item));
+            self.pressed = Some((self.per[h].slot.node, self.per[h].slot.item));
             self.focus = self.pressed;
         }
         if let Some(pressed) = self.pressed
             && let Some(i) = self.slot_of(pressed)
-            && self.slots[i].on == on
+            && self.per[i].slot.on == on
         {
             let node = screen.node_at(pressed.0 as usize);
             if let NodeKind::Slider { .. } = node.kind
@@ -202,7 +203,7 @@ impl<const N: usize> Ui<N> {
         if input.wheel != 0.0
             && let Some(s) = self.scroll_at(on, at)
         {
-            let node = self.slots[s].node;
+            let node = self.per[s].slot.node;
             if let Some(e) = self.scroll.iter_mut().find(|e| e.node == node) {
                 e.offset = (e.offset - input.wheel * WHEEL_STEP).clamp(0.0, e.max);
             }
@@ -212,21 +213,21 @@ impl<const N: usize> Ui<N> {
     /// The topmost enabled control under `p` on screen `on`.
     fn hit(&self, on: Screen, p: Vec2) -> Option<usize> {
         (0..self.count).rev().find(|&i| {
-            let s = &self.slots[i];
-            s.on == on && s.has(flags::FOCUSABLE) && !self.hidden(i) && self.rects[i].contains(p)
+            let s = &self.per[i].slot;
+            s.on == on && s.has(flags::FOCUSABLE) && !self.hidden(i) && self.per[i].rect.contains(p)
         })
     }
 
     /// The innermost scroll box under `p`.
     fn scroll_at(&self, on: Screen, p: Vec2) -> Option<usize> {
         (0..self.count).rev().find(|&i| {
-            let s = &self.slots[i];
+            let s = &self.per[i].slot;
             s.on == on
                 && self
                     .scroll
                     .iter()
                     .any(|e| e.node == s.node && e.node != NONE)
-                && self.rects[i].contains(p)
+                && self.per[i].rect.contains(p)
         })
     }
 
@@ -238,7 +239,7 @@ impl<const N: usize> Ui<N> {
 
     /// A, a click or a tap on slot `at`.
     fn activate<'a>(&mut self, screen: &UiScreen<'a>, at: usize, events: &mut UiEvents<'a>) {
-        let s = self.slots[at];
+        let s = self.per[at].slot;
         if !s.has(flags::FOCUSABLE) {
             return;
         }
@@ -264,7 +265,7 @@ impl<const N: usize> Ui<N> {
         step: i32,
         events: &mut UiEvents<'a>,
     ) {
-        let s = self.slots[at];
+        let s = self.per[at].slot;
         let node = screen.node_at(s.node as usize);
         if node.bind.is_empty() {
             return;
@@ -299,7 +300,7 @@ impl<const N: usize> Ui<N> {
 
     /// A slider dragged to pixel `x`.
     fn drag<'a>(&mut self, screen: &UiScreen<'a>, at: usize, x: f32, events: &mut UiEvents<'a>) {
-        let s = self.slots[at];
+        let s = self.per[at].slot;
         let node = screen.node_at(s.node as usize);
         let NodeKind::Slider { min, max, step } = node.kind else {
             return;
@@ -343,8 +344,8 @@ impl<const N: usize> Ui<N> {
     /// Slot `i`'s rect in one plane for both screens: the bottom screen
     /// sits under the top one, centered.
     fn plane(&self, i: usize) -> Rect {
-        let r = self.rects[i];
-        if self.slots[i].on == Screen::Top {
+        let r = self.per[i].rect;
+        if self.per[i].slot.on == Screen::Top {
             return r;
         }
         let top = self.frames[0].size * self.frames[0].scale;
@@ -368,7 +369,7 @@ impl<const N: usize> Ui<N> {
         dir: u8,
         wrap: bool,
     ) -> Option<usize> {
-        let node = screen.node_at(self.slots[from].node as usize);
+        let node = screen.node_at(self.per[from].slot.node as usize);
         let explicit = node.nav[dir as usize];
         if explicit != NONE {
             return self
@@ -386,7 +387,7 @@ impl<const N: usize> Ui<N> {
         let mut best: Option<(f32, usize)> = None;
         let mut far: Option<(f32, f32, usize)> = None;
         for i in 0..self.count {
-            let s: &Slot = &self.slots[i];
+            let s: &Slot = &self.per[i].slot;
             if i == from || !s.has(flags::FOCUSABLE) {
                 continue;
             }
@@ -416,16 +417,16 @@ impl<const N: usize> Ui<N> {
 
     /// Scroll the boxes around slot `at` so it shows.
     pub(super) fn scroll_into_view(&mut self, at: usize) {
-        let r = self.rects[at];
-        let mut p = self.slots[at].parent;
+        let r = self.per[at].rect;
+        let mut p = self.per[at].slot.parent;
         while p != NONE {
-            let ps = self.slots[p as usize];
+            let ps = self.per[p as usize].slot;
             if let Some(k) = self
                 .scroll
                 .iter()
                 .position(|e| e.node == ps.node && e.node != NONE)
             {
-                let view = self.rects[p as usize];
+                let view = self.per[p as usize].rect;
                 let scale = self.frames[ps.on.index() as usize].scale;
                 let vertical = self.scroll[k].vertical;
                 let (lo, len, vlo, vlen) = if vertical {

@@ -65,7 +65,7 @@ pub use loader::{
 pub use manifest::{Manifest, Platform};
 pub use model::{
     MeshData, ModelOptions, bake_model, bake_model_tmdl, bake_scene, bake_scene_for, clip_names,
-    compression_report, manifest_model_bounds,
+    compression_report, joint_names, manifest_model_bounds,
 };
 pub use primitive::{Pivot, Primitive, Shape};
 pub use resolve::resolve_source;

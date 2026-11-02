@@ -2170,3 +2170,39 @@ fn laid_out_n<const N: usize>(screen: &UiScreen<'_>, r: &Rec) -> Ui<N> {
 fn rect_of_n<const N: usize>(ui: &Ui<N>, screen: &UiScreen<'_>, id: &str) -> Rect {
     ui.rect_of(screen, id).expect(id).1
 }
+
+/// One copy of the UI code serves every size (`Ui<N>` derefs to
+/// `UiCore<[SlotData]>`, issue #112): the same screen lays out, draws and
+/// navigates the same in an 8-slot, a 64-slot and a 128-slot UI, and a UI
+/// too small drops what doesn't fit and counts it.
+#[test]
+fn every_size_lays_out_and_draws_the_same_screen() {
+    let mut t = Tree::new();
+    t.open(root()).open(vstack(4));
+    for (id, text) in [("a", "Play"), ("b", "Options"), ("c", "Quit")] {
+        t.leaf(button(id, text));
+    }
+    let s = t.screen();
+    fn run<const N: usize>(
+        s: &UiScreen<'static>,
+    ) -> (Vec<Rect>, Vec<Call>, UiStats, Option<usize>) {
+        let mut r = Rec::sized(320, 240);
+        let mut ui = Ui::<N>::new();
+        let env = env_of(&r);
+        ui.draw(&mut r, s, &env);
+        let rects = (0..ui.slots().len()).map(|i| ui.rect(i)).collect();
+        let reach = ui.unreachable(s);
+        (rects, r.calls, ui.stats(), reach)
+    }
+    let a = run::<64>(&s);
+    let b = run::<128>(&s);
+    let c = run::<8>(&s);
+    assert_eq!(a.0.len(), 5);
+    assert_eq!((&a.0, &a.1, a.3), (&b.0, &b.1, b.3));
+    assert_eq!((&a.0, &a.1), (&c.0, &c.1));
+    assert_eq!(a.2.dropped, 0);
+    // Three slots: the rest is dropped, counted.
+    let d = run::<3>(&s);
+    assert_eq!(d.0.len(), 3);
+    assert!(d.2.dropped > 0);
+}

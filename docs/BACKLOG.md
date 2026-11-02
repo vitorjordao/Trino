@@ -313,6 +313,36 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — animation layers: joint masks, additive layers, 2D blend spaces, inertialized transitions, tiered per platform (2026-10-30, branch `feat/112-anim-layers`, GitHub #112, ADR 0039)
+
+| Item | Evidence |
+|---|---|
+| Pose transport: `AnimPose` through the renderer's pose table (`Renderer::push_pose`, `AnimRef::pose`, `Mesh::with_poses`, the layered `pose_world`), on the PC, the Web, the N64 (CPU and RSP skeleton path) and the 3DS; `Renderer::pose_joints` | `render3d.rs::layered_poses_mask_add_and_inertialize`; `gpu_tnl.rs::layered_poses_draw_the_same_on_the_gpu_and_the_cpu` (PC GPU T&L within the oracle; the table's pose, not its fold); ares: the RSP and the CPU draw the layered strider with 0 of 96 probes apart; `ModelParams` +4 B |
+| Per-tier folding (`Caps::anim_layers`, `AnimPose::fold`; `anim check --platform` fold notes) | `pose.rs` tests; `anim_layers.rs::every_tier_folds_the_same_pose_and_says_how`; the `anim layers` step's fold hashes equal on every target; the joints each tier poses pinned per tier (1/3, 2/6, all) and equal on the PC, ares (base, Expansion Pak), Azahar (old, New) |
+| Graphs: `TANG` v2 (layers with masks and weights, `Blend2D`, `mode: Inertial`), RON, `check_with` (masks, 2D points, overlapping overrides, inertia blends), `to_tang_with`, per-layer `simulate`, v1 unchanged | `anim_layers.rs` (10: weights sum to 1 and continuous across edges, layers on their masks, inertia decays, Delaunay, every byte flipped, the v1 fixture); `anim_graph_bake.rs::v1_graphs_bake_the_bytes_they_always_did`; `ANIM_GRAPH_HASH` unchanged everywhere |
+| Foot slopes (`FootSlope`, `FootIk::slope`, `align_feet`, ≤ 30°) | `ik.rs::a_sloped_foot_turns_onto_its_ground_within_the_limit`; `target/evidence/anim112/slope.png` |
+| Reference: the strider's upper-body clips, `assets/anim/strider_layers.anim.ron`, the `anim layers` self-test step | ares (both tiers), Azahar (New and old), the PC's every profile and tier (`asset_groups.rs`), the browsers; `TRINO_LAYER_COST:` N64 Expansion Pak 1 370–1 607 µs, New 3DS 254, old 3DS 158, PC 3–12 µs a draw → `N64_COST.us_per_layer_sample = 45` |
+| Editor: layers (list, mode, weight, the mask on the skeleton or by joint), the 2D blend space editor, the transition mode, the layered preview folded by the look with its notes; `model inspect` joint names | kittest `animation_layers_edit_preview_and_write` (layout audit at both sizes); `target/evidence/anim112/editor_layers_{pc,n64}.png` |
+| Graphs ride their model's groups on the consoles (`UiBlob::follows`): the strider's two graphs left boot RAM | `every_graph_bakes_on_every_platform_and_rides_the_ui_bake`; the N64 and 3DS images |
+
+Measured on the base N64 (no Expansion Pak): the heap's peak with the strider's group leaves
+174 648 B free (main 143 336; the gate 131 072); text 1 862 836 → 1 824 588 B; stack 53 128 →
+52 848 B. Every `test n64` work stage within noise of main, every gate holds.
+
+Deviations (ADR 0039): folding at run time by tier (reported by `anim check`), not at bake;
+inertialization samples the frozen source and destination instead of storing per-joint offsets;
+the mask picker clicks a 2D skeleton (and per-joint boxes), not the 3D preview; the reference is
+the strider, not Solid Eleven.
+
+Found on the way: one copy of the UI code per `Ui<N>` size (60 KB for `Ui<128>`, 110 KB for
+`Ui<16>` with its headless layout) in every console build: `Ui<N>` now derefs to a single
+`UiCore<[SlotData]>` (every UI golden, the access goldens and Solid Eleven's 1 716-state menu
+crawl unchanged).
+
+Follow-ups: inertial offsets stored once (renderer-side state across frames); Solid Eleven's
+shooting and Plan & Party's carrying moved to layers; a subtree syntax for masks; measure the
+layered pose on a real N64.
+
 ## Done — accessibility authored in the editor: captions, color-vision icons, semantic slot colors, outlines (2026-10-30, branch `feat/96-editor-access`, GitHub #96, ADR 0027 §10)
 
 | Item | Evidence |

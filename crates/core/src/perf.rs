@@ -72,6 +72,11 @@ pub struct CostModel {
     /// the pelvis, [`crate::anim::ik`]): off on the N64 unless a game
     /// forces it (`Caps::anim_ik`).
     pub us_per_ik_draw: f32,
+    /// The extra CPU of a layered pose (issue #112, [`crate::anim::AnimPose`])
+    /// per clip sample past an `AnimRef`'s three, per joint: what the
+    /// Expansion Pak's tier (two layers, six clips) pays over the base N64's
+    /// fold. A 20-joint character with three more clips: ~2.7 ms a draw.
+    pub us_per_layer_sample: f32,
     /// A character's frame of collision per solid it scans (issue #66):
     /// one controller step plus the camera ray over a linear list of boxes
     /// (castle64's way).
@@ -158,6 +163,13 @@ pub const N64_COST: CostModel = CostModel {
     // solved less the same draws without, per draw: 525–650 µs over four
     // runs (both tiers; batched draws measured 125–300, the RSP overlapping).
     us_per_ik_draw: IK_US,
+    // ares, 2026-10-30 (issue #112, the `anim layers` step's
+    // `TRINO_LAYER_COST:`, Expansion Pak): the busiest pose (two layers, six
+    // clips) over its base-tier fold (three clips) on the 11-joint strider,
+    // one draw a frame: 1 370 and 1 607 µs per draw (two code layouts), so
+    // 42–49 µs per extra clip sample per joint (ANMC tracks: a binary search
+    // and a dequantized lerp per channel). The base N64 never pays it.
+    us_per_layer_sample: 45.0,
 };
 
 /// [`N64_COST`]'s foot IK term, µs per draw.

@@ -1,0 +1,16 @@
+..           open vs open            direct  relayed    30 dropped    0
+           open vs full cone       direct  relayed    30 dropped    1
+           open vs restricted      direct  relayed    30 dropped    1
+           open vs port-restricted direct  relayed    30 dropped    2
+           open vs symmetric       direct  relayed    30 dropped    4
+      full cone vs full cone       direct  relayed    30 dropped    4
+      full cone vs restricted      direct  relayed    27 dropped    3
+      full cone vs port-restricted direct  relayed    29 dropped    4
+      full cone vs symmetric       direct  relayed    29 dropped    6
+     restricted vs restricted      direct  relayed    30 dropped    5
+     restricted vs port-restricted direct  relayed    30 dropped    4
+     restricted vs symmetric       direct  relayed    29 dropped    7
+port-restricted vs port-restricted direct  relayed    30 dropped    5
+port-restricted vs symmetric        relay  relayed  3127 dropped   52
+      symmetric vs symmetric        relay  relayed  3086 dropped   56
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.03s

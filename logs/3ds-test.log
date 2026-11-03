@@ -1,0 +1,376 @@
+[3ds] baking assets...
+Used lz11 for compression
+Used lzss for compression
+Used lz11 for compression
+Used huff for compression
+Used lz11 for compression
+Used huff for compression
+Used lz11 for compression
+Used huff for compression
+Used lzss for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lzss for compression
+Used rle for compression
+Used lz11 for compression
+Used lz11 for compression
+Used rle for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used lz11 for compression
+Used huff for compression
+Used huff for compression
+Used none for compression
+Used lzss for compression
+Used huff for compression
+Used huff for compression
+Used lzss for compression
+Used none for compression
+Used lzss for compression
+Used lzss for compression
+Used none for compression
+Used lz11 for compression
+Used huff for compression
+Used huff for compression
+Used lz11 for compression
+[3ds] group boot: 161 entries, 259 KB raw, 113 KB stored (lz4)
+[3ds] group replay: 1 entries, 16 KB raw, 15 KB stored (lz4)
+[3ds] group selftest_level: 3 entries, 2 KB raw, 1 KB stored (lz4)
+[3ds] group selftest_level2: 3 entries, 4 KB raw, 4 KB stored (lz4)
+[3ds] group selftest_physics: 1 entries, 72 KB raw, 16 KB stored (lz4)
+[3ds] group strider: 3 entries, 27 KB raw, 9 KB stored (lz4)
+[3ds] textures: 71840 B of linear memory (211968 B as RGBA8): A8 x8, ETC1 x13, ETC1A4 x2, L8 x2, LA8 x1, RGB565 x2, RGBA4 x3, RGBA5551 x4, RGBA8 x2
+[3ds] audio: 13 sounds (3 streamed), 232010 B in RomFS (775718 B as PCM16), 117198 B resident in linear memory
+[3ds] building Rust (nightly, build-std)...
+warning: dropping unsupported crate type `dylib` for target `armv6k-nintendo-3ds`
+
+warning: `showcase` (lib) generated 1 warning
+warning: `castle64` (lib) generated 1 warning (1 duplicate)
+warning: unused import: `Input`
+  --> apps/3ds/src/main.rs:28:36
+   |
+28 |     use trino_core::{Button, Game, Input, InputState, Vec2};
+   |                                    ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `trino-app-3ds` (bin "trino-3ds") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 7.56s
+[3ds] packing .3dsx...
+[3ds] app: /home/v/Documents/projects/Trino-wt/net117/target/3ds/trino.3dsx
+[3ds] is_new_3ds=true for this session (was on)
+[3ds] booting test app in Azahar as a New 3DS (300s timeout, 120s idle limit)...
+[azahar] [   0.214583] Config <Info> common/settings.cpp:operator():85: Renderer_Simulate3DSGPUTimings: false
+[azahar] [   0.214760] Config <Info> common/settings.cpp:operator():85: System_IsNew3ds: true
+QPixmap::scaled: Pixmap is a null pixmap
+[azahar] [   0.640329] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded stereo=1
+[azahar] [   0.641095] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_LANG en
+[azahar] [   0.641375] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_BOOT
+[azahar] [   0.696955] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SAVE_PATH sdmc:/3ds/trino/castle64-selftest own=0
+[azahar] [   0.883382] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_MEM: ram=67108864 heap_total=128589824 before_assets=5300376 boot_assets=611312
+[azahar] [   0.884638] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save folder
+[azahar] [   1.098526] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save folder dir=sdmc:/3ds/trino/castle64-selftest status=ok len=21 seed=1
+[azahar] [   1.098670] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:text
+[azahar] [   1.123749] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:blob
+[azahar] [   1.123967] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save
+[azahar] [   1.566048] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery
+[azahar] [   1.566138] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 1/7
+[azahar] [   2.134332] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 2/7
+[azahar] [   2.485297] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 3/7
+[azahar] [   2.786300] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 4/7
+[azahar] [   3.103775] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 5/7
+[azahar] [   3.655387] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 6/7
+[azahar] [   4.056623] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 7/7
+[azahar] [   5.143029] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery passed
+[azahar] [   5.143070] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:textured_3d
+[azahar] [   5.228327] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:textured_3d probed 4 quadrants
+[azahar] [   5.228371] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture filter and detail
+[azahar] [   5.477870] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture filter and detail probed
+[azahar] [   5.477916] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture formats
+[azahar] [   5.561551] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture formats probed 9 formats
+[azahar] [   5.561607] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:billboards
+[azahar] [   5.662969] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:billboards probed
+[azahar] [   5.663010] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:occlusion
+[azahar] [   5.760894] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:occlusion probed
+[azahar] [   5.760949] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:fill rect
+[azahar] [   5.843975] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:fill rect probed
+[azahar] [   5.844023] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ui layout
+[azahar] [   6.060681] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ui layout probed focus, pad and touch
+[azahar] [   6.060816] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:i18n
+[azahar] [   6.311546] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:i18n probed 3 languages
+[azahar] [   6.311586] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:dual screen
+[azahar] [   6.396457] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:dual screen probed both screens
+[azahar] [   6.396496] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:stereo
+[azahar] [   6.562975] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:stereo probed both eyes and mono gpu_draws=4
+[azahar] [   6.563012] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:smooth skin
+[azahar] [   6.583258] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:palette
+[azahar] [   6.746271] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:palette probed 3 slots
+[azahar] [   6.746319] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:instancing
+[azahar] [   6.913649] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:instancing probed
+[azahar] [   6.913693] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:local lights
+[azahar] [   7.164193] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:local lights probed
+[azahar] [   7.164241] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ambient occlusion
+[azahar] [   7.331367] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ambient occlusion probed
+[azahar] [   7.331418] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:post
+[azahar] [   7.598409] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:post probed grading and glow
+[azahar] [   7.598458] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shadows
+[azahar] [   7.766320] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SHADOWS: tier=planar blobs=0 planar=2 mapped=0 tris=92 post=158->71 ball=158->71 open=158->158
+[azahar] [   7.766540] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shadows probed
+[azahar] [   7.766558] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:water
+[azahar] [   8.434453] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:water probed
+[azahar] [   8.434495] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:impostor
+[azahar] [   8.517770] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:impostor probed
+[azahar] [   8.517815] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:particles
+[azahar] [   8.534969] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:particles cap 16
+[azahar] [   8.535030] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:portals
+[azahar] [   8.601313] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics
+[azahar] [   8.619231] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[azahar] [   8.686624] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+[azahar] [   8.686730] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=21807 rays_grid_us=1120 steps=16 steps_scan_us=827 steps_grid_us=394 hub_solids=19 hub_scan_us=33 hub_grid_us=30
+[azahar] [   8.686776] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics casts
+[azahar] [   8.784940] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=20129 scan_us=20051
+[azahar] [   8.785092] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility
+[azahar] [   9.604241] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility probed palette swap, outline, captions and contrast
+[azahar] [   9.604288] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:services
+[azahar] [  10.089066] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:services probed list and toast
+[azahar] [  10.089115] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:hw tier
+[azahar] [  10.105795] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:hw tier expanded ram=64M cores=2 data=expanded sparks=6
+[azahar] [  10.105851] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:quality
+[azahar] [  10.107438] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:quality medium fixed lod=100 particles=16
+[azahar] [  10.107477] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:trace
+[azahar] [  10.127648] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:trace events=7 instrumented=0
+[azahar] [  10.127691] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shader precompile
+[azahar] [  10.127948] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shader precompile built ahead
+[azahar] [  10.127979] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:engine ok
+[azahar] [  10.128036] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:worker
+[azahar] [  10.129660] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:worker core=2 queued=8 us=6105
+[azahar] [  10.129700] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:asset groups
+[azahar] [  20.583459] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:asset groups ok load_frames=1 level_bytes=1175 heap_baseline=5932752 heap_drift=248 cycles=293 soak_frames=600
+[azahar] [  20.583632] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:asset groups took 10444ms worker=2
+[azahar] [  20.583661] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:replay
+[azahar] [  20.701218] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:replay ok frames=761 checked=761 hash=0x03b2b02ef43cc1b3 load_frames=2
+[azahar] [  20.701316] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:replay took 118ms fpscr=0x83000013
+[azahar] [  20.701343] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:audio
+[azahar] [  20.705428] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:audio codecs
+[azahar] [  24.277789] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_AUDIO: voices=1 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=101975 stream_core=2
+[azahar] [  24.277860] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:input
+[azahar] [  24.279148] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:players
+[azahar] [  24.282179] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:players connected=0001 players=1
+[azahar] [  24.287218] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:lockstep frames=600 stalls=56 checked=488 lost=277 hash=0x031055f051d3adfe
+[azahar] [  24.287788] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: probe init=ok
+[azahar] [  24.288013] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:showcase demo
+[azahar] [  24.664816] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:baked scene
+[azahar] [  28.909727] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:gpu tnl hub draws=32 of 28 gpu_tris=753 off_gpu=NearPlane:1 cpu_draws_reference=0 differ=2/960 mean=0.23
+[azahar] [  29.142002] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:gpu tnl showcase-fog draws=51 of 102 gpu_tris=3011 off_gpu=Flat:22,Offscreen:17,TexturedMesh:14,Skinned:3,NearPlane:1 cpu_draws_reference=0 differ=1/960 mean=0.65
+[azahar] [  29.308667] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:gpu tnl water draws=2 of 2 gpu_tris=140 off_gpu=TexturedMesh:1 cpu_draws_reference=0 differ=0/960 mean=0.08
+[azahar] [  29.308781] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:golden frame
+[azahar] [  29.995370] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:hub avg_us=16719 max_us=16784 frames=30 fps=59 cpu_us=3251 heap=7165744/7165744 stereo=slider0
+[azahar] [  30.512488] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:green-hills avg_us=16720 max_us=16786 frames=30 fps=59 cpu_us=2693 heap=7165744/7165744 stereo=slider0
+[azahar] [  31.030367] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:lava-land avg_us=16719 max_us=16786 frames=30 fps=59 cpu_us=2842 heap=7165744/7165744 stereo=slider0
+[azahar] [  31.548528] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:sky-tower avg_us=16720 max_us=16785 frames=30 fps=59 cpu_us=2636 heap=7165744/7165744 stereo=slider0
+[azahar] [  32.067318] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:throne avg_us=16719 max_us=16784 frames=30 fps=59 cpu_us=3752 heap=7165744/7165744 stereo=slider0
+[azahar] [  32.585288] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:hub-stereo avg_us=16717 max_us=16784 frames=30 fps=59 cpu_us=5951 heap=7176696/7176696 stereo=on@100%
+[azahar] [  33.103147] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:green-hills-stereo avg_us=16718 max_us=16757 frames=30 fps=59 cpu_us=4809 heap=7176696/7176696 stereo=on@100%
+[azahar] [  33.621223] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:lava-land-stereo avg_us=16718 max_us=16827 frames=30 fps=59 cpu_us=5131 heap=7176696/7176696 stereo=on@100%
+[azahar] [  34.139352] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:sky-tower-stereo avg_us=16719 max_us=16786 frames=30 fps=59 cpu_us=4688 heap=7176696/7176696 stereo=on@100%
+[azahar] [  34.657825] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:throne-stereo avg_us=16718 max_us=16790 frames=30 fps=59 cpu_us=6816 heap=7176896/7176896 stereo=on@100%
+[azahar] [  34.658364] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:showcase panel
+[azahar] [  34.908199] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:showcase panel probed
+[azahar] [  34.931153] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:river golden frame
+[azahar] [  35.062180] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture formats golden frame
+[azahar] [  35.208607] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim graph
+[azahar] [  35.292904] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim graph data=0x5dd683cb transitions=2 events=9 root_mm=2542 probed
+[azahar] [  35.292978] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:foot ik
+[azahar] [  36.078556] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:foot ik tier=on forced=200,0 probed
+[azahar] TRINO_IK_COST: us_per_draw=37
+[azahar] [  36.078627] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim layers
+[azahar] [  36.830737] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim layers hash=f037ddb5 folds=8802b891,46e58fc2 joints=d107cb25 tier=2 slot=1 events=2 parity=-1 probed
+[azahar] TRINO_LAYER_COST: us_per_draw=185
+[azahar] [  36.830822] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:graph crowd
+[azahar] [  37.198366] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:graph crowd hash=50a5e8bb transitions=286 table_bytes=2156
+[azahar] [  37.198657] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_GRAPH_COST: scene=micro-graph variant=blob instances=22 frames=120 update_us=34.59 pose_us=12.71 instance_bytes=800
+[azahar] [  37.198711] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_GRAPH_COST: scene=micro-graph variant=tables instances=22 frames=120 update_us=14.41 pose_us=7.50 instance_bytes=800
+[azahar] [  37.198738] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_GRAPH_COST: scene=micro-graph variant=crowd instances=22 frames=120 update_us=13.24 pose_us=7.56 instance_bytes=220
+[azahar] [  37.198782] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics cells
+[azahar] [  37.285959] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics cells hash=9974afd8 load_frames=1
+[azahar] TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=546 gathered_us=2364
+[azahar] [  37.414938] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim steps heap before=7176216 loaded=7203608 after=7188280
+[azahar] [  37.415158] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_AUDIO: run voices=3 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=692348 t=48887ms
+[azahar] [  37.415200] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_TEST_PASS
+[3ds] restored your is_new_3ds setting
+[3ds] hardware tier: new=1 speedup=1 tier=expanded
+[3ds] tier data: expanded ram=64M cores=2 data=expanded sparks=6
+[3ds] worker core: core=2 queued=8 us=6105
+[3ds] quality: medium fixed lod=100 particles=16
+[3ds] players: connected=0001 players=1
+[3ds] lockstep: frames=600 stalls=56 checked=488 lost=277 hash=0x031055f051d3adfe
+[3ds] replay: frames=761 checked=761 hash=0x03b2b02ef43cc1b3 load_frames=2
+[3ds] re-recording: 15928 bytes identical to the PC's
+[3ds] save folder: migrated the shared save into /home/v/.local/share/azahar-emu/sdmc/3ds/trino/castle64-selftest (save.a, save.b), /home/v/.local/share/azahar-emu/sdmc/3ds/trino untouched
+[3ds] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net117/target/traces/3ds.json
+[3ds] golden frame: /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/showcase_river.png: mean diff 0.27, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as a New 3DS)
+[3ds] is_new_3ds=false for this session (was on)
+[3ds] booting test app in Azahar as an old 3DS (300s timeout, 120s idle limit)...
+[azahar] [   0.213264] Config <Info> common/settings.cpp:operator():85: Renderer_Simulate3DSGPUTimings: false
+[azahar] [   0.213438] Config <Info> common/settings.cpp:operator():85: System_IsNew3ds: false
+QPixmap::scaled: Pixmap is a null pixmap
+[azahar] [   0.548504] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_HW 3ds new=0 speedup=0 app_ram=96M tier=base stereo=1
+[azahar] [   0.549212] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_LANG en
+[azahar] [   0.549451] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_BOOT
+[azahar] [   0.607225] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SAVE_PATH sdmc:/3ds/trino/castle64-selftest own=0
+[azahar] [   0.827405] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_MEM: ram=67108864 heap_total=99229696 before_assets=5300376 boot_assets=607632
+[azahar] [   0.828912] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save folder
+[azahar] [   1.058950] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save folder dir=sdmc:/3ds/trino/castle64-selftest status=ok len=21 seed=1
+[azahar] [   1.059104] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:text
+[azahar] [   1.083986] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:blob
+[azahar] [   1.084230] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save
+[azahar] [   1.543237] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery
+[azahar] [   1.543347] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 1/7
+[azahar] [   2.094773] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 2/7
+[azahar] [   2.462491] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 3/7
+[azahar] [   2.763287] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 4/7
+[azahar] [   3.080923] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 5/7
+[azahar] [   3.682674] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 6/7
+[azahar] [   4.067170] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery 7/7
+[azahar] [   5.170266] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:save recovery passed
+[azahar] [   5.170305] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:textured_3d
+[azahar] [   5.265201] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:textured_3d probed 4 quadrants
+[azahar] [   5.265242] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture filter and detail
+[azahar] [   5.505305] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture filter and detail probed
+[azahar] [   5.505359] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture formats
+[azahar] [   5.588916] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture formats probed 9 formats
+[azahar] [   5.588960] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:billboards
+[azahar] [   5.690044] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:billboards probed
+[azahar] [   5.690101] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:occlusion
+[azahar] [   5.772790] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:occlusion probed
+[azahar] [   5.772830] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:fill rect
+[azahar] [   5.855991] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:fill rect probed
+[azahar] [   5.856046] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ui layout
+[azahar] [   6.073188] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ui layout probed focus, pad and touch
+[azahar] [   6.073231] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:i18n
+[azahar] [   6.323906] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:i18n probed 3 languages
+[azahar] [   6.323948] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:dual screen
+[azahar] [   6.408692] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:dual screen probed both screens
+[azahar] [   6.408730] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:stereo
+[azahar] [   6.575307] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:stereo probed both eyes and mono gpu_draws=4
+[azahar] [   6.575346] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:smooth skin
+[azahar] [   6.596004] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:palette
+[azahar] [   6.758540] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:palette probed 3 slots
+[azahar] [   6.758585] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:instancing
+[azahar] [   6.926510] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:instancing probed
+[azahar] [   6.926558] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:local lights
+[azahar] [   7.176639] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:local lights probed
+[azahar] [   7.176686] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ambient occlusion
+[azahar] [   7.343746] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:ambient occlusion probed
+[azahar] [   7.343795] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:post
+[azahar] [   7.610864] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:post probed grading and glow
+[azahar] [   7.610909] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shadows
+[azahar] [   7.778828] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SHADOWS: tier=planar blobs=0 planar=2 mapped=0 tris=92 post=158->71 ball=158->71 open=158->158
+[azahar] [   7.779038] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shadows probed
+[azahar] [   7.779077] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:water
+[azahar] [   8.446852] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:water probed
+[azahar] [   8.446892] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:impostor
+[azahar] [   8.530247] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:impostor probed
+[azahar] [   8.530293] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:particles
+[azahar] [   8.547501] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:particles cap 16
+[azahar] [   8.547573] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:portals
+[azahar] [   8.613801] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics
+[azahar] [   8.631733] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[azahar] [   8.699035] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+[azahar] [   8.699154] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=21743 rays_grid_us=1185 steps=16 steps_scan_us=827 steps_grid_us=395 hub_solids=19 hub_scan_us=33 hub_grid_us=30
+[azahar] [   8.699193] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics casts
+[azahar] [   8.797390] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=20130 scan_us=20050
+[azahar] [   8.797529] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility
+[azahar] [   9.616756] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:accessibility probed palette swap, outline, captions and contrast
+[azahar] [   9.616802] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:services
+[azahar] [  10.118257] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:services probed list and toast
+[azahar] [  10.118304] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:hw tier
+[azahar] [  10.134829] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:hw tier base ram=64M cores=1 data=base sparks=4
+[azahar] [  10.134871] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:quality
+[azahar] [  10.136182] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:quality low fixed lod=100 particles=16
+[azahar] [  10.136217] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:trace
+[azahar] [  10.156562] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:trace events=7 instrumented=0
+[azahar] [  10.156601] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shader precompile
+[azahar] [  10.156858] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:shader precompile built ahead
+[azahar] [  10.156892] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:engine ok
+[azahar] [  10.156951] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:worker
+[azahar] [  10.168222] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:worker core=1 queued=8 us=20185
+[azahar] [  10.168300] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:asset groups
+[azahar] [  20.665080] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:asset groups ok load_frames=2 level_bytes=1167 heap_baseline=5929056 heap_drift=256 cycles=214 soak_frames=600
+[azahar] [  20.665236] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:asset groups took 10496ms worker=1
+[azahar] [  20.665264] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:replay
+[azahar] [  20.782841] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:replay ok frames=761 checked=761 hash=0x03b2b02ef43cc1b3 load_frames=2
+[azahar] [  20.782944] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:replay took 118ms fpscr=0x83000013
+[azahar] [  20.782966] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:audio
+[azahar] [  20.786593] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:audio codecs
+[azahar] [  24.359614] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_AUDIO: voices=1 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=101975 stream_core=1
+[azahar] [  24.359692] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:input
+[azahar] [  24.360833] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:players
+[azahar] [  24.363898] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:players connected=0001 players=1
+[azahar] [  24.369252] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:lockstep frames=600 stalls=56 checked=488 lost=277 hash=0x031055f051d3adfe
+[azahar] [  24.369817] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: probe init=ok
+[azahar] [  24.370045] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:showcase demo
+[azahar] [  24.746365] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:baked scene
+[azahar] [  28.991394] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:gpu tnl hub draws=32 of 28 gpu_tris=753 off_gpu=NearPlane:1 cpu_draws_reference=0 differ=2/960 mean=0.23
+[azahar] [  29.223708] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:gpu tnl showcase-fog draws=51 of 102 gpu_tris=3011 off_gpu=Flat:22,Offscreen:17,TexturedMesh:14,Skinned:3,NearPlane:1 cpu_draws_reference=0 differ=1/960 mean=0.65
+[azahar] [  29.390298] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:gpu tnl water draws=2 of 2 gpu_tris=140 off_gpu=TexturedMesh:1 cpu_draws_reference=0 differ=0/960 mean=0.08
+[azahar] [  29.390436] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:golden frame
+[azahar] [  30.076714] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:hub avg_us=16719 max_us=16784 frames=30 fps=59 cpu_us=3248 heap=7162024/7162024 stereo=slider0
+[azahar] [  30.594010] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:green-hills avg_us=16720 max_us=16786 frames=30 fps=59 cpu_us=2697 heap=7162024/7162024 stereo=slider0
+[azahar] [  31.112041] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:lava-land avg_us=16720 max_us=16784 frames=30 fps=59 cpu_us=2842 heap=7162024/7162024 stereo=slider0
+[azahar] [  31.630149] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:sky-tower avg_us=16720 max_us=16786 frames=30 fps=59 cpu_us=2635 heap=7162024/7162024 stereo=slider0
+[azahar] [  32.148469] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:throne avg_us=16719 max_us=16784 frames=30 fps=59 cpu_us=3754 heap=7162024/7162024 stereo=slider0
+[azahar] [  32.666882] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:hub-stereo avg_us=16717 max_us=16784 frames=30 fps=59 cpu_us=5953 heap=7172976/7172976 stereo=on@100%
+[azahar] [  33.184794] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:green-hills-stereo avg_us=16717 max_us=16754 frames=30 fps=59 cpu_us=4812 heap=7172976/7172976 stereo=on@100%
+[azahar] [  33.703209] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:lava-land-stereo avg_us=16718 max_us=16827 frames=30 fps=59 cpu_us=5134 heap=7172976/7172976 stereo=on@100%
+[azahar] [  34.221036] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:sky-tower-stereo avg_us=16718 max_us=16760 frames=30 fps=59 cpu_us=4680 heap=7172976/7172976 stereo=on@100%
+[azahar] [  34.739296] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_FRAME:throne-stereo avg_us=16721 max_us=16789 frames=30 fps=59 cpu_us=6816 heap=7173176/7173176 stereo=on@100%
+[azahar] [  34.739741] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:showcase panel
+[azahar] [  34.989760] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:showcase panel probed
+[azahar] [  35.011855] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:river golden frame
+[azahar] [  35.143848] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:texture formats golden frame
+[azahar] [  35.306900] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim graph
+[azahar] [  35.391071] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim graph data=0x5dd683cb transitions=2 events=9 root_mm=2542 probed
+[azahar] [  35.391139] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:foot ik
+[azahar] [  36.176746] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:foot ik tier=on forced=200,0 probed
+[azahar] TRINO_IK_COST: us_per_draw=29
+[azahar] [  36.176891] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim layers
+[azahar] [  36.929112] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim layers hash=f037ddb5 folds=8802b891,46e58fc2 joints=c98e71dd tier=1 slot=1 events=2 parity=-1 probed
+[azahar] TRINO_LAYER_COST: us_per_draw=97
+[azahar] [  36.929187] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:graph crowd
+[azahar] [  37.296779] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:graph crowd hash=50a5e8bb transitions=286 table_bytes=2156
+[azahar] [  37.297012] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_GRAPH_COST: scene=micro-graph variant=blob instances=22 frames=120 update_us=34.49 pose_us=12.85 instance_bytes=800
+[azahar] [  37.297035] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_GRAPH_COST: scene=micro-graph variant=tables instances=22 frames=120 update_us=14.28 pose_us=7.55 instance_bytes=800
+[azahar] [  37.297047] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_GRAPH_COST: scene=micro-graph variant=crowd instances=22 frames=120 update_us=13.24 pose_us=7.46 instance_bytes=220
+[azahar] [  37.297092] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics cells
+[azahar] [  37.450692] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:physics cells hash=9974afd8 load_frames=2
+[azahar] TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=545 gathered_us=2364
+[azahar] [  37.580164] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_STEP:anim steps heap before=7172504 loaded=7199896 after=7184568
+[azahar] [  37.580393] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_AUDIO: run voices=3 streams=1 resident_bytes=113510 stream_bytes=24576 underruns=0 streamed_frames=696013 t=39215ms
+[azahar] [  37.580432] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_TEST_PASS
+[3ds] restored your is_new_3ds setting
+[3ds] hardware tier: new=0 speedup=0 tier=base
+[3ds] tier data: base ram=64M cores=1 data=base sparks=4
+[3ds] worker core: core=1 queued=8 us=20185
+[3ds] quality: low fixed lod=100 particles=16
+[3ds] players: connected=0001 players=1
+[3ds] lockstep: frames=600 stalls=56 checked=488 lost=277 hash=0x031055f051d3adfe
+[3ds] replay: frames=761 checked=761 hash=0x03b2b02ef43cc1b3 load_frames=2
+[3ds] re-recording: 15928 bytes identical to the PC's
+[3ds] save folder: migrated the shared save into /home/v/.local/share/azahar-emu/sdmc/3ds/trino/castle64-selftest (save.a, save.b), /home/v/.local/share/azahar-emu/sdmc/3ds/trino untouched
+[3ds] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/net117/target/traces/3ds.json
+[3ds] golden frame: /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/castle64_hub.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/showcase_river.png: mean diff 0.27, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/Documents/projects/Trino-wt/net117/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] TEST PASS (as an old 3DS)
+EXIT=0

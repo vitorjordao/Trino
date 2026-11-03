@@ -1,0 +1,26 @@
+[net] solid-eleven: host on UDP 7311, guest joins; network latency=40,jitter=10,loss=3
+[host] TRINO_NET: hosting on UDP 7311, waiting for 1 player(s)
+[host] TRINO_NET: player 1 of 2, rollback mode, rollback 8 input delay 2, 1 spectator(s), simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=234 confirmed=232 rollbacks=9 resimulated=13 stalls=23 ping_ms=149 desyncs=0 routes=[2:direct 3:direct]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=532 confirmed=530 rollbacks=25 resimulated=29 stalls=23 ping_ms=100 desyncs=0 routes=[2:direct 3:direct]
+[host] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=830 confirmed=828 rollbacks=30 resimulated=35 stalls=23 ping_ms=133 desyncs=0 routes=[2:direct 3:direct]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=834 confirmed=832 rollbacks=30 resimulated=35 stalls=23 ping_ms=131 desyncs=0 routes=[2:direct 3:direct]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=834 confirmed=832 rollbacks=30 resimulated=35 stalls=23 ping_ms=131 desyncs=0 routes=[2:direct 3:direct]
+[spectator] TRINO_NET: watching the game hosted at 127.0.0.1:7311
+[spectator] TRINO_NET: spectator of 2 players, following player 1, simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0001 frames=225 confirmed=224 rollbacks=0 resimulated=0 stalls=34 ping_ms=118 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0001 frames=523 confirmed=522 rollbacks=0 resimulated=0 stalls=34 ping_ms=116 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0001 frames=820 confirmed=819 rollbacks=0 resimulated=0 stalls=34 ping_ms=103 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0001 frames=823 confirmed=822 rollbacks=0 resimulated=0 stalls=34 ping_ms=103 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0001 frames=823 confirmed=822 rollbacks=0 resimulated=0 stalls=34 ping_ms=103 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: joining 127.0.0.1:7311
+[guest] TRINO_NET: player 2 of 2, rollback mode, rollback 8 input delay 2, 0 spectator(s), simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=235 confirmed=231 rollbacks=33 resimulated=80 stalls=0 ping_ms=116 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=533 confirmed=529 rollbacks=52 resimulated=133 stalls=0 ping_ms=118 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=830 confirmed=826 rollbacks=62 resimulated=161 stalls=0 ping_ms=117 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=833 confirmed=829 rollbacks=62 resimulated=161 stalls=0 ping_ms=117 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=833 confirmed=829 rollbacks=62 resimulated=161 stalls=0 ping_ms=117 desyncs=0 routes=[1:relay]
+[net] the same game on every window: [Some("760:0xaeadc42f3bbe07f9"), Some("760:0xaeadc42f3bbe07f9"), Some("760:0xaeadc42f3bbe07f9")]

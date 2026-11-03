@@ -1,0 +1,27 @@
+[net] lobby: UDP 44962 (TRINO_NET=lobby:<code>@<this ip>:44962), WebSocket 44347 (?net=<code>&lobby=ws://<this ip>:44347)
+[net] solid-eleven: two players meet in a lobby room (UDP 44962); network latency=40,jitter=10,loss=3
+[trino] pipeline cache: No such file or directory (os error 2)
+[host] TRINO_NET: room `LOCAL` at the lobby 127.0.0.1:44962
+[host] TRINO_NET: player 1 of 2, rollback mode, rollback 8 input delay 2, 1 spectator(s), simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=260 confirmed=258 rollbacks=15 resimulated=33 stalls=0 ping_ms=133 desyncs=0 routes=[2:relay 3:relay]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=560 confirmed=556 rollbacks=36 resimulated=68 stalls=0 ping_ms=117 desyncs=0 routes=[2:relay 3:relay]
+[host] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=857 confirmed=853 rollbacks=44 resimulated=82 stalls=0 ping_ms=111 desyncs=0 routes=[2:relay 3:relay]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=857 confirmed=853 rollbacks=44 resimulated=82 stalls=0 ping_ms=111 desyncs=0 routes=[2:relay 3:relay]
+[spectator] TRINO_NET: watching room `LOCAL` at the lobby 127.0.0.1:44962
+[spectator] TRINO_NET: spectator of 2 players, following player 2, simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0010 frames=251 confirmed=250 rollbacks=0 resimulated=0 stalls=11 ping_ms=134 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0010 frames=551 confirmed=550 rollbacks=0 resimulated=0 stalls=11 ping_ms=95 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0010 frames=848 confirmed=847 rollbacks=0 resimulated=0 stalls=11 ping_ms=117 desyncs=0 routes=[1:relay]
+[spectator] TRINO_NET: state=Running seat=spectator local_seats=0b0010 frames=848 confirmed=847 rollbacks=0 resimulated=0 stalls=11 ping_ms=117 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: room `LOCAL` at the lobby 127.0.0.1:44962
+[guest] TRINO_NET: player 2 of 2, rollback mode, rollback 8 input delay 2, 0 spectator(s), simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=260 confirmed=257 rollbacks=23 resimulated=41 stalls=6 ping_ms=117 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=560 confirmed=556 rollbacks=44 resimulated=86 stalls=6 ping_ms=117 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=852 confirmed=848 rollbacks=50 resimulated=96 stalls=6 ping_ms=112 desyncs=0 routes=[1:relay]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=852 confirmed=848 rollbacks=50 resimulated=96 stalls=6 ping_ms=112 desyncs=0 routes=[1:relay]
+[net] the same game on every window: [Some("760:0xaeadc42f3bbe07f9"), Some("760:0xaeadc42f3bbe07f9"), Some("760:0xaeadc42f3bbe07f9")]
+
+[exited with code 0]

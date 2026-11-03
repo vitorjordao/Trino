@@ -1,0 +1,56 @@
+[web] /home/v/Documents/projects/Trino-wt/net117/target/web/assets/trino.replay.tbnd: 14536 bytes
+[web] /home/v/Documents/projects/Trino-wt/net117/target/web/assets/trino.selftest_level.tbnd: 676 bytes
+[web] /home/v/Documents/projects/Trino-wt/net117/target/web/assets/trino.selftest_level2.tbnd: 4380 bytes
+[web] /home/v/Documents/projects/Trino-wt/net117/target/web/assets/trino.selftest_physics.tbnd: 16364 bytes
+[web] /home/v/Documents/projects/Trino-wt/net117/target/web/assets/trino.strider.tbnd: 4940 bytes
+[web] assets/trino.pak: 590064 bytes
+[web] assets/solid-eleven.pak: 2245677 bytes
+warning: dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`
+
+warning: `showcase` (lib) generated 1 warning
+warning: `solid-eleven` (lib) generated 1 warning (1 duplicate)
+warning: `castle64` (lib) generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 0.08s
+[web] trino.wasm: 7685098 bytes (release)
+[net] lobby: UDP 51505 (TRINO_NET=lobby:<code>@<this ip>:51505), WebSocket 33475 (?net=<code>&lobby=ws://<this ip>:33475)
+[web-net] first: player 1, PASS · hash 0xaeadc42f3bbe07f9
+[web-net] first: %ctrino%c TRINO_NET: room `R92777` at ws://127.0.0.1:33475 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Connecting color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Waiting { have: 1, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Linking { open: 0, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Linking { open: 1, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Ready color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: player 1 of 2, rollback mode, 1 spectator(s) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Synchronizing { count: 0, total: 0 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Synchronizing { count: 1, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Synchronizing { count: 2, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Synchronizing { count: 3, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Synchronizing { count: 4, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: Running seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET_HASH:760:0xaeadc42f3bbe07f9 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] first: %ctrino%c TRINO_NET: state=Running seat=0 frames=900 confirmed=900 rollbacks=3 stalls=33 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: player spectator, PASS · hash 0xaeadc42f3bbe07f9
+[web-net] spectator: %ctrino%c TRINO_NET: room `R92777` at ws://127.0.0.1:33475 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: Connecting color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: Waiting { have: 1, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: Linking { open: 0, need: 1 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: Ready color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: watching 2 players, rollback mode color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: Synchronizing { count: 0, total: 0 } seat=4294967295 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: Running seat=4294967295 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET_HASH:760:0xaeadc42f3bbe07f9 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] spectator: %ctrino%c TRINO_NET: state=Running seat=4294967295 frames=900 confirmed=899 rollbacks=0 stalls=61 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: player 2, PASS · hash 0xaeadc42f3bbe07f9
+[web-net] second: %ctrino%c TRINO_NET: room `R92777` at ws://127.0.0.1:33475 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: Linking { open: 0, need: 1 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: Ready color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: player 2 of 2, rollback mode, 0 spectator(s) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: Synchronizing { count: 0, total: 0 } seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: Synchronizing { count: 2, total: 5 } seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: Synchronizing { count: 4, total: 5 } seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: Running seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET_HASH:760:0xaeadc42f3bbe07f9 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] second: %ctrino%c TRINO_NET: state=Running seat=1 frames=900 confirmed=901 rollbacks=0 stalls=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+[web-net] both pages played the same game
+[net] web: both pages played the same game (/home/v/Documents/projects/Trino-wt/net117/target/web-net/results.json)
+NETWEB_EXIT=0

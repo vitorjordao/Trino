@@ -1,0 +1,17 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.69s
+[net] solid-eleven: host on UDP 7311, guest joins; network latency=40,jitter=10,loss=3
+[host] TRINO_NET: hosting on UDP 7311, waiting for 1 player(s)
+[host] TRINO_NET: player 1 of 2, rollback mode, rollback 8 input delay 2, 0 spectator(s), simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=247 confirmed=245 rollbacks=14 resimulated=16 stalls=16 ping_ms=117 desyncs=0 routes=[2:direct]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=547 confirmed=545 rollbacks=32 resimulated=35 stalls=16 ping_ms=116 desyncs=0 routes=[2:direct]
+[host] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=843 confirmed=842 rollbacks=39 resimulated=42 stalls=16 ping_ms=133 desyncs=0 routes=[2:direct]
+[host] TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=843 confirmed=842 rollbacks=39 resimulated=42 stalls=16 ping_ms=133 desyncs=0 routes=[2:direct]
+[guest] TRINO_NET: joining 127.0.0.1:7311
+[guest] TRINO_NET: player 2 of 2, rollback mode, rollback 8 input delay 2, 0 spectator(s), simulated Conditions { latency_ms: 40, jitter_ms: 10, loss: 0.03 }
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=249 confirmed=245 rollbacks=30 resimulated=74 stalls=0 ping_ms=166 desyncs=0 routes=[1:direct]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=549 confirmed=545 rollbacks=49 resimulated=129 stalls=0 ping_ms=99 desyncs=0 routes=[1:direct]
+[guest] TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=842 confirmed=839 rollbacks=56 resimulated=147 stalls=0 ping_ms=134 desyncs=0 routes=[1:direct]
+[guest] TRINO_NET: state=Running seat=1 local_seats=0b0010 frames=842 confirmed=839 rollbacks=56 resimulated=147 stalls=0 ping_ms=134 desyncs=0 routes=[1:direct]
+[net] the same game on every window: [Some("760:0xaeadc42f3bbe07f9"), Some("760:0xaeadc42f3bbe07f9")]

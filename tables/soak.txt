@@ -1,0 +1,13 @@
+...latency   0 ms loss  0%: frames 10000 rollbacks 0 resimulated 0 stalls 0
+latency   0 ms loss  5%: frames 10000 rollbacks 1 resimulated 1 stalls 0
+latency   0 ms loss 10%: frames 10004 rollbacks 1401 resimulated 4370 stalls 0
+latency  50 ms loss  0%: frames 10002 rollbacks 1421 resimulated 2843 stalls 2
+latency  50 ms loss  5%: frames 10002 rollbacks 68 resimulated 77 stalls 98
+latency  50 ms loss 10%: frames 10003 rollbacks 1419 resimulated 6570 stalls 794
+latency 100 ms loss  0%: frames 10005 rollbacks 1421 resimulated 7103 stalls 196
+latency 100 ms loss  5%: frames 10005 rollbacks 1421 resimulated 7425 stalls 197
+latency 100 ms loss 10%: frames 10006 rollbacks 1421 resimulated 7223 stalls 217
+latency 200 ms loss  0%: frames 10007 rollbacks 1421 resimulated 7020 stalls 6898
+latency 200 ms loss  5%: frames 10010 rollbacks 1421 resimulated 8274 stalls 6886
+latency 200 ms loss 10%: frames 10010 rollbacks 1420 resimulated 7805 stalls 6902
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.95s

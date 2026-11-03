@@ -1,0 +1,7 @@
+[replay] ../evidence117/replay-cut/castle64_green_from400.trec: castle64 from frame 400, 361 frames, snapshot 1348 bytes, 8066 bytes
+replay: ok on pc — 361 frames, 361 hashes checked, final hash 0x03b2b02ef43cc1b3
+../evidence117/replay-cut/castle64_green_from400.trec: 361 frames (6.02 s), 1 player(s), screen 320x240, hash every 1 frame(s), start hash 0x4ab64a97eb45cb60, 8066 bytes (from a snapshot of session frame 400, 1348 bytes)
+the recording has only 640 frames
+../evidence117/replay-cut/two_players_from900.trec: No such file or directory (os error 2)
+[replay] ../evidence117/replay-cut/two_players_from300.trec: solid-eleven from frame 300, 340 frames, snapshot 38788 bytes, 40263 bytes
+replay: ok on pc — 340 frames, 85 hashes checked, final hash 0x2d7baa0e152852cb

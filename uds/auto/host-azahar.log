@@ -1,0 +1,12 @@
+[   0.648386] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded stereo=1
+[   0.649178] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_LANG en
+[   0.649428] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_BOOT
+[   0.690199] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SAVE_PATH sdmc:/3ds/trino/castle64 own=0
+[   0.846203] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_MEM: ram=67108864 heap_total=128589824 before_assets=5300384 boot_assets=611408
+[   0.859468] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: hosting for 2 players
+[  14.418255] Network <Info> network/room.cpp:SendStatusMessage:793: [127.0.0.1] AZAHAR has joined.
+[  51.065970] Network <Info> network/room.cpp:SendStatusMessage:793: [127.0.0.1] TRINOB has joined.
+[  52.107735] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: player 1 of 2, delay 4, scripted
+[  57.203052] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: state=Running seat=0 frames=297 stalls=3 received=298 refused=0 checked=267 left=0b0000
+[  62.216446] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: state=Running seat=0 frames=597 stalls=3 received=598 refused=0 checked=567 left=0b0000
+[  62.249825] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_NET_HASH:600:0x94fa2260aa5f5154

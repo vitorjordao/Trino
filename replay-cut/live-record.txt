@@ -1,0 +1,5 @@
+TRINO_RECORD: recording from frame 300 (snapshot 1348 bytes)
+TRINO_RECORD: ../evidence117/replay-cut/castle64_live_from300.trec frames=400 bytes=9559 hashes=400
+../evidence117/replay-cut/castle64_live_from300.trec: 400 frames (6.68 s), 4 player(s), screen 320x240, hash every 1 frame(s), start hash 0x22277e305289d606, 9559 bytes (from a snapshot of session frame 300, 1348 bytes)
+replay: ok on pc — 400 frames, 400 hashes checked, final hash 0x52784bd5cafef763
+replay: ok on pc — 400 frames, 400 hashes checked, final hash 0x52784bd5cafef763

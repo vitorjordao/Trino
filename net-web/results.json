@@ -1,0 +1,71 @@
+{
+  "room": "R92777",
+  "pages": [
+    {
+      "name": "first",
+      "pass": true,
+      "error": null,
+      "seat": 1,
+      "hash": "0xaeadc42f3bbe07f9",
+      "net": "Running seat=0 rollbacks=0 desyncs=0",
+      "lines": [
+        "%ctrino%c TRINO_NET: room `R92777` at ws://127.0.0.1:33475 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Connecting color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Waiting { have: 1, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Linking { open: 0, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Linking { open: 1, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Ready color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: player 1 of 2, rollback mode, 1 spectator(s) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 0, total: 0 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 1, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 2, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 3, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 4, total: 5 } seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Running seat=0 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET_HASH:760:0xaeadc42f3bbe07f9 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: state=Running seat=0 frames=900 confirmed=900 rollbacks=3 stalls=33 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px "
+      ]
+    },
+    {
+      "name": "spectator",
+      "pass": true,
+      "error": null,
+      "seat": "spectator",
+      "hash": "0xaeadc42f3bbe07f9",
+      "net": "Running seat=4294967295 rollbacks=0 desyncs=0",
+      "lines": [
+        "%ctrino%c TRINO_NET: room `R92777` at ws://127.0.0.1:33475 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Connecting color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Waiting { have: 1, need: 2 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Linking { open: 0, need: 1 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Ready color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: watching 2 players, rollback mode color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 0, total: 0 } seat=4294967295 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Running seat=4294967295 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET_HASH:760:0xaeadc42f3bbe07f9 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: state=Running seat=4294967295 frames=900 confirmed=899 rollbacks=0 stalls=61 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px "
+      ]
+    },
+    {
+      "name": "second",
+      "pass": true,
+      "error": null,
+      "seat": 2,
+      "hash": "0xaeadc42f3bbe07f9",
+      "net": "Running seat=1 rollbacks=0 desyncs=0",
+      "lines": [
+        "%ctrino%c TRINO_NET: room `R92777` at ws://127.0.0.1:33475 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Linking { open: 0, need: 1 } color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Ready color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: player 2 of 2, rollback mode, 0 spectator(s) color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 0, total: 0 } seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 2, total: 5 } seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Synchronizing { count: 4, total: 5 } seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: Running seat=1 rollbacks=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET_HASH:760:0xaeadc42f3bbe07f9 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px ",
+        "%ctrino%c TRINO_NET: state=Running seat=1 frames=900 confirmed=901 rollbacks=0 stalls=0 desyncs=0 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px "
+      ]
+    }
+  ],
+  "same": true
+}

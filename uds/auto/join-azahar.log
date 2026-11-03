@@ -1,0 +1,11 @@
+[   0.504368] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_HW 3ds new=1 speedup=1 app_ram=96M tier=expanded stereo=1
+[   0.505127] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_LANG en
+[   0.505385] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_BOOT
+[   0.562652] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_SAVE_PATH sdmc:/3ds/trino/castle64 own=0
+[   0.749485] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_MEM: ram=67108864 heap_total=128589824 before_assets=5300384 boot_assets=611408
+[   0.752188] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: looking for a host
+[  13.401111] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: joined
+[  13.420347] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: player 2 of 2, delay 4, scripted
+[  18.515495] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: state=Running seat=1 frames=297 stalls=3 received=298 refused=0 checked=267 left=0b0000
+[  23.529389] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_UDS: state=Running seat=1 frames=597 stalls=3 received=598 refused=0 checked=567 left=0b0000
+[  23.563739] Debug.Emulated <Debug> core/hle/kernel/svc.cpp:OutputDebugString:1190: TRINO_NET_HASH:600:0x94fa2260aa5f5154

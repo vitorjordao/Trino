@@ -1,0 +1,8 @@
+TRINO_NET: room `DOCK` at the lobby 127.0.0.1:17400
+TRINO_NET: player 1 of 2, rollback mode, rollback 8 input delay 2, 0 spectator(s)
+TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=297 confirmed=296 rollbacks=0 resimulated=0 stalls=0 ping_ms=33 desyncs=0 routes=[2:relay]
+TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=592 confirmed=591 rollbacks=0 resimulated=0 stalls=0 ping_ms=33 desyncs=0 routes=[2:relay]
+TRINO_NET_HASH:760:0xaeadc42f3bbe07f9
+TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=888 confirmed=887 rollbacks=0 resimulated=0 stalls=0 ping_ms=33 desyncs=0 routes=[2:relay]
+TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=895 confirmed=894 rollbacks=0 resimulated=0 stalls=0 ping_ms=33 desyncs=0 routes=[2:relay]
+TRINO_NET: state=Running seat=0 local_seats=0b0001 frames=895 confirmed=894 rollbacks=0 resimulated=0 stalls=0 ping_ms=33 desyncs=0 routes=[2:relay]

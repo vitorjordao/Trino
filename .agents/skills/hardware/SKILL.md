@@ -75,6 +75,22 @@ gdb and troubleshooting, and links the upstream docs for every flag. Code:
 - **SC64 order:** `upload` never boots the console (`--reboot` needs game support),
   so xtask prints "power on (or reset) the N64 now" before `debug`.
 
+## Replays and local wireless on a console (issue #117)
+
+- **A recording on a console:** `cargo xtask replay run <file> --platform n64|3ds
+  --device …` builds the image with `replay.trec`, deploys it, and follows the log's
+  last step under `script` (`hardware::deploy_watch`, `under_pty`) until the
+  `TRINO_REPLAY` verdict. Then it kills the loader.
+  - A pty, never a pipe: the loaders write the log with unflushed stdio, and a pipe
+    delivers it in 4 KB blocks.
+  - util-linux and BSD `script` take different flags (`-q -f -e -c '<line>' <file>` vs
+    `-q -F <file> <cmd…>`).
+  - Windows has no `script`: there the log scrolls and the verdict is read by eye.
+- **`--no-build` is parsed globally** in `xtask/src/main.rs` and handed back to
+  `replay` like `--out`: a new subcommand that needs either gets the same treatment.
+- **Two 3DS units:** `TRINO_UDS="host 2 hash_at=600"` / `"join 2 …"` with `run 3ds
+  --device network` on each (docs/HARDWARE.md). Not run on units yet.
+
 ## Tests
 
 `xtask/tests/hardware.rs` runs the real binary against a temp external project with
@@ -86,6 +102,9 @@ fake `target/` files (`--no-build`). `#!/bin/sh` stub loaders record `$*` to
   `libctru/` but no tools. That way a real 3dslink on the machine is never run by
   accident; a *missing* `DEVKITPRO` dir would fall back to `/opt/devkitpro`.
 - Unit tests in `hardware.rs` pin each command line and the gdb scripts.
+- `replay_run_on_a_device_reads_the_console_verdict` (Linux) symlinks `script`, `sh`
+  and `sleep` into the stubs' `PATH`. Its UNFLoader stub prints a verdict and then
+  sleeps 30 s; the test needs xtask to stop it within 20 s.
 
 ## Not verified
 

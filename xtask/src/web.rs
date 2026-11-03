@@ -661,9 +661,20 @@ fn test_inner(project: &Project, opts: &TestOptions) -> Result<(), String> {
             std::fs::read_to_string(out.join(&name).join("console.log")).unwrap_or_default();
         let mut traces = crate::trace::Capture::default();
         let mut rerecord = crate::replay::Rerecord::default();
+        let mut lockstep = None;
         for line in console.lines() {
+            if line.contains("TRINO_STEP:lockstep ") {
+                lockstep = Some(line.to_string());
+            }
             if !rerecord.feed(line) {
                 traces.feed(line);
+            }
+        }
+        // The consoles' lockstep in wasm, to the PC's hash (issue #117).
+        if project.is_engine {
+            match crate::replay::check_lockstep_step(lockstep.as_deref()) {
+                Ok(msg) => println!("[web] {name}: lockstep: {msg}"),
+                Err(e) => failures.push(format!("{name}: {e}")),
             }
         }
         // The replay step's re-recording against the PC's file (issue #67).

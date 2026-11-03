@@ -53,6 +53,8 @@ struct Shared {
     status: Option<MeetStatus>,
     seat: usize,
     players: usize,
+    /// Data channels this page needs open (its links, issue #117).
+    need: usize,
     peers: BTreeMap<usize, RtcPeerConnection>,
     channels: BTreeMap<usize, RtcDataChannel>,
     open: usize,
@@ -94,12 +96,16 @@ fn decode(s: &str) -> String {
 }
 
 /// Join room `code` (for `players` players) of the lobby at `lobby_url`
-/// (`ws://host:7401`); `stun` adds an ICE server.
+/// (`ws://host:7401`), or `watch` it as a spectator (issue #117); `stun`
+/// adds an ICE server, `fp` is the settings' fingerprint
+/// ([`crate::NetConfig::fingerprint`]) the lobby holds every member to.
 pub fn meet(
     lobby_url: &str,
     code: &str,
     players: usize,
     stun: Option<&str>,
+    watch: bool,
+    fp: &str,
 ) -> Result<Meeting, String> {
     let ws = WebSocket::new(lobby_url).map_err(js_err)?;
     let shared = Rc::new(RefCell::new(Shared {
@@ -110,7 +116,8 @@ pub fn meet(
     let stun = stun.map(str::to_string);
     {
         let ws2 = ws.clone();
-        let join = format!("JOIN {code} {players}");
+        let verb = if watch { "WATCH" } else { "JOIN" };
+        let join = format!("{verb} {code} {players} fp={fp}");
         let onopen = Closure::<dyn FnMut()>::new(move || {
             let _ = ws2.send_with_str(&join);
         });
@@ -146,7 +153,7 @@ fn wire_channel(shared: &Rc<RefCell<Shared>>, seat: usize, dc: RtcDataChannel) {
     let onopen = Closure::<dyn FnMut()>::new(move || {
         let mut s = sh.borrow_mut();
         s.open += 1;
-        let need = s.players - 1;
+        let need = s.need;
         s.status = Some(if s.open >= need {
             MeetStatus::Ready
         } else {
@@ -224,20 +231,38 @@ fn on_line(shared: &Rc<RefCell<Shared>>, ws: &WebSocket, line: &str, stun: Optio
             let Some(start) = crate::lobby::parse_start(line) else {
                 return fail(shared, format!("lobby: bad `{line}`"));
             };
+            // Who this page links to: every other player; seat 0 also
+            // serves the spectators, and a spectator links to seat 0 only.
+            let (me, players) = (start.seat, start.players);
+            let talks_to = |s: usize| {
+                if me >= players {
+                    s == 0
+                } else if s >= players {
+                    me == 0
+                } else {
+                    s != me
+                }
+            };
+            let others: Vec<usize> = start
+                .members
+                .iter()
+                .map(|(s, _)| *s)
+                .filter(|s| talks_to(*s))
+                .collect();
             {
                 let mut s = shared.borrow_mut();
                 s.seat = start.seat;
                 s.players = start.players;
+                s.need = others.len();
                 s.status = Some(MeetStatus::Linking {
                     open: 0,
-                    need: start.players - 1,
+                    need: others.len(),
                 });
                 if !s.peers.is_empty() {
                     return; // a repeated START
                 }
             }
-            for (seat, _) in start.members.iter().filter(|(s, _)| *s != start.seat) {
-                let seat = *seat;
+            for seat in others {
                 let pc = match peer(shared, ws, seat, stun) {
                     Ok(pc) => pc,
                     Err(e) => return fail(shared, e),
@@ -342,9 +367,19 @@ fn on_line(shared: &Rc<RefCell<Shared>>, ws: &WebSocket, line: &str, stun: Optio
     }
 }
 
-/// What a finished meeting hands over: this page's seat, the players,
-/// the other seats' addresses and the socket.
-pub type Met = (usize, usize, Vec<(usize, PeerAddr)>, RtcSocket);
+/// What a finished meeting hands over.
+pub struct Met {
+    /// This page's seat (a spectator's is past the players).
+    pub seat: usize,
+    pub players: usize,
+    /// The other players' seats and addresses.
+    pub peers: Vec<(usize, PeerAddr)>,
+    /// The spectators this page serves (seat 0 only).
+    pub spectators: Vec<PeerAddr>,
+    /// A spectator's host.
+    pub watching: Option<PeerAddr>,
+    pub socket: RtcSocket,
+}
 
 impl Meeting {
     pub fn status(&self) -> MeetStatus {
@@ -361,24 +396,34 @@ impl Meeting {
         if self.status() != MeetStatus::Ready {
             return Err(self);
         }
-        let (seat, players, peers) = {
+        let (seat, players, peers, spectators) = {
             let s = self.shared.borrow();
+            let addr = |k: &usize| PeerAddr::Rtc(*k as u16);
             let peers = s
                 .channels
                 .keys()
-                .map(|k| (*k, PeerAddr::Rtc(*k as u16)))
+                .filter(|k| **k < s.players && s.seat < s.players)
+                .map(|k| (*k, addr(k)))
                 .collect();
-            (s.seat, s.players, peers)
+            let spectators = s
+                .channels
+                .keys()
+                .filter(|k| **k >= s.players)
+                .map(addr)
+                .collect();
+            (s.seat, s.players, peers, spectators)
         };
-        Ok((
+        Ok(Met {
             seat,
             players,
             peers,
-            RtcSocket {
+            spectators,
+            watching: (seat >= players).then_some(PeerAddr::Rtc(0)),
+            socket: RtcSocket {
                 shared: self.shared,
                 _ws: self.ws,
             },
-        ))
+        })
     }
 }
 

@@ -51,7 +51,7 @@ impl Device {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Device::Sc64 => "sc64",
             Device::EverDrive => "everdrive",
@@ -208,8 +208,10 @@ pub fn check_invocation(
 ) -> Result<(), String> {
     match (cmd, platform) {
         (Some("run"), Some(p @ ("n64" | "3ds"))) if p == d.device.platform() => Ok(()),
-        // `save soak n64|3ds --device …` (issue #121) checks its platform.
-        (Some("save"), Some("soak")) => Ok(()),
+        // `save soak n64|3ds --device …` (issue #121) and `replay run
+        // <file> --platform n64|3ds --device …` (issue #117) check their
+        // platform.
+        (Some("save"), Some("soak")) | (Some("replay"), Some("run")) => Ok(()),
         (Some("run"), Some(p @ ("n64" | "3ds"))) => Err(format!(
             "xtask: --device {} is a {} device, not {p} (use {})",
             d.device.name(),
@@ -411,6 +413,129 @@ fn run_steps(tag: &str, tool: &Path, steps: &[Step]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The command line that runs `tool args…` under a pseudo-terminal and
+/// copies what it prints into `log` (`script`): a loader that writes the
+/// console's log with unflushed stdio flushes per line on a terminal, and
+/// a pipe would deliver it in 4 KB blocks (see the pitfall). `None` where
+/// there is no `script` (Windows).
+fn under_pty(tool: &Path, args: &[OsString], log: &Path) -> Option<Command> {
+    if cfg!(windows) {
+        return None;
+    }
+    let script = which("script")?;
+    let mut c = Command::new(script);
+    if cfg!(target_os = "macos") {
+        // BSD script: script -q -F <file> <command...>
+        c.arg("-q").arg("-F").arg(log).arg(tool).args(args);
+    } else {
+        // util-linux: script -q -f -e -c '<command line>' <file>
+        let quote =
+            |s: &std::ffi::OsStr| format!("'{}'", s.to_string_lossy().replace('\'', "'\\''"));
+        let mut line = quote(tool.as_os_str());
+        for a in args {
+            line.push(' ');
+            line.push_str(&quote(a));
+        }
+        c.args(["-q", "-f", "-e", "-c"]).arg(line).arg(log);
+    }
+    Some(c)
+}
+
+/// Deploy the image already built (`target/`) to `d` and follow the
+/// console's log until `done(line)` says so (issue #117: `replay run
+/// --device`): the earlier steps run as `run --device` runs them, the log
+/// step under a pseudo-terminal ([`under_pty`]) while its lines are echoed
+/// and handed to `done`. The loader is stopped once `done` is true (or
+/// `timeout` passes).
+pub fn deploy_watch(
+    p: &Project,
+    d: &DeviceArgs,
+    timeout: std::time::Duration,
+    done: &mut dyn FnMut(&str) -> bool,
+) -> Result<(), String> {
+    let (tag, tool, steps) = match d.device.platform() {
+        "n64" => {
+            let tool = match d.device {
+                Device::Sc64 => &SC64DEPLOYER,
+                _ => &UNFLOADER,
+            };
+            let exe = find_tool(tool)?;
+            let rom = p.rom();
+            if !rom.is_file() {
+                return Err(format!("{} missing", rom.display()));
+            }
+            ("n64", exe, n64_steps(d.device, &rom))
+        }
+        _ => {
+            let exe = find_tool(&LINK3DS)?;
+            let app = p.app_3dsx();
+            if !app.is_file() {
+                return Err(format!("{} missing", app.display()));
+            }
+            println!("[3ds] open the Homebrew Launcher and press Y (netloader) on the 3DS");
+            ("3ds", exe, vec![n3ds_step(d.ip.as_deref(), &app)])
+        }
+    };
+    let Some((last, first)) = steps.split_last() else {
+        return Err("no loader step".into());
+    };
+    run_steps(tag, &tool, first)?;
+    if let Some(note) = last.note {
+        println!("[{tag}] {note}");
+    }
+    println!("[{tag}] $ {}", shell_line(&tool, &last.args));
+    let log = p.root.join(format!("target/{tag}-device.log"));
+    let _ = std::fs::remove_file(&log);
+    let Some(mut cmd) = under_pty(&tool, &last.args, &log) else {
+        run_steps(tag, &tool, std::slice::from_ref(last))?;
+        return Err(
+            "no pseudo-terminal here (Windows): read the TRINO_REPLAY line in the \
+             log above"
+                .into(),
+        );
+    };
+    let mut child = cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("script: {e}"))?;
+    let t0 = std::time::Instant::now();
+    let mut seen = 0usize;
+    let mut partial = String::new();
+    let result = loop {
+        let exited = child.try_wait().map_err(|e| e.to_string())?;
+        if let Ok(bytes) = std::fs::read(&log)
+            && bytes.len() > seen
+        {
+            partial.push_str(&String::from_utf8_lossy(&bytes[seen..]));
+            seen = bytes.len();
+            let mut stop = false;
+            while let Some(i) = partial.find('\n') {
+                let line: String = partial.drain(..=i).collect();
+                let line = line.trim_end_matches(['\r', '\n']);
+                println!("[{tag}] {line}");
+                stop |= done(line);
+            }
+            if stop {
+                break Ok(());
+            }
+        }
+        if let Some(status) = exited {
+            break Err(format!(
+                "`{}` ended ({status}) before the run finished",
+                shell_line(&tool, &last.args)
+            ));
+        }
+        if t0.elapsed() > timeout {
+            break Err(format!("no end of the run in {timeout:?}"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let _ = child.kill();
+    let _ = child.wait();
+    result
 }
 
 /// The ROM / app to deploy: built now, or the one in `target/` (`--no-build`).

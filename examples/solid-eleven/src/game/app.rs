@@ -1685,6 +1685,11 @@ impl Game for SolidElevenGame {
         // Player 2 (issue #67): the host's second seat — another pad, the
         // N64's port 2, or the online friend's input.
         self.p2 = platform.players().players[1];
+        // Whose guides this machine draws (issue #117): its own seat online.
+        let viewer = trino_core::first_seat(platform.local_seats());
+        if let Some(s) = self.session.as_mut() {
+            s.viewer = viewer;
+        }
         let two = self
             .session
             .as_ref()

@@ -120,6 +120,7 @@ mod web {
             (screen.x as u16, screen.y as u16),
         )
         .await?;
+        session.restore(game.as_mut());
         session.start(game.as_ref());
         // `?net=<room>&lobby=ws://…` (issue #67): online from the first frame.
         let mut net = crate::net::WebNet::from_query(&query, &host).await?;
@@ -132,11 +133,13 @@ mod web {
             let live = host.poll_players();
             if let Some(n) = &mut net {
                 host.pump_groups();
+                let screen = host.screen();
                 n.frame(
                     game.as_mut(),
                     &mut host.platform,
                     &mut host.audio,
                     &live.players[0],
+                    (screen.x as u16, screen.y as u16),
                 );
                 host.renderer
                     .apply_access(&trino_core::Platform::access(&host.platform));

@@ -154,3 +154,64 @@ fn net_config_reads_and_writes_trino_toml() {
     assert_eq!(r["declared"], false);
     assert_eq!(r["net"]["max_rollback"], 8);
 }
+
+/// Issue #117: `replay cut` writes the rest of a recording from a snapshot
+/// (`TREC` v2), which replays to the whole run's final hash; a snapshot
+/// that doesn't match its start hash is caught at frame 0.
+#[test]
+fn a_cut_recording_replays_from_its_snapshot() {
+    let dir = root().join("target/test-projects/replay-cut");
+    std::fs::create_dir_all(&dir).unwrap();
+    let whole = json(&xtask(&[
+        "replay",
+        "run",
+        CASTLE,
+        "--platform",
+        "pc",
+        "--json",
+    ]));
+    let cut = dir.join("castle64_from400.trec");
+    let cut_s = cut.to_str().unwrap();
+    let o = xtask(&[
+        "replay", "cut", CASTLE, "--from", "400", "--out", cut_s, "--json",
+    ]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let r = json(&o);
+    assert_eq!(
+        (r["from"].as_u64(), r["frames"].as_u64()),
+        (Some(400), Some(361))
+    );
+    let d = json(&xtask(&["replay", "dump", cut_s, "--json"]));
+    assert_eq!(d["header"]["version"], 2);
+    assert_eq!(d["header"]["start_frame"], 400);
+    assert!(d["header"]["snapshot_bytes"].as_u64().unwrap() > 0);
+    let part = json(&xtask(&[
+        "replay",
+        "run",
+        cut_s,
+        "--platform",
+        "pc",
+        "--json",
+    ]));
+    assert_eq!(part["ok"], true, "{part}");
+    assert_eq!(part["hash"], whole["hash"], "{part} vs {whole}");
+    // A start hash the snapshot doesn't have: caught before frame 1.
+    let mut bytes = std::fs::read(&cut).unwrap();
+    bytes[28] ^= 0x40;
+    let bad = dir.join("damaged.trec");
+    std::fs::write(&bad, &bytes).unwrap();
+    let o = xtask(&[
+        "replay",
+        "run",
+        bad.to_str().unwrap(),
+        "--platform",
+        "pc",
+        "--json",
+    ]);
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stdout).contains("\"frame\":0"),
+        "{}",
+        text(&o.stdout)
+    );
+}

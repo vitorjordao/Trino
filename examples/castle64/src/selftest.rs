@@ -6601,3 +6601,183 @@ fn venue_digest(parts: &[trino_core::physics::CellPart]) -> (u32, u32) {
     }
     (h, n)
 }
+
+// ---- issue #117: the consoles' lockstep and local seats ----
+
+/// What the `lockstep` step played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LockstepReport {
+    /// Frames both peers played, and the host frames they waited.
+    pub frames: u32,
+    pub stalls: u32,
+    /// Hashes the peers compared, packets lost on the way.
+    pub checked: u32,
+    pub lost: u32,
+    /// The mixed state both ended on (the same on every target).
+    pub hash: u64,
+}
+
+/// The step's frames.
+pub const LOCKSTEP_FRAMES: u32 = 600;
+/// Their hash on every target (the step fails on another).
+pub const LOCKSTEP_HASH: u64 = 0x031055f051d3adfe;
+
+/// The consoles' delay-based lockstep (issue #117,
+/// `trino_core::lockstep`) on this CPU: two peers in this process trade
+/// their packets over a link that loses one in five and delays the rest
+/// by one to three frames, play [`LOCKSTEP_FRAMES`] frames of scripted
+/// input and must end on the same state, with every input quantized as
+/// it crosses and every hash they swapped matching; each reads only its
+/// own seat as local. No heap, no network: what the 3DS's local wireless
+/// carries (`uds`) is these same packets.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+#[inline(never)]
+pub fn lockstep_checks() -> Result<LockstepReport, &'static str> {
+    use trino_core::lockstep::{LockConfig, LockState, Lockstep, MAX_PACKET};
+    const SLOTS: usize = 6;
+    // Each direction: packets in flight (due frame, length, bytes).
+    struct Wire {
+        due: [u32; SLOTS],
+        len: [usize; SLOTS],
+        bytes: [[u8; MAX_PACKET]; SLOTS],
+    }
+    let mut wires = [
+        Wire {
+            due: [u32::MAX; SLOTS],
+            len: [0; SLOTS],
+            bytes: [[0; MAX_PACKET]; SLOTS],
+        },
+        Wire {
+            due: [u32::MAX; SLOTS],
+            len: [0; SLOTS],
+            bytes: [[0; MAX_PACKET]; SLOTS],
+        },
+    ];
+    let mut peers = [
+        Lockstep::new(LockConfig {
+            delay: 3,
+            hash_every: 20,
+            ..LockConfig::new(2, 0)
+        }),
+        Lockstep::new(LockConfig {
+            delay: 3,
+            hash_every: 20,
+            ..LockConfig::new(2, 1)
+        }),
+    ];
+    let mut state = [0xcbf2_9ce4_8422_2325u64; 2];
+    let mut rng = 0x9e37_79b9u32;
+    let mut lost = 0;
+    let mut out = [0u8; MAX_PACKET];
+    let mut hosted = trino_core::HostedPlayers::new();
+    if trino_core::Platform::local_seats(&Neutral0) != 1 {
+        return Err("lockstep: a platform without players isn't seat 1");
+    }
+    for tick in 0..LOCKSTEP_FRAMES * 4 {
+        if peers.iter().all(|p| p.frame() >= LOCKSTEP_FRAMES) {
+            break;
+        }
+        for me in 0..2 {
+            // Deliver what is due.
+            for s in 0..SLOTS {
+                if wires[me].due[s] <= tick {
+                    let n = wires[me].len[s];
+                    if peers[me]
+                        .receive(&wires[me].bytes[s][..n], tick as u64 * 16)
+                        .is_err()
+                    {
+                        return Err("lockstep: a packet from the other peer was refused");
+                    }
+                    wires[me].due[s] = u32::MAX;
+                }
+            }
+            // This peer's scripted input for the frame it plays it on.
+            let f = peers[me].frame() + 3;
+            let mut input = InputState::default();
+            let k = (f / (5 + me as u32 * 3)).wrapping_mul(2_654_435_761) ^ me as u32;
+            input.set(trino_core::Button::A, k.is_multiple_of(3));
+            input.stick = Vec2::new(((k % 201) as f32 - 100.0) / 100.0, 0.25);
+            peers[me].add_local(&input);
+            if peers[me].frame() < LOCKSTEP_FRAMES
+                && let Some(p) = peers[me].advance()
+            {
+                hosted.publish_net(&p, peers[me].local_seats());
+                if hosted.local_seats() != 1 << me {
+                    return Err("lockstep: a peer's local seat isn't its own");
+                }
+                for (i, s) in p.players.iter().enumerate() {
+                    state[me] = (state[me] ^ s.button_bits() as u64 ^ (i as u64) << 40)
+                        .wrapping_mul(0x100_0000_01b3)
+                        ^ s.stick.x.to_bits() as u64;
+                }
+                peers[me].note_hash(state[me]);
+            }
+            // Its packet to the other: one in five lost, the rest 1-3
+            // frames late.
+            let n = peers[me].packet(1 - me as u8, &mut out);
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            if rng.is_multiple_of(5) {
+                lost += 1;
+                continue;
+            }
+            let to = &mut wires[1 - me];
+            if let Some(s) = (0..SLOTS).find(|s| to.due[*s] == u32::MAX) {
+                to.due[s] = tick + 1 + rng % 3;
+                to.len[s] = n;
+                to.bytes[s][..n].copy_from_slice(&out[..n]);
+            } else {
+                lost += 1;
+            }
+        }
+    }
+    for p in &peers {
+        if p.frame() < LOCKSTEP_FRAMES {
+            return Err("lockstep: the peers never finished");
+        }
+        if p.state() != LockState::Running {
+            return Err("lockstep: the peers' hashes differ");
+        }
+    }
+    if state[0] != state[1] {
+        return Err("lockstep: the peers ended on different states");
+    }
+    let st = peers[0].stats();
+    if st.checked == 0 {
+        return Err("lockstep: no hash was compared");
+    }
+    if LOCKSTEP_HASH != 0 && state[0] != LOCKSTEP_HASH {
+        return Err("lockstep: another state than on the PC");
+    }
+    Ok(LockstepReport {
+        frames: st.frames,
+        stalls: st.stalls,
+        checked: st.checked,
+        lost,
+        hash: state[0],
+    })
+}
+
+/// A platform with no players (the default `local_seats`).
+struct Neutral0;
+
+impl Platform for Neutral0 {
+    fn now_micros(&self) -> u64 {
+        0
+    }
+    fn log(&self, _: &str) {}
+}
+
+/// `TRINO_STEP:lockstep frames=… stalls=… checked=… lost=… hash=…`.
+pub fn log_lockstep(platform: &dyn Platform, r: &LockstepReport) {
+    let mut line = TextBuf::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:lockstep frames={} stalls={} checked={} lost={} hash={:#018x}\n",
+            r.frames, r.stalls, r.checked, r.lost, r.hash
+        ),
+    );
+    platform.log(line.as_str());
+}

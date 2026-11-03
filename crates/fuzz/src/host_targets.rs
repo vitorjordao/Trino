@@ -179,6 +179,13 @@ pub fn ron(data: &[u8]) {
 pub fn net(data: &[u8]) {
     use trino_net::lobby;
     keep(trino_net::decode_message(data).is_some());
+    // Issue #117: a relayed datagram, and lobby datagrams from anyone.
+    keep(lobby::parse_relay(data));
+    let mut relay_rooms = lobby::Rooms::new();
+    relay_rooms.handle("a", "JOIN r 2", "");
+    relay_rooms.handle("b", "JOIN r 2", "");
+    keep(lobby::serve_udp(&mut relay_rooms, "a", data).len());
+    keep(relay_rooms.relay("b", data));
     let Some(t) = text(data) else { return };
     let mut rooms = lobby::Rooms::new();
     let who = ["1.2.3.4:5", "6.7.8.9:10", "host"];

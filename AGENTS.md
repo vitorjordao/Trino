@@ -47,7 +47,7 @@ platforms, hardware): `docs/README.md`. Historical plans the engine was first bu
 | `profiling` | timeline traces on every target: `zone!`/counters/frame marks, `--trace` builds, `trace collect/report/diff`, Perfetto, Tracy, the editor's Profiler; perf evidence for PRs |
 | `robustness` | fuzz targets for every parser (`cargo xtask fuzz`), adding one per new format, triaging a crash or hang, A/B save slots and `save_status`, versioned saves, `save inspect/corrupt`, Miri and ASan |
 | `shipping` | achievements/stats/presence/cloud (`assets/achievements.ron`, `services check\|export steam`), `package pc` per OS, Steam, crash reports, `deck check`, the 3DS `.cia` |
-| `netplay` | local players (`Platform::players`, seats, `Join`), input recordings and replays (`TREC`, `TRINO_RECORD/REPLAY`, `cargo xtask replay`, the `replay` self-test gate), rollback netplay (`trino-net`, `TRINO_NET`, `cargo xtask net`), determinism traps |
+| `netplay` | local players (`Platform::players`, `local_seats`, seats, `Join`), input recordings and replays (`TREC` v1/v2 snapshots, `TRINO_RECORD/REPLAY/RECORD_FROM`, `cargo xtask replay`, `replay run --device`, the `replay` self-test gate, replayable crash tails), rollback netplay (`trino-net`, spectators, NAT punching + relay, `TRINO_NET`, `cargo xtask net`), console lockstep over the 3DS's local wireless (`uds`, two Azahar instances), determinism traps |
 
 **Knowledge loop:** before reporting a task done, write what it taught you into the
 skill that owns that kind of work. A trap also gets a line under Pitfalls below. Create a
@@ -1204,8 +1204,32 @@ since #122.
     lobby|local|web|config`. Solid Eleven: Quick match "P1 V P2", online between two
     PCs and two browsers (same hash on frame 760).
   - **Editor:** Play here Rec/Replay + scrubber, 2–4 simulated seats, the Net tab.
-  - **3DS local wireless:** evaluated (`rollback_cost`: 8 frames = 12.1 ms in
-    Azahar), not written.
+  - **3DS local wireless:** evaluated in #67 (`rollback_cost`: 8 frames = 12.1 ms in
+    Azahar), written in #117 (below).
+- **Netplay follow-ups (2026-11-03, ADR 0041, GitHub #117):**
+  - **Local seats:** `Platform::local_seats()` (default method) and
+    `HostedPlayers::publish_net`: online, each machine sees only its own seat (a
+    spectator, the one it follows); `first_seat`. Presentation only, never hashed.
+    Solid Eleven's HUD guides follow it.
+  - **Spectators, 2–4 peers:** `NetSession::with_spectators`/`spectate`/`follow`, lobby
+    `WATCH`, `TRINO_NET=watch:…`, `?net_watch`.
+  - **NAT traversal:** `udp::meet` addresses peers by seat (`PeerAddr::Room`) and routes
+    each one directly (hole punching: hellos to the public and LAN candidates, an "I hear
+    you" flag) or through the lobby's relay. There is a settings fingerprint on `JOIN`.
+    `trino_net::natsim` simulates RFC 4787 NATs for the tests. `TRINO_NET_ROUTE`;
+    `docker/lobby`.
+  - **Keys and pointer online:** `NetInput` (32 bytes), `[net] keys`/`pointer`/
+    `pointer_space`.
+  - **Console lockstep:** `trino_core::lockstep` (`no_std`, no I/O) over the 3DS's local
+    wireless (`trino_platform_3ds::uds`, a RomFS `/uds` plan, `TRINO_UDS` to stage it).
+    `cargo xtask net 3ds` runs two Azahar instances in one room
+    (`tools/uds-test/two-azahar.sh`). The `lockstep` self-test step runs on PC, Azahar
+    and the Web.
+  - **Recordings:** `TREC` v2 snapshot recordings (`Recorder::begin_from`,
+    `Session::restore`) for games with `Game::portable_state` (castle64). The PC's crash
+    tail replays to the crash. `TRINO_RECORD_FROM`, `cargo xtask replay cut`, and
+    `replay run --device` on real consoles (pty capture).
+  - **Not run:** two physical 3DS units, a real Internet session, a physical flashcart.
 
 - **Robustness (2026-10-26, ADR 0037, GitHub #68):** adversarial input for every parser
   and saves that survive damage.
@@ -1879,6 +1903,23 @@ cargo test --workspace
   zones from two threads corrupt each other's depths) and loses events to the ring's
   try-lock. Bind at the top of the thread with a track instance from the worker's index;
   on a console, never bind a job that may run inline on the main thread.
+
+- **A raw snapshot (`snapshot::save_raw`) never leaves its process.** It copies
+  `&'static` borrows of blobs and of the binary, and ASLR moves both between runs. A
+  file another process loads (a crash tail, `TRINO_RECORD_FROM`, `replay cut`) needs
+  `Game::portable_state()`. That game's `load_state` must keep its own process-local
+  fields: blob borrows, the save policy, the player's settings (castle64's `HostLocal`).
+  Headless replays never touch those fields, so they pass with dangling pointers. Prove
+  the path in a windowed run.
+- **`Platform::local_seats` differs between peers by design.** If it reaches anything
+  hashed or simulated, the session desyncs: keep it in presentation state (Solid
+  Eleven's `Session::viewer`, out of `state_hash`).
+- **Azahar rooms refuse a second console named "AZAHAR"** (every fresh install's system
+  username). Rename the second instance in Configure › System (and regenerate its
+  MAC), and run a window manager under Xvfb: without one, keyboard shortcuts never
+  reach Qt (`tools/uds-test/two-azahar.sh` clicks instead).
+- **Spectators must join before the room fills.** ggrs registers them only when the
+  host's session is built, and the lobby answers a late `WATCH` with an error.
 
 - **N64 FFI: no scalar float after an integer argument.** Rust is o32 and libdragon
   is o64, so the float arrives as garbage. Pass 16.16 fixed point (`u32`) or a

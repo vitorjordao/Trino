@@ -436,6 +436,8 @@ const MAX_REQUESTS: usize = 8;
 #[derive(Clone, Debug)]
 pub struct HostedPlayers {
     players: PlayersInput,
+    /// Bit `i`: seat `i` is played on this machine ([`Self::local_seats`]).
+    local: u8,
     devices: [InputDevice; MAX_DEVICES],
     len: usize,
     setup: PlayerSetup,
@@ -452,6 +454,7 @@ impl HostedPlayers {
     pub const fn new() -> HostedPlayers {
         HostedPlayers {
             players: PlayersInput::NONE,
+            local: 1,
             devices: [InputDevice::EMPTY; MAX_DEVICES],
             len: 0,
             setup: PlayerSetup::SINGLE,
@@ -462,6 +465,7 @@ impl HostedPlayers {
     /// The host's frame: what its [`Seats`] folded.
     pub fn publish(&mut self, seats: &Seats) {
         self.players = *seats.players();
+        self.local = local_or_first(self.players.connected);
         let devices = seats.devices();
         self.len = devices.len();
         self.devices[..self.len].copy_from_slice(devices);
@@ -470,13 +474,30 @@ impl HostedPlayers {
 
     /// The host's frame from players it did not poll (a replay, a network
     /// session, a script): no devices.
+    /// Every connected seat counts as local (a replay plays them all).
     pub fn publish_players(&mut self, players: &PlayersInput) {
         self.players = *players;
+        self.local = local_or_first(players.connected);
+        self.len = 0;
+    }
+
+    /// A network session's frame (issue #117): every seat's input, and the
+    /// seats this machine plays (`local`, a bit per seat). The other seats
+    /// are remote peers'.
+    pub fn publish_net(&mut self, players: &PlayersInput, local: u8) {
+        self.players = *players;
+        self.local = local_or_first(local);
         self.len = 0;
     }
 
     pub fn players(&self) -> &PlayersInput {
         &self.players
+    }
+
+    /// The seats played on this machine, a bit per seat
+    /// ([`crate::Platform::local_seats`]).
+    pub fn local_seats(&self) -> u8 {
+        self.local
     }
 
     pub fn devices(&self) -> &[InputDevice] {
@@ -529,6 +550,23 @@ impl HostedPlayers {
             self.requests[i - 1] = self.requests[i].take();
         }
         Some(first)
+    }
+}
+
+/// `mask`, or seat 0 alone when it is empty (a frame with nobody plugged
+/// still has a viewer).
+fn local_or_first(mask: u8) -> u8 {
+    let m = mask & ((1 << MAX_PLAYERS) - 1) as u8;
+    if m == 0 { 1 } else { m }
+}
+
+/// The lowest seat in a [`crate::Platform::local_seats`] mask: the one a
+/// shared camera and HUD follow (seat 0 for an empty mask).
+pub const fn first_seat(mask: u8) -> usize {
+    if mask == 0 {
+        0
+    } else {
+        mask.trailing_zeros() as usize
     }
 }
 

@@ -26,7 +26,10 @@
 //!   wrapper that adds latency and loss to a real socket (the editor's Net
 //!   panel, two local instances).
 //! - [`lobby`]: the rendezvous protocol (a room code; the PC's UDP
-//!   addresses and the Web's WebRTC offers go through it).
+//!   addresses and the Web's WebRTC offers go through it), spectators, the
+//!   settings fingerprint and the relay (issue #117).
+//! - `natsim` (not on wasm): a simulated Internet of NATs the tests meet
+//!   and play through (hole punching and the relay fallback).
 //! - `rtc` (wasm only): WebRTC data channels as a socket.
 
 pub mod config;
@@ -34,6 +37,8 @@ pub mod lobby;
 pub mod session;
 pub mod sim;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod natsim;
 #[cfg(target_arch = "wasm32")]
 pub mod rtc;
 #[cfg(not(target_arch = "wasm32"))]

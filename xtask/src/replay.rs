@@ -12,12 +12,22 @@
 //!   with `--shot`/`--window`; the consoles build an image with the
 //!   recording in it (`replay.trec`) and boot it in ares or Azahar; the Web
 //!   opens `?replay=` in Chromium through the Playwright harness.
+//! - `replay run <file.trec> --platform n64|3ds --device sc64|everdrive|network
+//!   [--ip <IP>] [--no-build]` (issue #117): the same image (`replay.trec`
+//!   in its DFS or RomFS) on a real console through the `hardware` skill's
+//!   loaders; the console's log is followed under a pseudo-terminal until
+//!   its `TRINO_REPLAY` verdict (`TRINO_REPLAY_TIMEOUT`, default 600 s).
+//!   `--no-build` deploys the image already in `target/`.
 //! - `replay record <out.trec> --platform n64|3ds`: boot the game in its
 //!   emulator with a `record` file in the image; it streams the live input as
 //!   `TRINO_REC:` lines over its debug channel, which land in `out.trec`
 //!   when the emulator closes (or its timeout, `TRINO_EMU_TIMEOUT`). Play in
 //!   the emulator's window (a local ares or Azahar, not `TRINO_ARES=docker`).
 //!   The PC records with `TRINO_RECORD=<file>`, the Web with `?record`.
+//! - `replay cut <file.trec> --from N --out <cut.trec> [--json]` (issue
+//!   #117): play the first N frames headless on the PC, snapshot the game
+//!   and write the rest as a recording that starts there (`TREC` v2, the
+//!   frames' hashes kept). It replays on the PC build that wrote it.
 //! - `replay check <file.trec>... [--platforms pc,n64,3ds,web] [--json]`:
 //!   `run` on each target; every one must replay without a divergence and
 //!   end on the same hash (the cross-platform determinism gate for any
@@ -36,15 +46,25 @@ const USAGE: &str = "xtask: usage:\n  cargo xtask replay dump <file.trec> [--jso
      cargo xtask replay record <out.trec> --platform n64|3ds\n  \
      cargo xtask replay run <file.trec> --platform pc|n64|3ds|web [--until-frame N] \
      [--shot out.png] [--window] [--json]\n  \
+     cargo xtask replay run <file.trec> --platform n64|3ds --device sc64|everdrive|network \
+     [--ip IP] [--no-build] [--json]\n  \
+     cargo xtask replay cut <file.trec> --from N --out <cut.trec> [--json]\n  \
      cargo xtask replay check <file.trec>... [--platforms pc,n64,3ds,web] [--json]";
 
-pub fn run(project: &Project, args: &[&str]) -> ExitCode {
+pub fn run(
+    project: &Project,
+    args: &[&str],
+    device: Option<&crate::hardware::DeviceArgs>,
+) -> ExitCode {
     let json = args.contains(&"--json");
-    let result = match args {
-        ["dump", file, ..] => dump(Path::new(file), json),
-        ["run", file, rest @ ..] => run_cmd(project, Path::new(file), rest, json),
-        ["check", rest @ ..] => check(project, rest, json),
-        ["record", file, rest @ ..] => record(project, Path::new(file), rest),
+    let result = match (args, device) {
+        (["run", file, rest @ ..], Some(d)) => run_device(project, Path::new(file), rest, d, json),
+        (_, Some(_)) => Err("--device only goes with `replay run` (issue #117)".to_string()),
+        (["dump", file, ..], None) => dump(Path::new(file), json),
+        (["run", file, rest @ ..], None) => run_cmd(project, Path::new(file), rest, json),
+        (["check", rest @ ..], None) => check(project, rest, json),
+        (["cut", file, rest @ ..], None) => cut(project, Path::new(file), rest, json),
+        (["record", file, rest @ ..], None) => record(project, Path::new(file), rest),
         _ => Err(USAGE.to_string()),
     };
     match result {
@@ -168,6 +188,7 @@ fn dump(file: &Path, json_out: bool) -> Result<bool, String> {
         "players": h.players,
         "hash_every": h.hash_every,
         "start_frame": h.start_frame,
+        "snapshot_bytes": r.snapshot().map(|s| s.len()),
         "frames": frames.len(),
         "seconds": seconds,
         "start_hash": format!("{:#018x}", h.start_hash),
@@ -187,10 +208,13 @@ fn dump(file: &Path, json_out: bool) -> Result<bool, String> {
             h.hash_every,
             h.start_hash,
             bytes.len(),
-            if h.start_frame > 0 {
-                format!(" (a tail from session frame {})", h.start_frame)
-            } else {
-                String::new()
+            match (h.has_snapshot(), h.start_frame) {
+                (true, f) => format!(
+                    " (from a snapshot of session frame {f}, {} bytes)",
+                    r.snapshot().map_or(0, |s| s.len())
+                ),
+                (false, 0) => String::new(),
+                (false, f) => format!(" (a tail from session frame {f})"),
             }
         );
         print!("{text}");
@@ -311,6 +335,11 @@ pub fn run_headless(bytes: &[u8], name: &str, until: Option<u32>) -> Result<Verd
         start: std::time::Instant::now(),
     };
     let mut session = Session::replay(bytes, name, until).map_err(|e| e.message())?;
+    if !session.restore(game.as_mut()) {
+        return Err(format!(
+            "the recording's snapshot doesn't load into this build of `{name}`"
+        ));
+    }
     session.start(game.as_ref());
     while let Some((players, dt)) = session.input(&PlayersInput::NONE, 0.0) {
         platform.players.publish_players(&players);
@@ -320,6 +349,94 @@ pub fn run_headless(bytes: &[u8], name: &str, until: Option<u32>) -> Result<Verd
     let mut line = String::new();
     let _ = session.verdict("pc", &mut line);
     parse_verdict(&line).ok_or_else(|| format!("no verdict ({line})"))
+}
+
+/// `replay cut`: the recording from frame `--from` on, starting from a
+/// snapshot of the game there (headless PC run).
+fn cut(project: &Project, file: &Path, args: &[&str], json_out: bool) -> Result<bool, String> {
+    let from: u32 = value(args, "--from")
+        .and_then(|v| v.parse().ok())
+        .ok_or("replay cut: --from <frame>")?;
+    let out = value(args, "--out").ok_or("replay cut: --out <cut.trec>")?;
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut r = Reader::new(&bytes).map_err(|e| e.message())?;
+    let header = *r.header();
+    let name = game_of(&header, project).ok_or("replay cut: a game this checkout can't run")?;
+    let screen = trino_core::Vec2::new(header.screen.0 as f32, header.screen.1 as f32);
+    let mut game = make_game(&name, screen).ok_or(format!("`{name}` can't run headless here"))?;
+    let mut platform = Headless {
+        players: trino_core::HostedPlayers::new(),
+        start: std::time::Instant::now(),
+    };
+    if let Some(state) = r.snapshot()
+        && !game.load_state(state)
+    {
+        return Err("the recording's snapshot doesn't load into this build".into());
+    }
+    let mut played = 0u32;
+    let mut rest = Vec::new();
+    while let Some(f) = r.next_frame() {
+        let f = f.map_err(|e| e.message())?;
+        if played < from {
+            platform.players.publish_players(&f.players);
+            game.update_with(&mut platform, &f.players.players[0], &mut Mute, f.dt);
+            played += 1;
+            if played == from
+                && let Some(h) = f.hash
+                && game.state_hash() != Some(h)
+            {
+                return Err(format!("the recording diverged before frame {from}"));
+            }
+        } else {
+            rest.push(f);
+        }
+    }
+    if played < from {
+        return Err(format!("the recording has only {played} frames"));
+    }
+    if !game.portable_state() {
+        return Err(format!(
+            "`{name}`'s snapshots don't leave the process (Game::portable_state): it can't be cut"
+        ));
+    }
+    let mut state = vec![0u8; game.state_size()];
+    let n = game
+        .save_state(&mut state)
+        .ok_or(format!("`{name}` has no save_state: it can't be cut"))?;
+    state.truncate(n);
+    let mut h =
+        trino_core::replay::Header::new(&name, header.screen, header.players, header.hash_every);
+    h.start_frame = header.start_frame + from;
+    h.start_hash = game.state_hash().unwrap_or(0);
+    let mut cut = Vec::new();
+    let mut sink = |b: &[u8]| cut.extend_from_slice(b);
+    let mut rec = trino_core::replay::Recorder::begin_from(h, &state, &mut sink);
+    for f in &rest {
+        rec.frame(&mut sink, &f.players, f.dt, f.hash);
+    }
+    let head = rec.finish_header();
+    cut[..trino_core::replay::HEADER_LEN].copy_from_slice(&head);
+    std::fs::write(out, &cut).map_err(|e| format!("{out}: {e}"))?;
+    let report = json!({
+        "out": out,
+        "game": name,
+        "from": from,
+        "frames": rest.len(),
+        "snapshot_bytes": state.len(),
+        "bytes": cut.len(),
+        "start_hash": format!("{:#018x}", h.start_hash),
+    });
+    if json_out {
+        println!("{report}");
+    } else {
+        println!(
+            "[replay] {out}: {name} from frame {from}, {} frames, snapshot {} bytes, {} bytes",
+            rest.len(),
+            state.len(),
+            cut.len()
+        );
+    }
+    Ok(true)
 }
 
 /// The engine's PC app (castle64, the showcase, Solid Eleven) or a
@@ -384,6 +501,31 @@ pub fn stage(dir: &Path) -> Result<(), String> {
     if let Ok(game) = std::env::var(STAGE_RECORD) {
         std::fs::write(dir.join("record"), game).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+/// The 3DS's local-wireless session (issue #117): `TRINO_UDS="host 2
+/// hash_at=760"` (or `join 2`) puts a `/uds` file in the RomFS, and
+/// `TRINO_UDS_SCRIPT=<file.trec>` the recording whose seat the console
+/// plays (`trino_platform_3ds::uds`). Only the 3DS reads them.
+pub fn stage_uds(dir: &Path) -> Result<(), String> {
+    let plan = std::env::var("TRINO_UDS")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let Some(plan) = plan else {
+        return Ok(());
+    };
+    let first = plan.split_whitespace().next().unwrap_or("");
+    if first != "host" && first != "join" {
+        return Err(format!(
+            "TRINO_UDS={plan}: `host <players>` or `join <players>` [delay=N] [hash_at=N]"
+        ));
+    }
+    std::fs::write(dir.join("uds"), &plan).map_err(|e| e.to_string())?;
+    if let Ok(script) = std::env::var("TRINO_UDS_SCRIPT") {
+        std::fs::copy(&script, dir.join("uds_script")).map_err(|e| format!("{script}: {e}"))?;
+    }
+    println!("[3ds] local wireless: {plan}");
     Ok(())
 }
 
@@ -602,6 +744,79 @@ fn run_on(
     }
 }
 
+/// `replay run --device`: the recording on a real console (issue #117).
+fn run_device(
+    project: &Project,
+    file: &Path,
+    args: &[&str],
+    d: &crate::hardware::DeviceArgs,
+    json_out: bool,
+) -> Result<bool, String> {
+    let platform = value(args, "--platform").unwrap_or(d.device.platform());
+    if platform != d.device.platform() {
+        return Err(format!(
+            "--platform {platform} with a {} device",
+            d.device.platform()
+        ));
+    }
+    let until = value(args, "--until-frame").and_then(|v| v.parse().ok());
+    let file = file
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let header = *Reader::new(&bytes).map_err(|e| e.message())?.header();
+    if header.has_snapshot() {
+        return Err(
+            "a recording from a snapshot replays on the build and target that wrote it \
+             (the PC): consoles replay recordings from boot"
+                .into(),
+        );
+    }
+    if !args.contains(&"--no-build") {
+        set_stage(Some(&file), until, false, None);
+        let built = match platform {
+            "n64" => crate::n64::build(project, false),
+            _ => crate::n3ds::build(project, false),
+        };
+        set_stage(None, None, false, None);
+        if built != ExitCode::SUCCESS {
+            return Err(format!("the {platform} build failed"));
+        }
+    }
+    let timeout = std::env::var("TRINO_REPLAY_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    let mut verdict = None;
+    crate::hardware::deploy_watch(
+        project,
+        d,
+        std::time::Duration::from_secs(timeout),
+        &mut |line| {
+            if let Some(v) = parse_verdict(line) {
+                verdict = Some(v);
+            }
+            line.contains("TRINO_REPLAY_DONE")
+                || (verdict.is_some() && line.contains("TRINO_REPLAY:"))
+        },
+    )?;
+    let v = verdict.ok_or("the console printed no TRINO_REPLAY verdict")?;
+    if json_out {
+        println!("{}", v.json());
+    } else {
+        println!(
+            "replay: {} on {} ({}) — {} frames, {} hashes checked, final hash {:#018x}",
+            if v.ok { "ok" } else { "diverged" },
+            v.platform,
+            d.device.name(),
+            v.frames,
+            v.checked,
+            v.hash
+        );
+    }
+    Ok(v.ok)
+}
+
 /// `replay run`.
 fn run_cmd(project: &Project, file: &Path, args: &[&str], json_out: bool) -> Result<bool, String> {
     let platform = value(args, "--platform").unwrap_or("pc");
@@ -737,6 +952,28 @@ pub fn check_players_step(step: Option<&str>, want_mask: &str) -> Result<String,
     Ok(rest.to_string())
 }
 
+/// The self-test's `TRINO_STEP:lockstep … hash=…` line (issue #117): the
+/// consoles' lockstep played to the PC's state ([`castle64::selftest::LOCKSTEP_HASH`]).
+pub fn check_lockstep_step(step: Option<&str>) -> Result<String, String> {
+    let step = step.ok_or("lockstep: the self-test printed no `TRINO_STEP:lockstep` line")?;
+    let rest = step
+        .split_once("TRINO_STEP:lockstep ")
+        .map(|(_, r)| r.trim())
+        .ok_or_else(|| format!("lockstep: bad line `{step}`"))?;
+    let hash = rest
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("hash="))
+        .and_then(hex)
+        .ok_or_else(|| format!("lockstep: no hash in `{rest}`"))?;
+    if hash != castle64::selftest::LOCKSTEP_HASH {
+        return Err(format!(
+            "lockstep: `{rest}`, the PC ends on {:#018x}",
+            castle64::selftest::LOCKSTEP_HASH
+        ));
+    }
+    Ok(rest.to_string())
+}
+
 /// The self-test's `TRINO_STEP:replay ok frames=… checked=… hash=…` line:
 /// present, with every frame checked. Returns its summary.
 pub fn check_replay_step(step: Option<&str>) -> Result<String, String> {
@@ -812,6 +1049,18 @@ impl Rerecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lockstep_line_is_held_to_the_pcs_hash() {
+        let good = format!(
+            "[azahar] TRINO_STEP:lockstep frames=600 stalls=50 checked=400 lost=270 hash={:#018x}",
+            castle64::selftest::LOCKSTEP_HASH
+        );
+        assert!(check_lockstep_step(Some(&good)).is_ok());
+        let bad = good.replace("hash=0x", "hash=0x1");
+        assert!(check_lockstep_step(Some(&bad)).is_err());
+        assert!(check_lockstep_step(None).is_err());
+    }
 
     #[test]
     fn verdict_lines_parse() {

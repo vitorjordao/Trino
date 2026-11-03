@@ -34,6 +34,7 @@ pub mod i18n;
 pub mod impostor;
 pub mod input;
 pub mod light;
+pub mod lockstep;
 pub mod lz4;
 pub mod math;
 pub mod math3d;
@@ -96,7 +97,7 @@ pub use light::{
 };
 pub use math::{Color, Rect, Vec2, Vec3};
 pub use math3d::{Mat34, Quat};
-pub use netpad::{NET_PAD_LEN, NetPad};
+pub use netpad::{NET_INPUT_LEN, NET_PAD_LEN, NetExtras, NetInput, NetPad};
 pub use options::{GraphicsOptions, OptionsEvent, OptionsRow, OptionsStyle};
 pub use pad::{GlyphShape, PadFamily, PadGlyph, PadSlot};
 pub use particles::{Effect, Emitter, ParticleSystem};
@@ -110,7 +111,7 @@ pub use platform::{
 };
 pub use players::{
     DeviceId, DeviceKind, HostedPlayers, InputDevice, Join, JoinEvent, MAX_DEVICES, MAX_PLAYERS,
-    PlayerSetup, PlayersInput, PlayersRequest, Seats,
+    PlayerSetup, PlayersInput, PlayersRequest, Seats, first_seat,
 };
 pub use post::{
     Bloom, Glow, GlowMode, Lut, LutError, LutId, PostSettings, PostTier, Tonemap, draw_glow,

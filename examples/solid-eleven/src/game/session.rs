@@ -123,6 +123,10 @@ pub struct Session {
     /// pads or an online friend), with its own controls.
     pub second: Option<usize>,
     pub controls2: Controls,
+    /// The seat this machine's HUD guides follow (issue #117:
+    /// `Platform::local_seats`): player 2's side on the second machine of
+    /// an online match. Presentation only, never hashed.
+    pub viewer: usize,
     acc: f32,
     seen: u32,
     prev_officials: [(f32, f32); 3],
@@ -201,6 +205,7 @@ impl Session {
             human,
             second,
             controls2: Controls::default(),
+            viewer: 0,
             acc: 0.0,
             seen: 0,
             prev_officials: officials,
@@ -445,12 +450,17 @@ impl Session {
         }
         v.cam.follow(pos, vel, dt);
         self.prev_ball = pos;
-        // Guides for the human side.
+        // Guides for this machine's human: player 1's side, or player 2's
+        // on the machine that plays seat 2 online.
+        let (side, controls) = match (self.viewer, self.second) {
+            (1, Some(s2)) => (Some(s2), &self.controls2),
+            _ => (self.human, &self.controls),
+        };
         let mut g = Guides {
-            charge: self.controls.charge(),
+            charge: controls.charge(),
             ..Guides::default()
         };
-        if let Some(s) = self.human
+        if let Some(s) = side
             && matches!(
                 self.m.phase,
                 Phase::Play | Phase::Ready { .. } | Phase::Setup { .. }
@@ -468,7 +478,7 @@ impl Session {
                     let q = self.m.players[t as usize].pos;
                     g.pass_lane = Some((to3(self.m.ball.pos.ground()), to3(q)));
                 }
-                if self.controls.held[1] > 0.0 {
+                if controls.held[1] > 0.0 {
                     // Shot preview at the current charge (on a copy: the
                     // plan draws from the RNG).
                     let mut tmp = self.m.clone();

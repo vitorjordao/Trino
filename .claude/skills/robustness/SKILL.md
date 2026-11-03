@@ -154,6 +154,18 @@ test runs in the dev profile, which keeps overflow checks on.
     fuzz/target/x86_64-unknown-linux-gnu/release/<t> -f -C -i <addrs>` names the frames
     (rustup's llvm-tools ship no `llvm-symbolizer`).
 
+- **Issue #117:**
+  - The `netpad` target's new `NetInput` fixed-point check found that `NetPad::from_bytes`
+    read a hostile `-128` axis as −1.0079, outside the −1..1 a game expects; it now
+    reads −127. Reproducer: `fuzz/regressions/netpad/axis-minus-128`. CI's shard then
+    found the wheel byte the same way (−125 eighths read −15.625, past the ±15 a sender
+    writes): `from_bytes` clamps it (`netpad/wheel-past-15`). A decoder of a peer's
+    bytes clamps every field to what an encoder can write.
+  - The `trec` target checks v2 snapshot bounds (seed `fuzz/seeds/trec/v2snapshot`).
+  - The `net` target feeds relay datagrams to `lobby::serve_udp` and `Rooms::relay`.
+  - `Lockstep::receive` is checked by its own unit test (`hostile_packets_are_refused_or_
+    harmless`: every prefix and every byte flipped).
+
 ### Measured (issue #121)
 
 libFuzzer `-O -a` for 60 s on a frozen corpus (120 s grown from the seeds), twice,

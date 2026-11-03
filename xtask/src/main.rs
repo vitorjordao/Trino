@@ -752,8 +752,17 @@ fn main() -> ExitCode {
             net::run(&project, &rest)
         }
         (Some("replay"), _) => {
-            let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
-            replay::run(&project, &rest)
+            let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();
+            // `--out` was taken with the Web's options above (`replay cut`),
+            // `--no-build` with the build flags (`replay run --device`).
+            if let Some(out) = &web_build.out {
+                rest.extend(["--out".to_string(), out.display().to_string()]);
+            }
+            if no_build {
+                rest.push("--no-build".to_string());
+            }
+            let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+            replay::run(&project, &rest, device.as_ref())
         }
         (Some("i18n"), _) => {
             let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();

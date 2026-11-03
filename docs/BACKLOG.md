@@ -290,12 +290,16 @@ shipping a 3D game first**, then by cost:
     - Nothing has run on real hardware yet: blob cost on an N64, the stencil path on a
       3DS.
 
-20. **Netplay follow-ups** (S–M each, from #67, ADR 0036).
-    - `Platform::local_seats`: the seats this machine plays, so an online game's
-      camera and HUD follow the local player (Solid Eleven's guest sees player 1's
-      guides today).
-    - The 3DS's `uds` (local wireless) transport with delay-based lockstep, then a test
-      on two units (the rollback cost is measured: §PLATFORMS › Players).
+20. **Netplay follow-ups** (S–M each, from #67, ADR 0036; #117 did `local_seats`, the
+    3DS's `uds` lockstep, spectators, NAT traversal, keys/pointer online and snapshot
+    recordings: ADR 0041).
+    - Run on hardware what #117 ran in emulators and simulations: two physical 3DS
+      units over `uds`, a real two-machine session over the Internet through
+      `docker/lobby`, `replay run --device` on a flashcart and a 3DS (#117 stays open
+      for these).
+    - Spectators that join a running match (a snapshot sent over the network), and a
+      portable snapshot for Solid Eleven (its UI and kick tables hold static borrows,
+      so its crash tails stay input-only).
     - Netplay in the standalone template's Web host (`run_game` replays and records;
       `?net` is `apps/web`'s), and PC↔Web crossplay (a WebRTC peer for the PC runner).
     - A `Join` screen in Solid Eleven's menus (the core helper exists; the quick
@@ -313,6 +317,21 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — netplay follow-ups: local seats, spectators, NAT traversal, console lockstep over local wireless, snapshot recordings (2026-11-03, branch `feat/117-netplay-followups`, GitHub #117, ADR 0041)
+
+| Item | Evidence |
+|---|---|
+| `Platform::local_seats` (`publish_net`, `first_seat`); Solid Eleven's HUD guides follow it | every soak, the NAT matrix and two real windows (`net local --lobby --watch`): each machine sees only its own seat, hashes equal; screenshots: P1's window rings the red player, P2's the blue one |
+| Spectators (`with_spectators`, `spectate`, lobby `WATCH`), 3 and 4 peers | soak: 2 players + 3 spectators, 4 players (50 ms, 3 % loss) on the one-machine hashes; real binary: host, guest and a spectator end on `0xaeadc42f3bbe07f9` |
+| NAT traversal (`udp::meet`, `0xA9` hole punching, `0xAA` relay), the settings fingerprint, `docker/lobby` | `natsim`: all 15 NAT pairs go direct exactly where RFC 4787 says, the rest relay, same game; one NAT without hairpin meets on LAN addresses; 4 players + a spectator across mixed NATs; a mismatched `[net]` refused at the door; the real lobby relay (`--route relay`) |
+| Keys, pointer and wheel online (`NetInput`, `pointer_space`) | unit tests (a 1920×1080 and a 640×360 sender meet at the same point); the `netpad` fuzz target, which found the −128 axis |
+| `trino_core::lockstep`; 3DS `uds` (`trino_uds_*`, `run_uds`, `/uds`), `cargo xtask net 3ds`, the `lockstep` self-test step | 2–4 peers to 30 % loss on the one-machine state; Solid Eleven in lockstep = ggrs's hash at 760; two Azahar instances in one room: castle64 frame 600 `0x94fa2260aa5f5154` on both, = the PC's lockstep; the step `0x031055f051d3adfe` on PC, Azahar (New and old) |
+| `TREC` v2 snapshots, `Game::portable_state` (castle64 opts in), replayable crash tails, `TRINO_RECORD_FROM`, `replay cut` | core and host tests; castle64 cut at 400 = the full run's final hash; a live windowed recording from frame 300 replays 400/400 in a new process (window and headless) |
+| `replay run --device` (pty capture) | stub-loader test: verdict read, loader stopped, divergence fails |
+
+Not done (ADR 0041 › Limits): two physical 3DS units, a real Internet session, a physical
+flashcart; late spectators; a portable Solid Eleven snapshot.
 
 ## Done — physics 2.1: physics per cell, exact casts against meshes and ramps, fixed-point meshes, a baked grid, castle64 on the controller's options (2026-11-02, branch `feat/115-physics21`, GitHub #115, ADR 0035 §10–§15)
 

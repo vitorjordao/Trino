@@ -983,12 +983,14 @@ impl Host {
             Some(Err(e)) => panic!("TRINO_NET: {e}"),
         };
         let make = self.make.take().expect("game created once");
-        let game = make(Vec2::new(w as f32, h as f32));
+        let mut game = make(Vec2::new(w as f32, h as f32));
         let mut session = trino_platform_pc::replay_host::InputSession::from_env(
             &cfg.save_name,
             (w as u16, h as u16),
         )
         .unwrap_or_else(|e| panic!("{e}"));
+        // A mid-game recording (a crash tail) starts from its snapshot.
+        session.restore(game.as_mut());
         session.start(game.as_ref());
         window.request_redraw();
         let mut input = PcInput::new();
@@ -1198,7 +1200,15 @@ impl ApplicationHandler for Host {
                 if let Some(net) = &mut ctx.net {
                     // Online (issue #67): the session advances the game;
                     // this machine's devices are its seat.
-                    if net.frame(ctx.game.as_mut(), &mut ctx.platform, &mut ctx.audio, &input) {
+                    let (w, h) = ctx.renderer.internal_size();
+                    let screen = (w.min(65535) as u16, h.min(65535) as u16);
+                    if net.frame(
+                        ctx.game.as_mut(),
+                        &mut ctx.platform,
+                        &mut ctx.audio,
+                        &input,
+                        screen,
+                    ) {
                         let p = *net.session.players();
                         ctx.session.after(ctx.game.as_ref(), &p, net.session.dt());
                     }

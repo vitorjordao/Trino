@@ -477,14 +477,18 @@ Physics is core code: every target runs the same bits.
     venue a ray falls from 1.8 ms to 94 µs and a controller step from 749 to 153 µs.
 - **Measuring.** `TRINO_PHYSICS_COST:` in `cargo xtask test n64|3ds` prints both ways.
 
-## Players, recordings and netplay on each platform (ADR 0036)
+## Players, recordings and netplay on each platform (ADR 0036, ADR 0041)
 
 | Target | Local players | Record / replay | Network |
 |---|---|---|---|
-| PC | the keyboard and every pad; one player by default, up to four with `set_player_setup` (`trino.toml [players] max`); bindings per player | `TRINO_RECORD`, `TRINO_REPLAY` (+ `TRINO_REPLAY_UNTIL`, `TRINO_SCREENSHOT`); crash reports keep the last minute | UDP: `TRINO_NET=host:<port>`, `join:<ip:port>`, `lobby:<code>@<ip:port>`; `TRINO_NET_SIM` |
-| Web | the keyboard and the Gamepad API's pads, as on the PC | `?record` (the recording in `__trino.info.recording`), `?replay=<url>` | WebRTC data channels: `?net=<code>&lobby=ws://<ip:port>` |
-| N64 | four controller ports, port k = player k (an empty port reads disconnected; ares plugs all four) | `cargo xtask replay run --platform n64`; recording over ISViewer / USB (`TRINO_REC:` lines) | none (no network hardware) |
-| 3DS | one player | `cargo xtask replay run --platform 3ds`; recording over the debug channel | none yet (the local-wireless evaluation below) |
+| PC | the keyboard and every pad; one player by default, up to four with `set_player_setup` (`trino.toml [players] max`); bindings per player | `TRINO_RECORD`, `TRINO_REPLAY` (+ `TRINO_REPLAY_UNTIL`, `TRINO_SCREENSHOT`, `TRINO_RECORD_FROM`); crash reports keep the last minute (replayable for a `portable_state` game) | rollback over UDP: `TRINO_NET=host:<port>`, `join:<ip:port>`, `lobby:<code>@<ip:port>`, `watch:…`; NAT hole punching with the lobby's relay as fallback; `TRINO_NET_SIM`, `TRINO_NET_ROUTE` |
+| Web | the keyboard and the Gamepad API's pads, as on the PC | `?record` (the recording in `__trino.info.recording`), `?replay=<url>` | rollback over WebRTC data channels: `?net=<code>&lobby=ws://<ip:port>` (`?net_watch`) |
+| N64 | four controller ports, port k = player k (an empty port reads disconnected; ares plugs all four) | `cargo xtask replay run --platform n64` (`--device sc64\|everdrive` on a cart); recording over ISViewer / USB (`TRINO_REC:` lines) | none (no network hardware) |
+| 3DS | one player | `cargo xtask replay run --platform 3ds` (`--device network` on a unit); recording over the debug channel | delay lockstep over local wireless (`uds`, 2–4 consoles): a RomFS `/uds` plan; `cargo xtask net 3ds` in two Azahar instances |
+
+- **Whose seat is local** (`Platform::local_seats`, #117): every connected seat on one
+  machine; online, this machine's seat only (a spectator, the seat it follows). Camera
+  and HUD follow it; the sim never reads it.
 
 - **The proof.** The self-test's `replay` step plays `assets/shared/replays/
   castle64_green.trec` (recorded on the PC) on every target, hash for hash, and each
@@ -507,10 +511,13 @@ Physics is core code: every target runs the same bits.
 
   ares times the N64's CPU; Azahar doesn't time the 3DS's clocks (the old and the New
   3DS read alike), so the 3DS figures are a lower bound until measured on hardware.
-- **3DS local wireless.** An 8-frame rollback fits a 30 fps frame only on a New 3DS
-  that measures close to Azahar. Delay-based lockstep costs one update a frame (1.4 ms),
-  so it is the 3DS's mode. The `uds` transport isn't written: two units can't run in CI,
-  and the follow-up issue carries the plan.
+- **3DS local wireless (#117, ADR 0041 §5).** An 8-frame rollback fits a 30 fps frame
+  only on a New 3DS that measures close to Azahar. Delay-based lockstep costs one update
+  a frame (1.4 ms), so it is the 3DS's mode: `trino_core::lockstep` over libctru's `uds`
+  (`trino_platform_3ds::uds`).
+  - Two Azahar instances in one room ran castle64 to frame 600 on both consoles' hash
+    `0x94fa2260aa5f5154`, the PC lockstep's too (`cargo xtask net 3ds`).
+  - Two physical units haven't run it yet.
 - **The base N64's heap.** The players, replay and host code is ~45 KB of every N64
   image, which the 4 MB console pays from its heap. Without the Expansion Pak the draw
   memo has 768 slots instead of 1 024 (−78 KB), which leaves the self-test's peak

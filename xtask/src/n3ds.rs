@@ -493,6 +493,7 @@ pub fn bake_assets(p: &Project, test_mode: bool) -> Result<(), String> {
     std::fs::write(romfs.join("save_name"), save_name(p, test_mode)).map_err(|e| e.to_string())?;
     // `replay run` / `run --record` (issue #67): the session's files.
     crate::replay::stage(&romfs)?;
+    crate::replay::stage_uds(&romfs)?;
     // `[3ds] speedup = false` (or `--speedup off`): the app leaves a New
     // 3DS at 268 MHz, the base tier (issue #54).
     if !p.n3ds_speedup {
@@ -677,7 +678,7 @@ pub fn build(p: &Project, test_mode: bool) -> ExitCode {
 /// Azahar executable: $TRINO_AZAHAR, `target/emulators/azahar` (from
 /// `cargo xtask emulators setup azahar`), the default install location, or
 /// PATH.
-fn azahar_exe() -> Option<PathBuf> {
+pub(crate) fn azahar_exe() -> Option<PathBuf> {
     if let Ok(env) = std::env::var("TRINO_AZAHAR") {
         let p = PathBuf::from(env);
         if p.exists() {
@@ -1346,6 +1347,7 @@ fn boot_test(
     let mut quality_step = None;
     let mut worker_step = None;
     let mut players_step: Option<String> = None;
+    let mut lockstep_step: Option<String> = None;
     let mut replay_step: Option<String> = None;
     let mut save_step: Option<String> = None;
     let mut rerecord = crate::replay::Rerecord::default();
@@ -1409,6 +1411,9 @@ fn boot_test(
             if line.contains("TRINO_STEP:players connected=") {
                 players_step = Some(line.to_string());
             }
+            if line.contains("TRINO_STEP:lockstep ") {
+                lockstep_step = Some(line.to_string());
+            }
             if line.contains("TRINO_STEP:replay ok ") {
                 replay_step = Some(line.to_string());
             }
@@ -1454,6 +1459,9 @@ fn boot_test(
             // hash for hash.
             let pl = crate::replay::check_players_step(players_step.as_deref(), "0001")?;
             println!("[3ds] players: {pl}");
+            // The consoles' lockstep on the ARM11 (issue #117).
+            let ls = crate::replay::check_lockstep_step(lockstep_step.as_deref())?;
+            println!("[3ds] lockstep: {ls}");
             let r = crate::replay::check_replay_step(replay_step.as_deref())?;
             println!("[3ds] replay: {r}");
             let again = rerecord.check(&p.engine, &p.engine.join("target/3ds/replay-3ds.trec"))?;

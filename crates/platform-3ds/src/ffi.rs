@@ -196,6 +196,20 @@ unsafe extern "C" {
     /// error.
     pub fn trino_save_store(slot: u32, src: *const u8, len: u32) -> i32;
 
+    /// Local wireless (issue #117, `crate::uds`): 0 or more on success, a
+    /// libctru `Result` (negative) on failure.
+    pub fn trino_uds_init() -> i32;
+    /// Create the network for `players` consoles (this one is node 1).
+    pub fn trino_uds_host(players: u32) -> i32;
+    /// One scan; joins the first Trino network found (1), none yet (0).
+    pub fn trino_uds_join() -> i32;
+    /// This console's node << 16 | the nodes connected.
+    pub fn trino_uds_status() -> i32;
+    pub fn trino_uds_send(node: u32, data: *const u8, len: u32) -> i32;
+    /// The next datagram's length (0: none) and its sender's node.
+    pub fn trino_uds_recv(buf: *mut u8, cap: u32, from: *mut u16) -> i32;
+    pub fn trino_uds_exit();
+
     // newlib, for the global allocator.
     pub fn memalign(align: usize, size: usize) -> *mut c_void;
     pub fn free(ptr: *mut c_void);

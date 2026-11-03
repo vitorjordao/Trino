@@ -766,6 +766,10 @@ pub fn trec(data: &[u8]) {
         assert_eq!(back.to_bytes(), h.to_bytes(), "TREC header round trip");
     }
     let Ok(mut r) = Reader::new(data) else { return };
+    // A v2 recording's snapshot (issue #117) lies inside the input.
+    if let Some(snap) = r.snapshot() {
+        assert!(snap.len() <= data.len() && r.header().has_snapshot());
+    }
     let mut frames = 0;
     while let Some(f) = r.next_frame() {
         frames += 1;
@@ -817,6 +821,19 @@ pub fn netpad(data: &[u8]) {
     let m = data.len().min(16);
     k[..m].copy_from_slice(&data[..m]);
     keep(trino_core::KeySet::from_bytes(k));
+    // Issue #117: the 32-byte input with keys, pointer and wheel. Any
+    // bytes decode, and a decoded input crosses again unchanged.
+    let mut w = [0u8; trino_core::NET_INPUT_LEN];
+    let n = data.len().min(w.len());
+    w[..n].copy_from_slice(&data[..n]);
+    let input = trino_core::NetInput::from_bytes(w);
+    let all = trino_core::NetExtras {
+        keys: true,
+        pointer: true,
+    };
+    let s = input.to_input((320, 240));
+    let again = trino_core::NetInput::from_input(&s, all, (320, 240)).to_input((320, 240));
+    assert_eq!(again, s, "NetInput decodes to a fixed point");
 }
 
 // ------------------------------------------------------------------- saves

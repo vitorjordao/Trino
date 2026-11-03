@@ -308,6 +308,13 @@ impl N3dsHost {
     /// [`run`](Self::run) with the trace session's name (`run 3ds
     /// --trace`; castle64's app names its own).
     pub fn run_named(&mut self, game: &mut dyn Game, trace: &'static str) {
+        // A local-wireless session (issue #117): the whole run in lockstep.
+        if let Some(plan) = N3dsAssets::read("/uds")
+            .and_then(|b| crate::uds::UdsPlan::parse(core::str::from_utf8(&b).ok()?))
+        {
+            self.run_uds(game, plan);
+            return;
+        }
         let mut session = self.channel_session(game);
         let mut last = runtime::now_us();
         let mut trace = runtime::TraceLoop::start(trace);
@@ -349,6 +356,155 @@ impl N3dsHost {
         if let Some(s) = session {
             s.finish();
         }
+    }
+
+    /// A local-wireless session (issue #117, [`crate::uds`]): meet the
+    /// other consoles (host or join), then play the game in delay-based
+    /// lockstep from its first frame ([`trino_core::lockstep`]): each
+    /// console's pad is its seat, every seat's input reaches every
+    /// console, the game runs on a [`Neutral`](trino_core::replay::Neutral)
+    /// platform with a fixed `dt` of 1/60 s, and
+    /// [`local_seats`](trino_core::Platform::local_seats) is this console's
+    /// seat. Logs `TRINO_UDS:` lines (the meeting, then the session every
+    /// 5 s) and `TRINO_NET_HASH:<frame>:<hash>` on the plan's `hash_at`.
+    /// A `/uds_script` recording makes this console play its seat of it.
+    pub fn run_uds(&mut self, game: &mut dyn Game, plan: crate::uds::UdsPlan) {
+        use trino_core::lockstep::{LockConfig, Lockstep, MAX_PACKET};
+        let log = runtime::log;
+        if let Err(r) = crate::uds::init() {
+            log(&format!("TRINO_UDS: init failed ({r:#x})\n"));
+            return;
+        }
+        if plan.host {
+            if let Err(r) = crate::uds::host(plan.players) {
+                log(&format!(
+                    "TRINO_UDS: could not create the network ({r:#x})\n"
+                ));
+                crate::uds::exit();
+                return;
+            }
+            log(&format!(
+                "TRINO_UDS: hosting for {} players\n",
+                plan.players
+            ));
+        } else {
+            log("TRINO_UDS: looking for a host\n");
+        }
+        // The meeting: render the game's first frame meanwhile.
+        let mut joined = plan.host;
+        let mut wait = 0u32;
+        let seat = loop {
+            if !runtime::running() {
+                crate::uds::exit();
+                return;
+            }
+            if !joined && wait.is_multiple_of(30) {
+                match crate::uds::try_join() {
+                    Ok(true) => {
+                        joined = true;
+                        log("TRINO_UDS: joined\n");
+                    }
+                    Ok(false) => {}
+                    Err(r) => log(&format!("TRINO_UDS: scan failed ({r:#x})\n")),
+                }
+            }
+            let (node, total) = crate::uds::status();
+            if joined && node > plan.players as u16 {
+                // A console that rejoined got a node past the seats: it
+                // would play someone else's seat.
+                log(&format!(
+                    "TRINO_UDS: node {node} has no seat among {} players\n",
+                    plan.players
+                ));
+                crate::uds::exit();
+                return;
+            }
+            if joined && node > 0 && total >= plan.players {
+                break (node - 1) as u8;
+            }
+            game.render(&mut self.renderer);
+            wait += 1;
+        };
+        let script = N3dsAssets::read("/uds_script").and_then(|b| {
+            let mut r = trino_core::replay::Reader::new(&b).ok()?;
+            let mut out = alloc::vec::Vec::new();
+            while let Some(Ok(f)) = r.next_frame() {
+                out.push(f.players);
+            }
+            Some(out)
+        });
+        let mut lock = Lockstep::new(LockConfig {
+            delay: plan.delay,
+            ..LockConfig::new(plan.players, seat)
+        });
+        log(&format!(
+            "TRINO_UDS: player {} of {}, delay {}{}\n",
+            seat + 1,
+            plan.players,
+            plan.delay,
+            if script.is_some() { ", scripted" } else { "" }
+        ));
+        let mut out = [0u8; MAX_PACKET];
+        let mut rx = [0u8; 1500];
+        let (mut clock_ms, mut last_us) = (0u64, runtime::now_us());
+        let mut frames = 0u32;
+        let dt = 1.0 / 60.0;
+        while runtime::running() {
+            let now = runtime::now_us();
+            clock_ms += now.wrapping_sub(last_us) as u64 / 1000;
+            last_us = now;
+            while let Some((n, _from)) = crate::uds::recv(&mut rx) {
+                let _ = lock.receive(&rx[..n], clock_ms);
+            }
+            lock.poll(clock_ms);
+            let live = self.poll_players();
+            let local = match &script {
+                Some(s) => {
+                    let f = (lock.frame() + plan.delay as u32) as usize;
+                    s.get(f)
+                        .map_or(InputState::IDLE, |p| p.players[seat as usize])
+                }
+                None => live.players[0],
+            };
+            lock.add_local(&local);
+            if let Some(p) = lock.advance() {
+                self.platform.players.publish_net(&p, lock.local_seats());
+                N3dsAssets::pump(&mut self.renderer, &mut self.audio, &mut self.platform);
+                {
+                    let mut neutral = trino_core::replay::Neutral(&mut self.platform);
+                    game.update_with(&mut neutral, &p.players[0], &mut self.audio, dt);
+                }
+                let h = game.state_hash().unwrap_or(0);
+                lock.note_hash(h);
+                if Some(lock.frame()) == plan.hash_at {
+                    log(&format!("TRINO_NET_HASH:{}:{h:#018x}\n", lock.frame()));
+                }
+            }
+            game.render(&mut self.renderer);
+            self.audio.poll();
+            for s in 0..plan.players {
+                if s != seat {
+                    let n = lock.packet(s, &mut out);
+                    crate::uds::send(s as u16 + 1, &out[..n]);
+                }
+            }
+            frames += 1;
+            if frames.is_multiple_of(300) {
+                let st = lock.stats();
+                log(&format!(
+                    "TRINO_UDS: state={:?} seat={seat} frames={} stalls={} received={} \
+                     refused={} checked={} left={:#06b}\n",
+                    lock.state(),
+                    st.frames,
+                    st.stalls,
+                    st.received,
+                    st.refused,
+                    st.checked,
+                    lock.left()
+                ));
+            }
+        }
+        crate::uds::exit();
     }
 
     /// The entry the [`n3ds_main!`](crate::n3ds_main) macro expands to.

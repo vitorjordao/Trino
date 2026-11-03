@@ -381,8 +381,9 @@ The 500-solid venue (400 × 400 m, four layers, a floor), and castle64's hub fra
 
   On the N64 the "before" grids the decoded solids again but leaves out the node
   gather, whose code does not fit the base console's self-test heap (below): the real
-  v8 cost there is higher. The base N64 skips the venue (its 72 KB blob would set a new
-  heap peak; the load's cost does not depend on the tier).
+  v8 cost there is higher. The N64 numbers come from the branch's 8-layout sweep; the
+  final ROM leaves the venue out altogether (its code costs the base console's heap),
+  and other hosts skip it with less than 256 KB of heap free.
 - **Mesh casts on the 3DS:** 48 casts against the rock (28 triangles) take 20.1 ms
   through the BVH and 20.0 ms by brute force: about 0.42 ms a cast. The BVH pays off on
   bigger meshes; the rock is one leaf group wide for most casts.
@@ -395,11 +396,17 @@ The 500-solid venue (400 × 400 m, four layers, a floor), and castle64's hub fra
     (`runtime::heap_trim`, `malloc_trim`). newlib extends the heap by a request's whole
     size when its top chunk is too small, so a 68 KB free top chunk beside 57 KB of sbrk
     room made the micro scenes' 79 KB batch fail (GitHub #110);
-  - the N64 self-test leaves out the mesh, ramp and one-way casts (the same f32 code the
-    controller's hash proves on the N64; PC, Azahar and the browsers run them).
+  - the global allocator's `trino_memalign` (in the shim, so each allocation site stays
+    one call) retries once after `malloc_trim`: CI's newer nightly left 1 KB less, and a
+    45 KB block failed after the micro scenes without it;
+  - `step_impl`, `Surface::top_at` and `normal` out of line again, as on main;
+  - the N64 self-test leaves out the mesh, ramp and one-way casts and the venue's load
+    (the same f32 code the controller's hash proves on the N64; PC, Azahar and the
+    browsers run them).
 
-  The base self-test passes with a peak of 2 038 296 of 2 190 192 bytes (main: 2 036 496
-  of 2 213 392).
+  The base self-test passes with a peak of 2 038 288 of 2 195 792 bytes (main: 2 036 496
+  of 2 213 392). libdragon's sbrk keeps a margin of its own (~32 KB) before the stack:
+  `top=` counts space a block can't use.
 - **The N64 table over 8 code layouts** (`TRINO_N64_TEXT_PAD` 0 … 8192, Expansion Pak,
   mean (min–max), emulated µs; ADR 0012 §3). `main` is 8bea708, the branch this PR:
 

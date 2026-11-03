@@ -112,6 +112,7 @@ impl<S: Scalar> Surface<S> {
     /// Height of the top under the XZ footprint of `foot`: the box's top,
     /// or a ramp's surface at the footprint's highest point (within the
     /// ramp).
+    #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn top_at(&self, foot: &Box3<S>) -> S {
         let b = &self.aabb;
@@ -148,6 +149,7 @@ impl<S: Scalar> Surface<S> {
     }
 
     /// The top's unit normal (up for boxes).
+    #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn normal(&self) -> V3<S> {
         match self.kind {
@@ -681,7 +683,8 @@ impl<S: Scalar> CharacterController<S> {
         S::controller_step(self, dt, surfaces, meshes)
     }
 
-    /// [`step`](Self::step)'s body.
+    /// [`step`](Self::step)'s body (out of line: one copy per scalar).
+    #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub(crate) fn step_impl(
         &mut self,

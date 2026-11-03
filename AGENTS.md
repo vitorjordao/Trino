@@ -1780,8 +1780,10 @@ cargo test --workspace
 - **newlib's heap: a free top chunk and the sbrk room don't add up.** When the top
   chunk is too small for a request, newlib asks sbrk for the request's whole size, so
   68 KB free at the top and 57 KB of room failed a 79 KB block (the base N64's micro
-  scenes, issue #115). `N64Renderer::trim_buffers` calls `runtime::heap_trim`
-  (`malloc_trim`) first; do the same before any big block that follows frees.
+  scenes, issue #115). The N64's global allocator (`trino_memalign` in the shim)
+  retries once after `malloc_trim`, and `trim_buffers` trims too. libdragon's sbrk also
+  keeps ~32 KB before the stack that `top=` counts. Keep such retries in C: a branch in
+  Rust's `alloc` is inlined at every allocation site (+11 KB of `.text`).
 - **The N64 self-test links every engine feature, and code is heap there.** A feature's
   code moves the base console's heap total by its size (#115's new physics took 65 KB at
   first). Diff `mips64-elf-size -A` and `nm -S` against main, trim (no closures with

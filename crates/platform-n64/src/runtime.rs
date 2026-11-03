@@ -214,7 +214,8 @@ struct LibdragonAlloc;
 
 unsafe impl GlobalAlloc for LibdragonAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { ffi::memalign(layout.align().max(8), layout.size()) as *mut u8 }
+        // `trino_memalign` retries once after `malloc_trim` (issue #115).
+        unsafe { ffi::trino_memalign(layout.align().max(8), layout.size()) as *mut u8 }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {

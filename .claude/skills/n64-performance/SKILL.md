@@ -258,7 +258,10 @@ The model is used by:
   (6 KB) as an insertion sort, and leaving test-only paths out of the N64 self-test.
 - **Big blocks after frees: `runtime::heap_trim`.** newlib asks sbrk for a request's
   whole size when the top chunk is short, so free top + sbrk room don't add up;
-  `trim_buffers` trims first (the micro scenes' 79 KB batch).
+  `trim_buffers` trims first (the micro scenes' 79 KB batch) and the global allocator's
+  `trino_memalign` (shim) retries once after a trim. libdragon's sbrk keeps ~32 KB of
+  its own before the stack, which `top=` includes. Code in Rust's `alloc` is inlined at
+  every allocation site: a retry branch there cost 11 KB.
 
 ### Measured fixed costs (micro scenes)
 

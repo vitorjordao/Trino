@@ -200,9 +200,11 @@ fn grid_shape(solids: &[Solid], cell: f32) -> Option<(f32, f32, usize, usize)> {
         b = b.union(&s.aabb);
     }
     let inv = 1.0 / cell;
-    let nx = to_i32((b.max.x - b.min.x) * inv) as usize + 1;
-    let nz = to_i32((b.max.z - b.min.z) * inv) as usize + 1;
-    Some((b.min.x, b.min.z, nx, nz))
+    // Damaged boxes (min past max, NaN) give a negative or absurd extent:
+    // no grid rather than a wrap-around (issue #115's fuzzing).
+    let nx = to_i32((b.max.x - b.min.x) * inv).max(0) as usize + 1;
+    let nz = to_i32((b.max.z - b.min.z) * inv).max(0) as usize + 1;
+    (nx <= u16::MAX as usize && nz <= u16::MAX as usize).then_some((b.min.x, b.min.z, nx, nz))
 }
 
 impl<'a> StaticWorld<'a> {
@@ -215,7 +217,7 @@ impl<'a> StaticWorld<'a> {
         let mut refs = 0usize;
         for s in solids {
             let (x0, x1, z0, z1) = span(&s.aabb, ox, oz, inv, nx, nz);
-            refs += (x1 - x0 + 1) * (z1 - z0 + 1);
+            refs = refs.checked_add((x1 - x0 + 1).checked_mul(z1 - z0 + 1)?)?;
         }
         let cells = nx.checked_mul(nz)?;
         (cells < u16::MAX as usize && refs <= u16::MAX as usize).then_some(GridSize {
@@ -546,7 +548,8 @@ impl<'a> StaticWorld<'a> {
     }
 }
 
-/// Inclusive cell range a box covers.
+/// Inclusive cell range a box covers (ordered: a damaged box whose min is
+/// past its max still gives a valid range, issue #115's fuzzing).
 #[inline]
 fn span(
     b: &Aabb,
@@ -556,12 +559,9 @@ fn span(
     nx: usize,
     nz: usize,
 ) -> (usize, usize, usize, usize) {
-    (
-        cell_of(b.min.x, ox, inv, nx),
-        cell_of(b.max.x, ox, inv, nx),
-        cell_of(b.min.z, oz, inv, nz),
-        cell_of(b.max.z, oz, inv, nz),
-    )
+    let (a, c) = (cell_of(b.min.x, ox, inv, nx), cell_of(b.max.x, ox, inv, nx));
+    let (d, e) = (cell_of(b.min.z, oz, inv, nz), cell_of(b.max.z, oz, inv, nz));
+    (a.min(c), a.max(c), d.min(e), d.max(e))
 }
 
 /// Where the controller's [`step_in`](super::CharacterController::step_in)

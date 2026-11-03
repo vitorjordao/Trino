@@ -6401,8 +6401,13 @@ pub fn physics_cells(host: &mut dyn GroupHost) -> Result<CellsProbe, &'static st
     // 72 KB blob would set a new heap peak where the heap is short (the base
     // N64 ends the run with ~170 KB free and keeps 128 KB of margin): the
     // load's cost doesn't depend on the tier, so those skip it.
+    // The N64 leaves the venue out of its ROM altogether: its code costs
+    // the base console's heap (GitHub #110); `cargo xtask test n64` runs
+    // were measured before that (ADR 0035 §15).
     let m = host.parts().1.memory();
-    if m.heap_total > 0 && m.heap_total.saturating_sub(m.heap_used) < 256 * 1024 {
+    if cfg!(target_os = "none")
+        || (m.heap_total > 0 && m.heap_total.saturating_sub(m.heap_used) < 256 * 1024)
+    {
         p.hash = h;
         let mut line = TextBuf::<128>::new();
         let _ = core::fmt::Write::write_fmt(

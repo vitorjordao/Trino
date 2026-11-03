@@ -297,6 +297,16 @@ mod tests {
         assert_eq!(edge.to_input().stick, Vec2::new(-1.0, -1.0));
         assert_eq!(NetPad::quantize(&edge.to_input()), edge.to_input());
         // Anything decodes.
+        // Every pointer fraction survives a round trip in the shared space.
+        for n in 0..=u16::MAX {
+            let mut b = [0u8; NET_INPUT_LEN];
+            b[25..27].copy_from_slice(&n.to_le_bytes());
+            b[27..29].copy_from_slice(&n.to_le_bytes());
+            b[29] = 1;
+            let s = NetInput::from_bytes(b).to_input((320, 240));
+            let back = NetInput::from_input(&s, all, (320, 240));
+            assert_eq!(back.pointer, Some([n, n]), "fraction {n}");
+        }
         let mut w = [0u8; NET_INPUT_LEN];
         w[31] = 0x83; // -125 eighths: past what a sender writes
         assert_eq!(NetInput::from_bytes(w).to_input((320, 240)).wheel, -15.0);

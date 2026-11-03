@@ -49,6 +49,8 @@ pub mod c {
     pub const CHARACTER: Color32 = Color32::from_rgb(255, 120, 220);
     /// Interior cells (rooms) and portals (doorways) — see `trino_core::vis`.
     pub const CELL: Color32 = Color32::from_rgb(120, 170, 255);
+    /// Physics of an unloaded cell (issue #115).
+    pub const UNLOADED: Color32 = Color32::from_rgb(110, 110, 120);
     pub const PORTAL: Color32 = Color32::from_rgb(255, 140, 90);
 }
 

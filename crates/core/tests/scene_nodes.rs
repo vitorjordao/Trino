@@ -413,8 +413,9 @@ fn baked_scene_rejects_bad_blobs() {
     );
     // v1 (8-byte LOD records), v2 (no surface), v3 (no water), v4 (no
     // shadows), v5 (no glow), v6 (no physics), v7 (no semantic slots or
-    // outline) and future versions need a rebake.
-    for v in [1u8, 2, 3, 4, 5, 6, 7, 9] {
+    // outline) and future versions need a rebake; v8 (no physics section)
+    // still loads (`scene_physics.rs` in the asset pipeline).
+    for v in [1u8, 2, 3, 4, 5, 6, 7, 10] {
         let mut other = good.to_vec();
         other[4] = v;
         assert_eq!(

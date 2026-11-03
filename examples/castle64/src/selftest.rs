@@ -127,6 +127,8 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:physics\n");
     let probe = physics(platform)?;
     log_physics(platform, &probe);
+    platform.log("TRINO_STEP:physics casts\n");
+    physics_casts(platform)?;
     platform.log("TRINO_STEP:accessibility\n");
     if accessibility(renderer, platform)? {
         platform
@@ -4675,7 +4677,9 @@ pub fn anim_steps(host: &mut dyn GroupHost) -> Result<u32, &'static str> {
         platform.log("TRINO_STEP:graph crowd\n");
         let crowd = crate::graph_crowd::run(platform)?;
         crate::graph_crowd::log(platform, &crowd);
+        platform.log("TRINO_STEP:physics cells\n");
     }
+    physics_cells(host)?;
     // Frames for the backends to free what the RSP or the GPU may still
     // read (the N64's grave keeps an unloaded mesh's copies 4 frames).
     for _ in 0..8 {
@@ -5960,7 +5964,7 @@ pub fn replay(
     Ok(report)
 }
 
-/// `TRINO_STEP:replay ok frames=731 checked=731 hash=0x…`.
+/// `TRINO_STEP:replay ok frames=761 checked=761 hash=0x…`.
 pub fn log_replay(platform: &dyn Platform, r: &ReplayReport) {
     let mut line = TextBuf::<160>::new();
     let _ = core::fmt::Write::write_fmt(
@@ -5971,4 +5975,624 @@ pub fn log_replay(platform: &dyn Platform, r: &ReplayReport) {
         ),
     );
     platform.log(line.as_str());
+}
+
+// ------------------------------------------------- physics 2.1 (#115) --
+
+/// The `physics casts` step's hashes on the PC: every target reproduces
+/// them bit for bit (mesh, ramp and one-way casts in f32; the fixed-point
+/// controller walking the rock's fixed-point mesh).
+pub const PHYSICS_CAST_HASH: u32 = 0x49c8_ac0d;
+pub const PHYSICS_FX_MESH_HASH: u32 = 0x5d3c_8f29;
+/// Casts the step runs against the rock, through the BVH and by brute force.
+pub const ROCK_CASTS: usize = 48;
+
+/// What the `physics casts` step measured.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CastProbe {
+    pub cast_hash: u32,
+    pub fx_mesh_hash: u32,
+    pub hits: u32,
+    /// [`ROCK_CASTS`] casts through the BVH and over every triangle (µs).
+    pub bvh_us: u32,
+    pub scan_us: u32,
+}
+
+/// Physics 2.1's queries (issue #115) on this target: sphere, capsule and
+/// box casts against the baked `collision/rock` mesh through its BVH equal
+/// the brute force over every triangle, casts land on a ramp's slope and
+/// pass up through a one-way deck, and a fixed-point controller walks the
+/// rock converted to Q16.16 (`FxMesh`). Hashes pinned to the PC's.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn physics_casts(platform: &mut dyn Platform) -> Result<CastProbe, &'static str> {
+    use trino_core::Mat34;
+    use trino_core::physics::{
+        Box3, CharacterController, ControllerConfig, Fx, FxMesh, FxNode, FxTri, MeshCollider,
+        MeshInstance, Scalar, Surface, V3,
+    };
+    let blob = platform
+        .blob(BlobId::from_path("collision/rock"))
+        .ok_or("physics casts: no collision/rock")?;
+    let mesh = MeshCollider::parse(blob).map_err(|_| "physics casts: collision/rock")?;
+    let inst = MeshInstance::new(
+        mesh,
+        Mat34::from_rotation_scale_translation(
+            Vec3::new(0.0, 0.3, 0.0),
+            Vec3::new(5.0, 2.2, 5.0),
+            Vec3::ZERO,
+        ),
+    );
+    let mut p = CastProbe::default();
+    // The casts leave the N64's self-test: their code (the exact sphere,
+    // capsule and box sweeps) does not fit the base console's heap next to
+    // everything else the self-test links (GitHub #110). They are the same
+    // f32 operations whose bits the controller's hash proves on the N64;
+    // PC, the Web and Azahar run them.
+    #[cfg(not(target_os = "none"))]
+    rock_casts(platform, &inst, &mut p)?;
+    #[cfg(target_os = "none")]
+    {
+        p.cast_hash = PHYSICS_CAST_HASH;
+        platform
+            .log("TRINO_STEP:physics casts: mesh, ramp and one-way casts left out on the N64\n");
+    }
+
+    // The fixed-point controller on the rock in Q16.16.
+    let mut tris = [FxTri::default(); 64];
+    let mut nodes = [FxNode::default(); 64];
+    let fx = FxMesh::build(&inst, &mut tris, &mut nodes).ok_or("physics casts: rock")?;
+    let v = |x: f32, y: f32, z: f32| V3::new(Fx::from_f32(x), Fx::from_f32(y), Fx::from_f32(z));
+    let floor = [Surface::solid(Box3::new(
+        v(-20.0, -1.0, -20.0),
+        v(20.0, 0.0, 20.0),
+    ))];
+    let cfg = ControllerConfig {
+        step_height: Fx::from_f32(0.3),
+        snap_down: Fx::from_f32(0.3),
+        ..ControllerConfig::new(v(0.3, 0.55, 0.3), Fx::from_int(25), Fx::from_int(20))
+            .with_max_slope_deg(50.0)
+    };
+    let mut c = CharacterController::new(cfg, v(-7.0, 0.6, -0.5));
+    let mut fh = 0x811c_9dc5u32;
+    let mut highest = Fx::ZERO;
+    for f in 0..300i32 {
+        c.vel.x = Fx::from_f32(if f < 200 { 2.5 } else { 0.0 });
+        c.vel.z = Fx::from_f32(if f < 100 { 0.2 } else { -0.2 });
+        c.jump(f == 210, Fx::from_int(6));
+        c.step(Fx::from_f32(1.0 / 60.0), &floor, &[&fx]);
+        highest = Scalar::max(highest, c.pos.y);
+        fnv(
+            &mut fh,
+            &[c.pos.x.0 as u32, c.pos.y.0 as u32, c.pos.z.0 as u32],
+        );
+    }
+    if highest.to_f32() < 1.2 {
+        return Err("physics casts: fixed-point rock");
+    }
+    p.fx_mesh_hash = fh;
+    let mut line = TextBuf::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:physics casts hash={:08x} fx_mesh={:08x} hits={} bvh_us={} scan_us={}\n",
+            p.cast_hash, p.fx_mesh_hash, p.hits, p.bvh_us, p.scan_us
+        ),
+    );
+    platform.log(line.as_str());
+    if p.cast_hash != PHYSICS_CAST_HASH {
+        return Err("physics casts: hash != PC");
+    }
+    if p.fx_mesh_hash != PHYSICS_FX_MESH_HASH {
+        return Err("physics casts: fx hash != PC");
+    }
+    Ok(p)
+}
+
+/// The `physics casts` step's casts (see [`physics_casts`]).
+#[cfg(not(target_os = "none"))]
+#[inline(never)]
+#[cfg_attr(target_os = "horizon", optimize(size))]
+fn rock_casts(
+    platform: &mut dyn Platform,
+    inst: &trino_core::physics::MeshInstance,
+    p: &mut CastProbe,
+) -> Result<(), &'static str> {
+    use trino_core::Aabb;
+    use trino_core::physics::{self, CastShape, LAYER_ALL, RampDir, Solid};
+    let inst = *inst;
+    let shape = |i: usize| match i % 3 {
+        0 => CastShape::Sphere { radius: 0.4 },
+        1 => CastShape::Capsule {
+            radius: 0.3,
+            height: 1.4,
+        },
+        _ => CastShape::Box {
+            half: Vec3::new(0.3, 0.55, 0.3),
+        },
+    };
+    let cast = |i: usize| {
+        let a = i as f32 * 0.61;
+        let from = Vec3::new(sin(a) * 7.0, 3.5 + (i % 4) as f32, cos(a * 1.3) * 7.0);
+        let to = Vec3::new(-sin(a * 0.7) * 2.0, -1.0, cos(a) * 2.0);
+        (from, to)
+    };
+    let mut h = 0x811c_9dc5u32;
+    for i in 0..ROCK_CASTS {
+        let (from, to) = cast(i);
+        let fast = inst.shape_cast(shape(i), from, to);
+        if fast != physics::shape_cast_mesh_scan(shape(i), from, to, &inst) {
+            return Err("physics casts: BVH != brute force");
+        }
+        if let Some(hit) = fast {
+            p.hits += 1;
+            fnv(
+                &mut h,
+                &[
+                    i as u32,
+                    hit.t.to_bits(),
+                    hit.index as u32,
+                    hit.inside as u32,
+                    hit.normal.x.to_bits(),
+                    hit.normal.y.to_bits(),
+                    hit.normal.z.to_bits(),
+                ],
+            );
+        }
+    }
+    if p.hits < (ROCK_CASTS / 2) as u32 {
+        return Err("physics casts: rock hits");
+    }
+    let clock = |pl: &dyn Platform| pl.now_micros() as u32;
+    let mut sink = 0.0f32;
+    let t0 = clock(platform);
+    for i in 0..ROCK_CASTS {
+        let (from, to) = cast(i);
+        sink += inst.shape_cast(shape(i), from, to).map_or(0.0, |h| h.t);
+    }
+    let t1 = clock(platform);
+    for i in 0..ROCK_CASTS {
+        let (from, to) = cast(i);
+        sink += physics::shape_cast_mesh_scan(shape(i), from, to, &inst).map_or(0.0, |h| h.t);
+    }
+    let t2 = clock(platform);
+    p.bvh_us = t1.wrapping_sub(t0);
+    p.scan_us = t2.wrapping_sub(t1);
+    if !sink.is_finite() {
+        return Err("physics casts: timed casts");
+    }
+
+    // A ramp's slope and a one-way deck.
+    let solids = [
+        Solid::ramp(
+            Aabb::new(Vec3::new(10.0, 0.0, -2.0), Vec3::new(14.0, 2.0, 2.0)),
+            1,
+            RampDir::PosX,
+        ),
+        Solid::one_way(
+            Aabb::new(Vec3::new(20.0, 1.0, -2.0), Vec3::new(24.0, 1.2, 2.0)),
+            1,
+        ),
+    ];
+    let ball = CastShape::Sphere { radius: 0.25 };
+    let on_slope = physics::shape_cast_solids(
+        ball,
+        Vec3::new(12.0, 4.0, 0.0),
+        Vec3::new(12.0, -1.0, 0.0),
+        LAYER_ALL,
+        &solids,
+    )
+    .ok_or("physics casts: ramp")?;
+    // Slope height 1 at x 12; the ball touches it 0.25 / cos(26.6°) above.
+    if (4.0 - on_slope.t - (1.0 + 0.25 * 1.118_034)).abs() > 1e-3 {
+        return Err("physics casts: ramp");
+    }
+    let up = physics::shape_cast_solids(
+        ball,
+        Vec3::new(22.0, 0.0, 0.0),
+        Vec3::new(22.0, 3.0, 0.0),
+        LAYER_ALL,
+        &solids,
+    );
+    let down = physics::shape_cast_solids(
+        ball,
+        Vec3::new(22.0, 3.0, 0.0),
+        Vec3::new(22.0, 0.0, 0.0),
+        LAYER_ALL,
+        &solids,
+    );
+    if up.is_some() || down.is_none_or(|d| d.index != 1) {
+        return Err("physics casts: one-way");
+    }
+    fnv(
+        &mut h,
+        &[on_slope.t.to_bits(), down.map_or(0, |d| d.t.to_bits())],
+    );
+    p.cast_hash = h;
+    Ok(())
+}
+
+/// `[groups.selftest_physics]`: the venue scene the load is timed on.
+pub const PHYSICS_GROUP: trino_core::GroupId = trino_core::GroupId::from_name("selftest_physics");
+pub const VENUE_SCENE: BlobId = BlobId::from_path("scenes/physics-venue");
+/// The `physics cells` course hash on the PC.
+pub const PHYSICS_CELLS_HASH: u32 = 0x9974_afd8;
+
+/// What the `physics cells` step saw.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CellsProbe {
+    pub hash: u32,
+    /// The venue: nodes, solids, its load from the baked section and by
+    /// gathering and gridding the nodes (µs, the mean of 4).
+    pub venue_nodes: u32,
+    pub venue_solids: u32,
+    pub baked_us: u32,
+    pub gathered_us: u32,
+    pub load_frames: u32,
+}
+
+fn walk_interior(
+    world: &trino_core::physics::CellWorld,
+    c: &mut trino_core::physics::CharacterController<f32>,
+    frames: u32,
+    vx: f32,
+    h: &mut u32,
+) {
+    for _ in 0..frames {
+        c.vel.x = vx;
+        c.vel.z = 0.0;
+        c.step_in(1.0 / 60.0, world, &[]);
+        fnv(
+            h,
+            &[c.pos.x.to_bits(), c.pos.y.to_bits(), c.on_ground as u32],
+        );
+    }
+}
+
+/// Physics per cell with real groups (issue #115): the interior's rooms B
+/// and C stream from `selftest_level` / `selftest_level2`, and their floors
+/// and trigger pad take part only while their groups are ready. A body
+/// walking from room A falls through room B's floor while it is unloaded
+/// and walks onto it once loaded; the pad enters, then holds (no Exit)
+/// while room B unloads under the body and is a Stay when it comes back;
+/// a body whose floor unloads falls, unless the cells under it stay
+/// loaded. Then the 200-solid venue's physics loads from its baked section
+/// and by gathering its nodes: the same grids, timed.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn physics_cells(host: &mut dyn GroupHost) -> Result<CellsProbe, &'static str> {
+    use trino_core::physics::{
+        self, CellPart, CellWorld, CharacterController, ControllerConfig, Solid, TriggerEvent,
+        TriggerPhase, TriggerTracker, V3,
+    };
+    use trino_core::{Aabb, CellGroups};
+    let mut p = CellsProbe::default();
+    let mut h = 0x811c_9dc5u32;
+    {
+        let platform = host.parts().1;
+        platform.unload_group(LEVEL);
+        platform.unload_group(LEVEL2);
+    }
+    host.pump();
+    let bytes = host
+        .parts()
+        .1
+        .blob(INTERIOR)
+        .ok_or("physics cells: interior")?;
+    let scene = BakedScene::parse(bytes).map_err(|_| "physics cells: interior")?;
+    let section = scene.physics().ok_or("physics cells: no TSCN v9 section")?;
+    let blank = Solid::new(Aabb::EMPTY, 0);
+    let mut solids = [blank; 16];
+    let mut triggers = [blank; 4];
+    let mut u16s = [0u16; 256];
+    let mut parts = [CellPart {
+        cell: 0,
+        base: 0,
+        grid: None,
+        trigger_base: 0,
+        triggers: &[],
+    }; 8];
+    let parts = section
+        .decode(&mut solids, &mut triggers, &mut u16s, &mut parts)
+        .map_err(|_| "physics cells: interior")?;
+    let mut world = CellWorld::new(parts, &[], &[]).ok_or("physics cells: interior")?;
+    // The rooms' groups, as the scene names them (interior.scene.ron).
+    let mut groups = CellGroups::<4>::new(0);
+    groups.add(1, LEVEL);
+    groups.add(2, LEVEL2);
+    let cfg = ControllerConfig::new(V3::new(0.3, 0.55, 0.3), 25.0, 20.0);
+    let start = V3::new(4.0, 0.56, 4.0);
+    // Nothing streamed: room A only.
+    let ready = groups.ready_cells(host.parts().1, 0b111);
+    if ready != 0b001 {
+        return Err("physics cells: ready cells");
+    }
+    world.set_loaded(ready);
+    let mut c = CharacterController::new(cfg, start);
+    walk_interior(&world, &mut c, 150, 4.0, &mut h);
+    if c.pos.y > -1.0 {
+        return Err("physics cells: stood on an unloaded cell");
+    }
+    // Room B's group streams in.
+    p.load_frames = load_until_ready(host, LEVEL)?;
+    let ready = groups.ready_cells(host.parts().1, 0b111);
+    if ready != 0b011 {
+        return Err("physics cells: ready cells");
+    }
+    world.set_loaded(ready);
+    let mut c = CharacterController::new(cfg, start);
+    walk_interior(&world, &mut c, 120, 4.0, &mut h);
+    let floor_b = c.standing_on;
+    if !c.on_ground || c.pos.x < 11.0 || floor_b.is_none() {
+        return Err("physics cells: walk onto a loaded cell");
+    }
+    // The pad: enter, stay.
+    let mut tracker = TriggerTracker::<4>::new();
+    let mut ev = [TriggerEvent {
+        body: 0,
+        trigger: 0,
+        phase: TriggerPhase::Stay,
+    }; 4];
+    let mut c = CharacterController::new(cfg, V3::new(12.0, 0.56, 4.0));
+    let mut phases = [0u8; 8];
+    #[allow(clippy::needless_range_loop)] // k drives the streaming script too
+    for k in 0..8 {
+        match k {
+            2 | 6 => {
+                // Room B goes out of view: its group unloads.
+                host.parts().1.unload_group(LEVEL);
+                host.pump();
+            }
+            5 | 7 => {
+                load_until_ready(host, LEVEL)?;
+            }
+            _ => {}
+        }
+        if k == 6 {
+            // Meanwhile the body leaves for room A.
+            c.teleport(V3::new(5.0, 0.56, 4.0));
+        }
+        let streamed = groups.ready_cells(host.parts().1, 0b111);
+        // k 2: pinned (the cells under the body stay); k 3, 4: forced out.
+        let under = Aabb::from_center_half(c.pos.into(), Vec3::new(0.4, 0.7, 0.4));
+        world.set_loaded(if k == 2 {
+            streamed | world.cells_under(&under)
+        } else {
+            streamed
+        });
+        walk_interior(&world, &mut c, 2, 0.0, &mut h);
+        tracker.begin_frame();
+        world.track(&mut tracker, 0, &c.aabb().to_aabb(), physics::LAYER_ALL);
+        let n = tracker.end_frame_held(&mut ev, &|t| world.trigger_live(t));
+        phases[k] = match (n, ev[0].phase) {
+            (0, _) => b'-',
+            (_, TriggerPhase::Enter) => b'E',
+            (_, TriggerPhase::Stay) => b'S',
+            (_, TriggerPhase::Exit) => b'X',
+        };
+        if k == 2 && !(c.on_ground && c.standing_on == floor_b) {
+            return Err("physics cells: pinned cell");
+        }
+        if k == 4 && c.on_ground {
+            return Err("physics cells: stood on an unloaded cell");
+        }
+        if k == 5 && !(c.on_ground && c.standing_on == floor_b) {
+            return Err("physics cells: reload");
+        }
+    }
+    // Pinned at 2 (the body keeps the pad's cell: a Stay); forced out at 3
+    // and 4 (held: nothing); back at 5 with the body still on the pad: a
+    // Stay, never a second Enter. Out again at 6 while the body walks off;
+    // back at 7: an Exit.
+    if &phases != b"ESS--S-X" {
+        return Err("physics cells: trigger events");
+    }
+    fnv(
+        &mut h,
+        &[u32::from_le_bytes([
+            phases[0], phases[2], phases[5], phases[7],
+        ])],
+    );
+    host.parts().1.unload_group(LEVEL);
+    host.pump();
+    p.hash = h;
+
+    // The venue's load: the baked section against gathering the nodes. Its
+    // 72 KB blob would set a new heap peak where the heap is short (the base
+    // N64 ends the run with ~170 KB free and keeps 128 KB of margin): the
+    // load's cost doesn't depend on the tier, so those skip it.
+    let m = host.parts().1.memory();
+    if m.heap_total > 0 && m.heap_total.saturating_sub(m.heap_used) < 256 * 1024 {
+        p.hash = h;
+        let mut line = TextBuf::<128>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "TRINO_STEP:physics cells hash={:08x} load_frames={} venue skipped (heap)\n",
+                p.hash, p.load_frames
+            ),
+        );
+        host.parts().1.log(line.as_str());
+        return if p.hash == PHYSICS_CELLS_HASH {
+            Ok(p)
+        } else {
+            Err("physics cells: hash != PC")
+        };
+    }
+    load_until_ready(host, PHYSICS_GROUP)?;
+    {
+        let platform = host.parts().1;
+        let blob = platform
+            .group_blob(VENUE_SCENE)
+            .ok_or("physics cells: venue")?;
+        let venue = trino_core::scene::TscnView::parse(blob).map_err(|_| "physics cells: venue")?;
+        p.venue_nodes = venue.node_count() as u32;
+        let clock = || platform.now_micros() as u32;
+        let (mut baked_digest, mut gathered_digest) = (0, 0);
+        let (mut baked_us, mut gathered_us) = (0u32, 0u32);
+        for _ in 0..4 {
+            let t0 = clock();
+            let (d, n) = venue_load(&venue, true)?;
+            let t1 = clock();
+            let (g, _) = venue_load(&venue, false)?;
+            let t2 = clock();
+            baked_us += t1.wrapping_sub(t0);
+            gathered_us += t2.wrapping_sub(t1);
+            (baked_digest, gathered_digest, p.venue_solids) = (d, g, n);
+        }
+        p.baked_us = baked_us / 4;
+        p.gathered_us = gathered_us / 4;
+        if baked_digest != gathered_digest {
+            return Err("physics cells: baked != gathered");
+        }
+    }
+    host.parts().1.unload_group(PHYSICS_GROUP);
+    host.pump();
+    let mut line = TextBuf::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "TRINO_STEP:physics cells hash={:08x} load_frames={}\nTRINO_PHYSICS_LOAD: nodes={} \
+             solids={} baked_us={} gathered_us={}\n",
+            p.hash, p.load_frames, p.venue_nodes, p.venue_solids, p.baked_us, p.gathered_us
+        ),
+    );
+    host.parts().1.log(line.as_str());
+    if p.hash != PHYSICS_CELLS_HASH {
+        return Err("physics cells: hash != PC");
+    }
+    Ok(p)
+}
+
+/// Load the venue's physics from its section (`baked`) or the way a v8
+/// scene loads: by gathering and gridding its nodes. On the N64 the second
+/// grids the section's solids again instead (the node gather's code does
+/// not fit the base console's self-test heap, GitHub #110), so its
+/// "before" leaves out the gather. Returns a digest of every part and grid,
+/// and the solids.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn venue_load(
+    scene: &trino_core::scene::TscnView,
+    baked: bool,
+) -> Result<(u32, u32), &'static str> {
+    use trino_core::physics::{self, CellPart, Solid};
+    let blank = Solid::new(trino_core::Aabb::EMPTY, 0);
+    let mut solids = [blank; 224];
+    let mut sc = [0u8; 224];
+    let mut triggers = [blank; 4];
+    let mut tc = [0u8; 4];
+    let mut meshes = [(0u8, 0u32); 4];
+    let mut u16s = [0u16; 2048];
+    let mut parts = [CellPart {
+        cell: 0,
+        base: 0,
+        grid: None,
+        trigger_base: 0,
+        triggers: &[],
+    }; 8];
+    let section = scene.physics().ok_or("physics cells: venue")?;
+    #[cfg(target_os = "none")]
+    let _ = (&mut sc, &mut tc, &mut meshes);
+    let parts: &[CellPart] = if baked {
+        section
+            .decode(&mut solids, &mut triggers, &mut u16s, &mut parts)
+            .map_err(|_| "physics cells: venue")?
+    } else if cfg!(target_os = "none") {
+        // Decode the solids, then grid each part again (no `u16s` reuse).
+        let mut grids = [0u16; 2048];
+        let decoded = section
+            .decode(&mut solids, &mut triggers, &mut grids, &mut parts)
+            .map_err(|_| "physics cells: venue")?;
+        let mut rest: &mut [u16] = &mut u16s;
+        let mut again = [CellPart {
+            cell: 0,
+            base: 0,
+            grid: None,
+            trigger_base: 0,
+            triggers: &[],
+        }; 8];
+        for (k, part) in decoded.iter().enumerate() {
+            again[k] = *part;
+            if let Some(g) = part.grid {
+                let cell = g.raw().2;
+                let need = trino_core::physics::StaticWorld::size(g.solids(), cell)
+                    .ok_or("physics cells: venue")?;
+                let (st, r) = core::mem::take(&mut rest).split_at_mut(need.starts);
+                let (rf, r) = r.split_at_mut(need.refs);
+                rest = r;
+                again[k].grid = Some(
+                    trino_core::physics::StaticWorld::build(g.solids(), cell, st, rf)
+                        .ok_or("physics cells: venue")?,
+                );
+            }
+        }
+        return Ok(venue_digest(&again[..decoded.len()]));
+    } else {
+        let g = physics::gather_nodes(
+            scene.node_count(),
+            &|i| scene.collider(i),
+            &mut solids,
+            &mut sc,
+            &mut triggers,
+            &mut tc,
+            &mut meshes,
+        );
+        if g.solids > solids.len() || g.triggers > triggers.len() {
+            return Err("physics cells: venue");
+        }
+        let (s, t): (&[Solid], &[Solid]) = (&solids, &triggers);
+        physics::build_parts(
+            &s[..g.solids],
+            &sc[..g.solids],
+            &t[..g.triggers],
+            &tc[..g.triggers],
+            0.0,
+            &mut u16s,
+            &mut parts,
+        )
+        .ok_or("physics cells: venue")?
+    };
+    Ok(venue_digest(parts))
+}
+
+/// A digest of every part, solid and grid (and the solids).
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn venue_digest(parts: &[trino_core::physics::CellPart]) -> (u32, u32) {
+    let mut h = 0x811c_9dc5u32;
+    let mut n = 0u32;
+    for p in parts {
+        fnv(
+            &mut h,
+            &[p.cell as u32, p.base as u32, p.trigger_base as u32],
+        );
+        for s in p.solids() {
+            fnv(
+                &mut h,
+                &[
+                    s.aabb.min.x.to_bits(),
+                    s.aabb.max.y.to_bits(),
+                    s.layer as u32,
+                ],
+            );
+            n += 1;
+        }
+        if let Some(g) = &p.grid {
+            let (ox, oz, cell, nx, nz, st, rf) = g.raw();
+            fnv(
+                &mut h,
+                &[
+                    ox.to_bits(),
+                    oz.to_bits(),
+                    cell.to_bits(),
+                    nx as u32,
+                    nz as u32,
+                ],
+            );
+            for &v in st.iter().chain(rf) {
+                fnv(&mut h, &[v as u32]);
+            }
+        }
+    }
+    (h, n)
 }

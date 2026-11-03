@@ -102,6 +102,7 @@ unsafe extern "C" {
     /// Heap bytes in use / in total (libdragon `sys_get_heap_stats`).
     pub fn trino_heap_used() -> u32;
     pub fn trino_heap_top_free() -> u32;
+    pub fn trino_heap_trim() -> u32;
     pub fn trino_heap_total() -> u32;
     /// Profiling: wait for the RSP and RDP to finish everything queued.
     pub fn trino_drain();

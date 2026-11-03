@@ -132,6 +132,10 @@ pub struct ViewInput<'a> {
     /// The scene's file (the consoles' bake grades it when the manifest
     /// says `bake_grading`: the Game view previews that, issue #64).
     pub scene_path: &'a std::path::Path,
+    /// The cells whose physics is loaded (issue #115, bits; Play › Physics
+    /// cells, `TRINO_EDITOR_PHYSICS_CELLS`): the Scene view dims the
+    /// colliders of the others, as `physics query --cells` leaves them out.
+    pub physics_cells: u64,
     /// The project's semantic colors and the Accessibility tab's
     /// simulation (issue #96): slot colors in its color-vision mode,
     /// outlines while its high contrast is on.
@@ -2441,6 +2445,12 @@ fn colliders(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
             continue;
         };
         let w = col.world_aabb(&item.matrix);
+        // A collider in a cell whose physics is unloaded (issue #115):
+        // dimmed, in the gray of what queries leave out.
+        if !cell_loaded(input.physics_cells, item.cell) {
+            wire_box(painter, proj, &w, Stroke::new(1.0, c::UNLOADED));
+            continue;
+        }
         if col.trigger {
             filled_box(painter, proj, &w, c::TRIGGER.gamma_multiply(0.16));
             wire_box(painter, proj, &w, Stroke::new(1.2, c::TRIGGER));
@@ -2796,15 +2806,46 @@ fn shadow_debug(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
     }
 }
 
-/// Cell and portal wireframes: the world boxes `trino_core::vis` uses.
+/// Is `cell`'s physics loaded in `mask`? What is in no cell always is.
+pub fn cell_loaded(mask: u64, cell: u8) -> bool {
+    cell == trino_core::vis::NO_CELL || (cell < 64 && mask & (1u64 << cell) != 0)
+}
+
+/// Each cell's physics, as `physics check` counts it: (solids, triggers,
+/// mesh colliders) per cell id (issue #115).
+pub fn cell_physics(
+    resolved: &trino_scene::Resolved,
+) -> std::collections::BTreeMap<u8, [usize; 3]> {
+    let mut m = std::collections::BTreeMap::new();
+    for item in resolved.items.iter().filter(|i| i.exported()) {
+        let Some(c) = item.collider else { continue };
+        let e: &mut [usize; 3] = m.entry(item.cell).or_default();
+        if c.trigger {
+            e[1] += 1;
+        } else if matches!(c.shape, trino_core::physics::Shape::Mesh { .. }) {
+            e[2] += 1;
+        } else {
+            e[0] += 1;
+        }
+    }
+    m
+}
+
+/// Cell and portal wireframes: the world boxes `trino_core::vis` uses. A
+/// cell is labelled with its physics (issue #115) and grayed when that is
+/// unloaded.
 fn vis_volumes(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
+    let physics = cell_physics(input.resolved);
     for item in &input.resolved.items {
         let (half, color) = match item.vis {
             Some(trino_core::VisVolume::Cell { half }) => (half, c::CELL),
             Some(trino_core::VisVolume::Portal { half, .. }) => (half, c::PORTAL),
             None => continue,
         };
+        let is_cell = matches!(item.vis, Some(trino_core::VisVolume::Cell { .. }));
+        let loaded = !is_cell || cell_loaded(input.physics_cells, item.cell);
         let p = gizmo::translation(&item.matrix);
+        let color = if loaded { color } else { c::UNLOADED };
         let stroke = Stroke::new(1.0, color.gamma_multiply(0.7));
         for [a, b] in gizmo::box_lines(
             proj,
@@ -2813,6 +2854,28 @@ fn vis_volumes(painter: &egui::Painter, proj: &Proj, input: &ViewInput) {
             [p.x + half.x, p.y + half.y, p.z + half.z],
         ) {
             painter.line_segment([a, b], stroke);
+        }
+        if is_cell
+            && let Some([solids, triggers, meshes]) = physics.get(&item.cell)
+            && let Some(at) = proj.project(p + Vec3::new(0.0, half.y, 0.0))
+        {
+            let mut text = format!("cell {} · {solids} solid(s)", item.cell);
+            if *triggers > 0 {
+                text.push_str(&format!(" · {triggers} trigger(s)"));
+            }
+            if *meshes > 0 {
+                text.push_str(&format!(" · {meshes} mesh(es)"));
+            }
+            if !loaded {
+                text.push_str(" · unloaded");
+            }
+            painter.text(
+                at,
+                egui::Align2::CENTER_BOTTOM,
+                text,
+                egui::FontId::proportional(11.0),
+                color,
+            );
         }
     }
 }

@@ -21,11 +21,16 @@
 use crate::math::Vec3;
 use crate::math3d::Mat34;
 
+mod cells;
 mod controller;
+mod convex;
+mod fxmesh;
 mod mesh;
 pub mod scalar;
 mod world;
+pub use cells::*;
 pub use controller::*;
+pub use fxmesh::*;
 pub use mesh::*;
 pub use scalar::{Box3, Fx, MeshQuery, MeshSupport, Scalar, V3};
 pub use world::*;

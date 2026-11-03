@@ -12,8 +12,8 @@ splits = 0
 backfaced = 8
 emitted = 5
 culled = 0
-gpu_draws = 24
-gpu_tris = 581
+gpu_draws = 26
+gpu_tris = 605
 
 [green-hills]
 verts = 0

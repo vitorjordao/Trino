@@ -863,6 +863,8 @@ pub fn tscn(env: &TscnEnv, nodes: &[TscnNode]) -> &'static [u8] {
     f32s(&mut b, &[l.fog.near, l.fog.far]);
     // Shadows (v5): off.
     b.extend_from_slice(&[0; trino_core::scene::TSCN_ENV_SHADOW_BYTES]);
+    // No physics section (v9).
+    b.extend_from_slice(&[0; trino_core::scene::TSCN_ENV_PHYSICS_BYTES]);
     assert_eq!(b.len(), TSCN_HEADER + TSCN_ENV_BYTES);
 
     let mut data: Vec<u8> = Vec::new();

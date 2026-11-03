@@ -218,6 +218,10 @@ pub struct Castle64Game {
     /// tests read them) and go through it each frame. Every option of it
     /// is off, so it moves exactly as castle64's own loop did.
     body: CharacterController<f32>,
+    /// Frames the controller climbed a ledge and followed the ground down
+    /// (issue #115: its options are on; the tests and the evidence count).
+    pub steps_climbed: u32,
+    pub snaps: u32,
     /// Relógio do nível (anima movers/moedas; zera ao trocar de nível).
     level_time: f32,
     /// Fase do ciclo de caminhada (braços/pernas articulados).
@@ -271,10 +275,20 @@ pub const STAT_COINS: StatId = StatId::new("COINS");
 pub const STAT_STARS: StatId = StatId::new("STARS");
 
 /// The player's body for the engine controller: castle64's box, gravity
-/// and fall cap, 120 substeps a second; no steps, snapping or slopes.
+/// and fall cap, 120 substeps a second, with the controller's options on
+/// (issue #115): ledges up to [`STEP_HEIGHT`] are climbed while walking and
+/// the body follows the ground down as far, so short box edges and the
+/// movers' lips no longer stop a run or launch it.
 fn player_body() -> ControllerConfig<f32> {
-    ControllerConfig::new(PLAYER_HALF.into(), GRAVITY, MAX_FALL)
+    ControllerConfig {
+        step_height: STEP_HEIGHT,
+        snap_down: STEP_HEIGHT,
+        ..ControllerConfig::new(PLAYER_HALF.into(), GRAVITY, MAX_FALL)
+    }
 }
+
+/// The highest ledge the player walks up without jumping (m).
+pub const STEP_HEIGHT: f32 = 0.3;
 
 /// Onda triangular 0..1 com período 1.
 fn tri_wave(t: f32) -> f32 {
@@ -306,6 +320,8 @@ impl Castle64Game {
             enemies: [EnemyState::default(); MAX_ENEMIES],
             standing_mover: None,
             body: CharacterController::new(player_body(), V3::ZERO),
+            steps_climbed: 0,
+            snaps: 0,
             level_time: 0.0,
             walk_phase: 0.0,
             screen,
@@ -811,6 +827,8 @@ impl Game for Castle64Game {
         }
         self.load_body();
         let rep = self.body.step(dt, &surfaces[..n_solids], &[]);
+        self.steps_climbed += rep.stepped as u32;
+        self.snaps += rep.snapped as u32;
         self.pos = self.body.pos.into();
         self.vel = self.body.vel.into();
         self.on_ground = rep.on_ground;
@@ -2386,6 +2404,17 @@ mod tests {
         }
         assert_eq!(g.star_count(), 4, "não coletou as 4 estrelas");
         assert_eq!(g.level, 4, "não chegou à sala do trono");
+        // The controller's options (issue #115) did work on the way.
+        assert!(
+            g.steps_climbed > 0 && g.snaps > 0,
+            "steps {} snaps {}",
+            g.steps_climbed,
+            g.snaps
+        );
+        eprintln!(
+            "full run: {frames} frames, {} ledges climbed, {} snaps",
+            g.steps_climbed, g.snaps
+        );
     }
 
     /// Roteiro reduzido dos consoles: hub → green hills → estrela → hub.

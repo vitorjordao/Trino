@@ -373,6 +373,25 @@ impl<const G: usize> CellGroups<G> {
         self.ready(platform, visible)
     }
 
+    /// The cells of `mask` whose groups are all `Ready` (a cell naming no
+    /// group always is): the cells whose physics a streamed level turns on
+    /// (`physics::CellWorld::set_loaded`, issue #115).
+    pub fn ready_cells<P: Platform + ?Sized>(&self, platform: &P, mask: u64) -> u64 {
+        let mut ready = 0;
+        let mut m = mask;
+        while m != 0 {
+            let cell = m.trailing_zeros() as usize;
+            m &= m - 1;
+            if self
+                .each(self.cells[cell])
+                .all(|g| platform.group_state(g) == LoadState::Ready)
+            {
+                ready |= 1u64 << cell;
+            }
+        }
+        ready
+    }
+
     /// Unload every group this streamer holds (leaving the level).
     pub fn release<P: Platform + ?Sized>(&mut self, platform: &mut P) {
         for i in 0..self.count {

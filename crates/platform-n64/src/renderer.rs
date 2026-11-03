@@ -279,6 +279,9 @@ impl N64Renderer {
         drop_empty(&mut self.pending_ring_rsp);
         drop_empty(&mut self.pending_blobs);
         drop_empty(&mut self.pending_shadow);
+        // And the heap's free top back to sbrk, so the next big block can
+        // use it (`runtime::heap_trim`).
+        crate::runtime::heap_trim();
     }
 
     /// Size the CPU batch for `tris` triangles before a frame that needs

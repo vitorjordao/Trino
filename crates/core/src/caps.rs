@@ -208,6 +208,13 @@ pub struct Caps {
     /// triangle with the BVH) and the walk of a query. `cargo xtask physics
     /// check` and the editor's budget fail a scene past it.
     pub max_collision_tris: u32,
+    /// Does a character body collide as a capsule on this tier? `false` on
+    /// every tier (issue #115, ADR 0035 §11): the body is its box
+    /// everywhere, because one game moving one way on the N64 and another
+    /// on the PC would break cross-target replays and lockstep (#67) by
+    /// construction. Capsules and spheres are exact in shape casts and
+    /// overlaps on every tier.
+    pub capsule_bodies: bool,
 }
 
 /// How a texture's texels sit in texture memory: the N64 formats the
@@ -335,6 +342,7 @@ impl Caps {
         max_ui_nodes: 128,
         max_ui_draws: 384,
         max_collision_tris: 4096,
+        capsule_bodies: false,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -392,6 +400,7 @@ impl Caps {
         max_ui_nodes: 128,
         max_ui_draws: 2048,
         max_collision_tris: 16_384,
+        capsule_bodies: false,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -448,6 +457,7 @@ impl Caps {
         max_ui_nodes: 512,
         max_ui_draws: 16_384,
         max_collision_tris: 1_000_000,
+        capsule_bodies: false,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -494,6 +504,7 @@ impl Caps {
         max_ui_nodes: 512,
         max_ui_draws: 16_384,
         max_collision_tris: 1_000_000,
+        capsule_bodies: false,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔

@@ -515,6 +515,10 @@ impl SceneNode {
 ///   the outline (flag bit17): color rgba, center f32*3, radius f32,
 ///   pixels f32
 /// data table: UTF-8 strings and LOD records, to the end of the blob: UTF-8 bytes to the end of the blob
+///   (v9, issue #115) and the physics section the environment's last
+///   8 bytes point to (u32 offset into the data table, u32 length; 0 = none):
+///   every cell's solids, triggers, mesh colliders and grid
+///   (`physics::BakedPhysics`)
 /// ```
 ///
 /// [`BakedScene::parse`] validates everything up front (bounds, UTF-8), so
@@ -528,11 +532,18 @@ pub const TSCN_MAGIC: &[u8; 4] = b"TSCN";
 /// nodes end with their glow (16 bytes, issue #64). v7: then their
 /// physics (24 bytes, issue #66): collider layer, one-way, ramps, mesh
 /// colliders and the character component. v8: then their semantic slot
-/// colors, palette and high-contrast outline (56 bytes, issue #96).
-/// Older blobs are refused: rebake the scene.
-pub const TSCN_VERSION: u16 = 8;
+/// colors, palette and high-contrast outline (56 bytes, issue #96). v9:
+/// the environment ends with where the physics section is (8 bytes,
+/// issue #115): every cell's solids and their grid, baked. v8 blobs still
+/// load (no section: the physics is gathered and gridded at load, as
+/// before); older ones are refused: rebake the scene.
+pub const TSCN_VERSION: u16 = 9;
 pub const TSCN_HEADER: usize = 12;
-pub const TSCN_ENV_BYTES: usize = 68 + TSCN_ENV_SHADOW_BYTES;
+pub const TSCN_ENV_BYTES: usize = TSCN_ENV_V8_BYTES + TSCN_ENV_PHYSICS_BYTES;
+/// The environment of a v8 blob (read by the migration in `parse`).
+pub const TSCN_ENV_V8_BYTES: usize = 68 + TSCN_ENV_SHADOW_BYTES;
+/// The physics section's (offset, length) at the end of the environment (v9).
+pub const TSCN_ENV_PHYSICS_BYTES: usize = 8;
 /// The shadows block at the end of the environment (v5).
 pub const TSCN_ENV_SHADOW_BYTES: usize = 16;
 pub const TSCN_NODE_BYTES: usize = 16
@@ -581,6 +592,8 @@ pub enum SceneError {
     Truncated,
     /// A string reference points outside the table or is not UTF-8.
     BadString,
+    /// The physics section (v9) is damaged.
+    BadPhysics,
 }
 
 /// A parsed baked scene, borrowing a `'static` blob (`Platform::blob`).
@@ -589,6 +602,8 @@ pub struct BakedScene {
     bytes: &'static [u8],
     node_count: usize,
     strings: usize,
+    /// Environment bytes (v8's are 8 fewer).
+    env: usize,
 }
 
 #[inline]
@@ -611,31 +626,157 @@ fn rd_rgba(d: &[u8], at: usize) -> Color {
     Color::rgba(d[at], d[at + 1], d[at + 2], d[at + 3])
 }
 
+/// Node record `at`'s collider (shared by [`BakedScene::node`] and
+/// [`TscnView`]).
+fn node_collider(d: &[u8], at: usize) -> Option<Collider> {
+    let b = at + 64;
+    let flags = rd_u32(d, b);
+    let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
+    let shape = match (flags >> 12) & 7 {
+        1 => Shape::Box {
+            half: Vec3::new(x, y, z),
+        },
+        2 => Shape::Sphere { radius: x },
+        3 => Shape::Capsule {
+            radius: x,
+            height: y,
+        },
+        4 => Shape::Ramp {
+            half: Vec3::new(x, y, z),
+            dir: crate::physics::RampDir::from_code(d[at + PHYSICS_AT + 3]),
+        },
+        5 => Shape::Mesh {
+            mesh: rd_u32(d, at + PHYSICS_AT + 4),
+            half: Vec3::new(x, y, z),
+        },
+        _ => return None,
+    };
+    let ph = at + PHYSICS_AT;
+    Some(Collider {
+        shape,
+        offset: rd_vec3(d, b + 36),
+        trigger: flags & (1 << 15) != 0,
+        layer: u16::from_le_bytes([d[ph], d[ph + 1]]),
+        one_way: d[ph + 2] != 0,
+    })
+}
+
+fn node_matrix(d: &[u8], at: usize) -> Mat34 {
+    let mut matrix = Mat34::IDENTITY;
+    for r in 0..3 {
+        for c in 0..4 {
+            matrix.m[r][c] = rd_f32(d, at + 16 + (r * 4 + c) * 4);
+        }
+    }
+    matrix
+}
+
+/// Header, environment size and where the data table starts.
+fn tscn_layout(bytes: &[u8]) -> Result<(usize, usize, usize), SceneError> {
+    if bytes.len() < TSCN_HEADER + TSCN_ENV_V8_BYTES {
+        return Err(SceneError::Truncated);
+    }
+    if &bytes[0..4] != TSCN_MAGIC {
+        return Err(SceneError::BadMagic);
+    }
+    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    // The migration (ADR 0005 §3): a v8 blob is a v9 one without the
+    // physics section's pointer.
+    let env = match version {
+        TSCN_VERSION => TSCN_ENV_BYTES,
+        8 => TSCN_ENV_V8_BYTES,
+        _ => return Err(SceneError::UnsupportedVersion(version)),
+    };
+    let node_count = rd_u32(bytes, 8) as usize;
+    let strings = node_count
+        .checked_mul(TSCN_NODE_BYTES)
+        .and_then(|n| n.checked_add(TSCN_HEADER + env))
+        .ok_or(SceneError::Truncated)?;
+    if bytes.len() < strings {
+        return Err(SceneError::Truncated);
+    }
+    Ok((env, node_count, strings))
+}
+
+/// The physics section of a blob laid out as `tscn_layout` says.
+fn tscn_physics(
+    bytes: &[u8],
+    env: usize,
+    strings: usize,
+) -> Result<Option<crate::physics::BakedPhysics<'_>>, SceneError> {
+    if env < TSCN_ENV_BYTES {
+        return Ok(None);
+    }
+    let e = TSCN_HEADER + TSCN_ENV_V8_BYTES;
+    let (off, len) = (rd_u32(bytes, e) as usize, rd_u32(bytes, e + 4) as usize);
+    if len == 0 {
+        return Ok(None);
+    }
+    let start = strings.checked_add(off).ok_or(SceneError::BadPhysics)?;
+    let end = start.checked_add(len).ok_or(SceneError::BadPhysics)?;
+    let data = bytes.get(start..end).ok_or(SceneError::BadPhysics)?;
+    crate::physics::BakedPhysics::parse(data)
+        .map(Some)
+        .map_err(|_| SceneError::BadPhysics)
+}
+
+/// A TSCN blob's physics without a [`BakedScene`] (which needs `'static`
+/// bytes): what a scene streamed in its own asset group
+/// (`Platform::group_blob`, borrowed until the group unloads) loads its
+/// collision from. The baked section, or the nodes' colliders.
+#[derive(Clone, Copy, Debug)]
+pub struct TscnView<'a> {
+    bytes: &'a [u8],
+    env: usize,
+    node_count: usize,
+    strings: usize,
+}
+
+impl<'a> TscnView<'a> {
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, SceneError> {
+        let (env, node_count, strings) = tscn_layout(bytes)?;
+        tscn_physics(bytes, env, strings)?;
+        Ok(TscnView {
+            bytes,
+            env,
+            node_count,
+            strings,
+        })
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.node_count
+    }
+
+    /// The baked physics section (v9), if any.
+    pub fn physics(&self) -> Option<crate::physics::BakedPhysics<'a>> {
+        tscn_physics(self.bytes, self.env, self.strings)
+            .ok()
+            .flatten()
+    }
+
+    /// Node `i`'s collider: (cell, collider, world matrix), `None` without
+    /// one ([`crate::physics::gather_nodes`]'s input).
+    pub fn collider(&self, i: usize) -> Option<(u8, Collider, Mat34)> {
+        if i >= self.node_count {
+            return None;
+        }
+        let at = TSCN_HEADER + self.env + i * TSCN_NODE_BYTES;
+        let cell = self.bytes[at + 64 + 72];
+        node_collider(self.bytes, at).map(|c| (cell, c, node_matrix(self.bytes, at)))
+    }
+}
+
 impl BakedScene {
     pub fn parse(bytes: &'static [u8]) -> Result<Self, SceneError> {
-        if bytes.len() < TSCN_HEADER + TSCN_ENV_BYTES {
-            return Err(SceneError::Truncated);
-        }
-        if &bytes[0..4] != TSCN_MAGIC {
-            return Err(SceneError::BadMagic);
-        }
-        let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if version != TSCN_VERSION {
-            return Err(SceneError::UnsupportedVersion(version));
-        }
-        let node_count = rd_u32(bytes, 8) as usize;
-        let strings = node_count
-            .checked_mul(TSCN_NODE_BYTES)
-            .and_then(|n| n.checked_add(TSCN_HEADER + TSCN_ENV_BYTES))
-            .ok_or(SceneError::Truncated)?;
-        if bytes.len() < strings {
-            return Err(SceneError::Truncated);
-        }
+        let (env, node_count, strings) = tscn_layout(bytes)?;
         let scene = BakedScene {
             bytes,
             node_count,
             strings,
+            env,
         };
+        tscn_physics(bytes, env, strings)?;
         for i in 0..node_count {
             let at = scene.node_at(i);
             for field in [at, at + 8] {
@@ -655,7 +796,33 @@ impl BakedScene {
     }
 
     fn node_at(&self, i: usize) -> usize {
-        TSCN_HEADER + TSCN_ENV_BYTES + i * TSCN_NODE_BYTES
+        TSCN_HEADER + self.env + i * TSCN_NODE_BYTES
+    }
+
+    /// The same blob as a [`TscnView`] (its physics, without strings).
+    pub fn view(&self) -> TscnView<'static> {
+        TscnView {
+            bytes: self.bytes,
+            env: self.env,
+            node_count: self.node_count,
+            strings: self.strings,
+        }
+    }
+
+    /// The blob's format version (8 or 9).
+    pub fn version(&self) -> u16 {
+        u16::from_le_bytes([self.bytes[4], self.bytes[5]])
+    }
+
+    /// The baked physics section (issue #115): every cell's solids,
+    /// triggers, mesh colliders and grid. `None` for a v8 blob or a scene
+    /// without colliders: gather them with
+    /// [`physics::gather_nodes`](crate::physics::gather_nodes) and grid them
+    /// with [`physics::build_parts`](crate::physics::build_parts) instead.
+    pub fn physics(&self) -> Option<crate::physics::BakedPhysics<'static>> {
+        tscn_physics(self.bytes, self.env, self.strings)
+            .ok()
+            .flatten()
     }
 
     /// Raw bytes `offset..offset+len` of the data table.
@@ -755,12 +922,7 @@ impl BakedScene {
         let tags = self
             .string(rd_u32(d, at + 8), rd_u32(d, at + 12))
             .expect("validated in parse");
-        let mut matrix = Mat34::IDENTITY;
-        for r in 0..3 {
-            for c in 0..4 {
-                matrix.m[r][c] = rd_f32(d, at + 16 + (r * 4 + c) * 4);
-            }
-        }
+        let matrix = node_matrix(d, at);
         let b = at + 64;
         let flags = rd_u32(d, b);
         let shading = match (flags >> 8) & 7 {
@@ -819,26 +981,6 @@ impl BakedScene {
                 [0, 4, 8, 12].map(|o| rd_rgba(d, p + o))
             }),
             ..params
-        };
-        let (x, y, z) = (rd_f32(d, b + 24), rd_f32(d, b + 28), rd_f32(d, b + 32));
-        let shape = match (flags >> 12) & 7 {
-            1 => Some(Shape::Box {
-                half: Vec3::new(x, y, z),
-            }),
-            2 => Some(Shape::Sphere { radius: x }),
-            3 => Some(Shape::Capsule {
-                radius: x,
-                height: y,
-            }),
-            4 => Some(Shape::Ramp {
-                half: Vec3::new(x, y, z),
-                dir: crate::physics::RampDir::from_code(d[at + PHYSICS_AT + 3]),
-            }),
-            5 => Some(Shape::Mesh {
-                mesh: rd_u32(d, at + PHYSICS_AT + 4),
-                half: Vec3::new(x, y, z),
-            }),
-            _ => None,
         };
         let ph = at + PHYSICS_AT;
         let character = (flags & (1 << 16) != 0).then(|| Character {
@@ -902,13 +1044,7 @@ impl BakedScene {
             model: (flags & 1 != 0).then(|| ModelId(rd_u32(d, b + 4))),
             params,
             anim: (flags & 2 != 0).then(|| (ClipId(rd_u32(d, b + 16)), rd_f32(d, b + 20))),
-            collider: shape.map(|shape| Collider {
-                shape,
-                offset: rd_vec3(d, b + 36),
-                trigger: flags & (1 << 15) != 0,
-                layer: u16::from_le_bytes([d[ph], d[ph + 1]]),
-                one_way: d[ph + 2] != 0,
-            }),
+            collider: node_collider(d, at),
             character,
         }
     }
@@ -1176,6 +1312,7 @@ mod tests {
         b.extend_from_slice(&512u16.to_le_bytes());
         f(&mut b, &[30.0]);
         b.extend_from_slice(&[90, 0, 0, 0, 10, 20, 30, 120]);
+        b.extend_from_slice(&[0; 8]); // no physics section (v9)
         assert_eq!(b.len(), TSCN_HEADER + TSCN_ENV_BYTES);
         // name "a/door" @0 (6), tags "door\nx" @6 (6)
         for v in [0u32, 6, 6, 6] {

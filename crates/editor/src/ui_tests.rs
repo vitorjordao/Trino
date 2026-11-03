@@ -4619,6 +4619,48 @@ fn profiler_reports_ab_and_play_attach() {
     leave_temp_project(&repo);
 }
 
+/// Physics per cell in the editor (issue #115): each cell's physics, the
+/// HUD's cells and baked bytes, the loaded mask.
+#[test]
+#[ignore = "changes cwd/env: run alone with --ignored --test-threads=1"]
+fn physics_cells_mask_labels_and_hud() {
+    use crate::app::Cmd;
+    let Some((mut h, _tmp, _repo)) = temp_project_app(egui::vec2(1600.0, 1000.0)) else {
+        return;
+    };
+    h.state_mut()
+        .cmds
+        .push(Cmd::OpenScene(std::path::PathBuf::from(
+            "scenes/interior.scene.ron",
+        )));
+    h.run_steps(6);
+    // Each room's physics, as `physics check` counts it.
+    let cells = crate::viewport::cell_physics(&h.state().resolved);
+    assert_eq!(cells.get(&0), Some(&[1, 0, 0]));
+    assert_eq!(cells.get(&1), Some(&[1, 1, 0]), "room B's floor and pad");
+    assert_eq!(cells.get(&trino_core::vis::NO_CELL), Some(&[4, 0, 0]));
+    // The budget HUD's collision line counts the cells and the baked bytes.
+    let line = crate::budget::collision_line(
+        &h.state().resolved,
+        &h.state().project,
+        trino_scene::Target::N64,
+    )
+    .unwrap();
+    assert!(
+        line.0.contains("3 cells") && line.0.contains("baked "),
+        "{line:?}"
+    );
+    // The loaded mask (Play › Physics cells): everything by default; a
+    // cleared bit unloads that room only.
+    assert_eq!(h.state().physics_cells, u64::MAX);
+    h.state_mut().physics_cells &= !(1 << 1);
+    h.run_steps(2);
+    let mask = h.state().physics_cells;
+    assert!(crate::viewport::cell_loaded(mask, 0));
+    assert!(!crate::viewport::cell_loaded(mask, 1));
+    assert!(crate::viewport::cell_loaded(mask, trino_core::vis::NO_CELL));
+}
+
 /// Physics 2.0 in the editor (issue #66), both ways: the Project ›
 /// Physics page adds a layer and unchecks a pair of the matrix, writing
 /// `assets/physics.ron` (what `cargo xtask physics layers` writes); an

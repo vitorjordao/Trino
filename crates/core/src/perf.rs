@@ -304,6 +304,21 @@ pub const FRAME_30FPS_US: u32 = 33_333;
 /// last slot's totals via [`RenderProfile::other`]).
 pub const MAX_PROFILED_MODELS: usize = 24;
 
+/// Sort models by time, the slowest first (ties keep their order). An
+/// insertion sort: a perf report holds a few dozen models, and
+/// `sort_unstable` compiled 6 KB per caller into the N64's RAM.
+pub fn sort_models(models: &mut [ModelCost]) {
+    for i in 1..models.len() {
+        let m = models[i];
+        let mut j = i;
+        while j > 0 && models[j - 1].us < m.us {
+            models[j] = models[j - 1];
+            j -= 1;
+        }
+        models[j] = m;
+    }
+}
+
 /// Accumulated cost of one model across the profiled frames.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ModelCost {
@@ -448,7 +463,7 @@ impl RenderProfile {
     /// The tracked models, most expensive first.
     pub fn models_by_cost(&self) -> [ModelCost; MAX_PROFILED_MODELS] {
         let mut out = self.models;
-        out[..self.model_count].sort_unstable_by_key(|m| core::cmp::Reverse(m.us));
+        sort_models(&mut out[..self.model_count]);
         out
     }
 

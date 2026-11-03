@@ -67,6 +67,9 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
     f32s(&mut out, &[s.distance]);
     out.extend_from_slice(&[s.softness, 0, 0, 0]);
     rgba(&mut out, s.color);
+    // The physics section's (offset, length), patched at the end (v9).
+    let physics_at = out.len();
+    out.extend_from_slice(&[0; 8]);
     debug_assert_eq!(out.len(), TSCN_HEADER + TSCN_ENV_BYTES);
 
     let mut strings = Vec::new();
@@ -277,8 +280,66 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
         );
         debug_assert_eq!(out.len() - start, TSCN_NODE_BYTES);
     }
+    // Physics (v9, issue #115): every cell's solids, triggers and mesh
+    // colliders, gridded by the core's own code (what a v8 load did).
+    let nodes: Vec<_> = items
+        .iter()
+        .map(|it| it.collider.map(|c| (it.cell, c, it.matrix)))
+        .collect();
+    if let Some(section) = physics_section(&nodes) {
+        let at = strings.len() as u32;
+        strings.extend_from_slice(&section);
+        out[physics_at..physics_at + 4].copy_from_slice(&at.to_le_bytes());
+        out[physics_at + 4..physics_at + 8].copy_from_slice(&(section.len() as u32).to_le_bytes());
+    }
     out.extend_from_slice(&strings);
     (out, resolved.warnings)
+}
+
+/// The physics section of the nodes (per node: its cell, collider and
+/// matrix, `None` without a collider), or `None` without colliders (or when
+/// a cell's grid can't fit; the scene then grids at load).
+pub fn physics_section(
+    nodes: &[Option<(u8, trino_core::Collider, trino_core::Mat34)>],
+) -> Option<Vec<u8>> {
+    use trino_core::physics::{self, CellPart, Solid};
+    if nodes.iter().all(Option::is_none) {
+        return None;
+    }
+    let n = nodes.len();
+    let blank = Solid::new(trino_core::Aabb::EMPTY, 0);
+    let (mut solids, mut sc) = (vec![blank; n], vec![0u8; n]);
+    let (mut triggers, mut tc) = (vec![blank; n], vec![0u8; n]);
+    let mut meshes = vec![(0u8, 0u32); n];
+    let g = physics::gather_nodes(
+        nodes.len(),
+        &|i| nodes[i],
+        &mut solids,
+        &mut sc,
+        &mut triggers,
+        &mut tc,
+        &mut meshes,
+    );
+    solids.truncate(g.solids);
+    sc.truncate(g.solids);
+    triggers.truncate(g.triggers);
+    tc.truncate(g.triggers);
+    meshes.truncate(g.meshes);
+    let mut u16s = vec![0u16; physics::grids_size(&solids, &sc, 0.0)?];
+    let mut parts = vec![
+        CellPart {
+            cell: 0,
+            base: 0,
+            grid: None,
+            trigger_base: 0,
+            triggers: &[],
+        };
+        physics::part_count(&sc, &tc)
+    ];
+    let parts = physics::build_parts(&solids, &sc, &triggers, &tc, 0.0, &mut u16s, &mut parts)?;
+    let mut out = vec![0u8; physics::section_bytes(parts, meshes.len())];
+    physics::write_section(parts, &meshes, &mut out).ok()?;
+    Some(out)
 }
 
 #[cfg(test)]

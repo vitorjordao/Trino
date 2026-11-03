@@ -225,14 +225,15 @@ fn soak_frame(s: &mut GroupSoak, host: &mut WebHost) -> Result<bool, String> {
 /// decoded, pump; then unload them and run the consoles' check on the
 /// downloaded bundles (`Ok(true)` once it passed).
 fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
-    use castle64::selftest::{LEVEL, LEVEL2, REPLAY_GROUP, STRIDER_GROUP};
+    use castle64::selftest::{LEVEL, LEVEL2, PHYSICS_GROUP, REPLAY_GROUP, STRIDER_GROUP};
     use trino_core::LoadState;
     host.pump_groups();
-    let states = [LEVEL, LEVEL2, STRIDER_GROUP, REPLAY_GROUP].map(|g| host.platform.group_state(g));
+    let states = [LEVEL, LEVEL2, STRIDER_GROUP, REPLAY_GROUP, PHYSICS_GROUP]
+        .map(|g| host.platform.group_state(g));
     if states.contains(&LoadState::Failed) {
         return Err("asset groups: a bundle failed to download or decode".into());
     }
-    if states != [LoadState::Ready; 4] {
+    if states != [LoadState::Ready; 5] {
         if frames > GROUP_WAIT_FRAMES {
             return Err(format!(
                 "asset groups: the bundles were not in after {frames} frames ({states:?})"
@@ -246,6 +247,9 @@ fn groups_frame(host: &mut WebHost, frames: u32) -> Result<bool, String> {
     host.platform.unload_group(LEVEL);
     host.platform.unload_group(LEVEL2);
     host.platform.unload_group(STRIDER_GROUP);
+    // The venue `physics cells` times (issue #115): downloaded, then
+    // loaded from memory by the step like the consoles' cartridge.
+    host.platform.unload_group(PHYSICS_GROUP);
     host.pump_groups();
     let t0 = host.platform.now_micros();
     // The soak runs over animation frames next (`soak_frame`).
@@ -352,6 +356,7 @@ impl Run {
                     castle64::selftest::LEVEL2,
                     castle64::selftest::STRIDER_GROUP,
                     castle64::selftest::REPLAY_GROUP,
+                    castle64::selftest::PHYSICS_GROUP,
                 ] {
                     host.platform.load_group(g);
                 }

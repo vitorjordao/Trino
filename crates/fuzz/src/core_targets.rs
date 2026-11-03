@@ -214,6 +214,49 @@ fn draw_mesh(mesh: &Mesh) {
 /// TSCN: every node, its LOD chain and tags, its semantic slots and
 /// outline, the environment, shadows and receivers. `BakedScene` borrows `'static` (console blobs are), so the
 /// input is leaked for the call and freed after every view is gone.
+fn physics_section(view: &trino_core::scene::TscnView) {
+    use trino_core::physics::{self, CellPart, CellWorld, LAYER_ALL, Solid};
+    let blank = Solid::new(trino_core::Aabb::EMPTY, 0);
+    let (mut solids, mut sc) = (vec![blank; 256], vec![0u8; 256]);
+    let (mut triggers, mut tc) = (vec![blank; 64], vec![0u8; 64]);
+    let mut meshes = vec![(0u8, 0u32); 64];
+    let mut u16s = vec![0u16; 1 << 14];
+    let mut parts = vec![
+        CellPart {
+            cell: 0,
+            base: 0,
+            grid: None,
+            trigger_base: 0,
+            triggers: &[],
+        };
+        65
+    ];
+    if let Ok((parts, n)) = physics::load_scene(
+        view,
+        &mut solids,
+        &mut sc,
+        &mut triggers,
+        &mut tc,
+        &mut meshes,
+        &mut u16s,
+        &mut parts,
+    ) {
+        keep(n);
+        if let Some(mut w) = CellWorld::new(parts, &[], &[]) {
+            for mask in [0, u64::MAX] {
+                w.set_loaded(mask);
+                keep(w.raycast(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 100.0, LAYER_ALL));
+                let mut out = [0u16; 8];
+                keep(w.overlap_aabb(
+                    &trino_core::Aabb::new(Vec3::ONE * -50.0, Vec3::ONE * 50.0),
+                    LAYER_ALL,
+                    &mut out,
+                ));
+            }
+        }
+    }
+}
+
 pub fn tscn(data: &[u8]) {
     let leaked: &'static mut [u8] = Box::leak(data.to_vec().into_boxed_slice());
     let ptr: *mut [u8] = leaked;
@@ -245,7 +288,14 @@ pub fn tscn(data: &[u8]) {
                 keep(node.semantic());
                 keep(node.outline());
             }
+            // v9's physics section (issue #115): decoded and queried, and
+            // the v8 path's gather and grid over the same nodes.
+            physics_section(&scene.view());
             keep(scene.find("player"));
+        }
+        // A grouped scene's view (any lifetime).
+        if let Ok(view) = trino_core::scene::TscnView::parse(bytes) {
+            physics_section(&view);
         }
     }
     // Every borrow of `bytes` ended with the block above.

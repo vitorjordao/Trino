@@ -221,7 +221,7 @@ impl NetInput {
     }
 
     /// Any 32 bytes decode (a hostile peer can send anything): unknown
-    /// flag bits are dropped.
+    /// flag bits are dropped, the wheel is held to ±15 notches.
     pub fn from_bytes(b: [u8; NET_INPUT_LEN]) -> NetInput {
         let mut pad = [0u8; NET_PAD_LEN];
         pad.copy_from_slice(&b[..NET_PAD_LEN]);
@@ -242,7 +242,9 @@ impl NetInput {
             }),
             pointer_screen: if present { (b[29] >> 1) & 1 } else { 0 },
             pointer_buttons: b[30],
-            wheel: b[31] as i8,
+            // ±15 notches is what a sender writes; a hostile byte past it
+            // reads as the limit (the `netpad` fuzz target, CI).
+            wheel: (b[31] as i8).clamp(-120, 120),
         }
     }
 }
@@ -295,6 +297,9 @@ mod tests {
         assert_eq!(edge.to_input().stick, Vec2::new(-1.0, -1.0));
         assert_eq!(NetPad::quantize(&edge.to_input()), edge.to_input());
         // Anything decodes.
+        let mut w = [0u8; NET_INPUT_LEN];
+        w[31] = 0x83; // -125 eighths: past what a sender writes
+        assert_eq!(NetInput::from_bytes(w).to_input((320, 240)).wheel, -15.0);
         let junk = NetInput::from_bytes([0xff; NET_INPUT_LEN]);
         assert!(junk.pointer.is_some());
         let _ = junk.to_input((320, 240));

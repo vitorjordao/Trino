@@ -2047,3 +2047,125 @@ int main(void)
     gfxExit();
     return 0;
 }
+
+// ---------------------------------------------------------------------------
+// Local wireless (issue #117): the 3DS's `uds` service (NWM), the transport
+// the lockstep (`trino_core::lockstep`) runs over between two to four 3DS
+// consoles. One network at a time: a host creates it, clients scan for it
+// and join; every node then sends datagrams to another by NetworkNodeID
+// (the host is node 1; seat = node - 1). Every function returns 0 or more
+// on success and a libctru `Result` (negative) on failure.
+
+#define TRINO_UDS_COMM_ID 0x7472696Eu  // 'trin'
+static const char s_uds_pass[] = "trino-lockstep";
+static udsBindContext s_uds_bind;
+static int s_uds_state;  // 0 off, 1 initialized, 2 host, 3 client
+
+int trino_uds_init(void) {
+    if (s_uds_state) {
+        return 0;
+    }
+    Result r = udsInit(0x3000, NULL);
+    if (R_FAILED(r)) {
+        return (int)r;
+    }
+    s_uds_state = 1;
+    return 0;
+}
+
+// Create the network for `players` consoles (this one is node 1).
+int trino_uds_host(u32 players) {
+    if (s_uds_state != 1) {
+        return -1;
+    }
+    udsNetworkStruct net;
+    udsGenerateDefaultNetworkStruct(&net, TRINO_UDS_COMM_ID, 0, (u8)players);
+    Result r = udsCreateNetwork(&net, s_uds_pass, sizeof(s_uds_pass), &s_uds_bind, 1,
+                                UDS_DEFAULT_RECVBUFSIZE);
+    if (R_FAILED(r)) {
+        return (int)r;
+    }
+    s_uds_state = 2;
+    return 0;
+}
+
+// One scan for a Trino network; joins the first found. 1 joined, 0 none
+// seen yet (scan again next frame).
+int trino_uds_join(void) {
+    if (s_uds_state != 1) {
+        return -1;
+    }
+    static u8 scan[0x4000] __attribute__((aligned(4)));
+    udsNetworkScanInfo* nets = NULL;
+    size_t total = 0;
+    memset(scan, 0, sizeof(scan));
+    Result r = udsScanBeacons(scan, sizeof(scan), &nets, &total, TRINO_UDS_COMM_ID, 0, NULL, false);
+    if (R_FAILED(r)) {
+        free(nets);
+        return (int)r;
+    }
+    if (total == 0) {
+        free(nets);
+        return 0;
+    }
+    r = udsConnectNetwork(&nets[0].network, s_uds_pass, sizeof(s_uds_pass), &s_uds_bind,
+                          UDS_BROADCAST_NETWORKNODEID, UDSCONTYPE_Client, 1,
+                          UDS_DEFAULT_RECVBUFSIZE);
+    free(nets);
+    if (R_FAILED(r)) {
+        return (int)r;
+    }
+    s_uds_state = 3;
+    return 1;
+}
+
+// This console's node (high 16 bits) and the nodes connected (low 8 bits).
+int trino_uds_status(void) {
+    udsConnectionStatus st;
+    if (s_uds_state < 2) {
+        return 0;
+    }
+    Result r = udsGetConnectionStatus(&st);
+    if (R_FAILED(r)) {
+        return (int)r;
+    }
+    return (int)(((u32)st.cur_NetworkNodeID << 16) | st.total_nodes);
+}
+
+int trino_uds_send(u32 node, const u8* data, u32 len) {
+    if (s_uds_state < 2) {
+        return -1;
+    }
+    Result r = udsSendTo((u16)node, 1, UDS_SENDFLAG_Default, data, len);
+    return UDS_CHECK_SENDTO_FATALERROR(r) ? (int)r : 0;
+}
+
+// The next datagram (its length, 0 when none) and its sender's node.
+int trino_uds_recv(u8* buf, u32 cap, u16* from) {
+    if (s_uds_state < 2) {
+        return 0;
+    }
+    size_t got = 0;
+    u16 src = 0;
+    Result r = udsPullPacket(&s_uds_bind, buf, cap, &got, &src);
+    if (R_FAILED(r)) {
+        return (int)r;
+    }
+    *from = src;
+    return (int)got;
+}
+
+void trino_uds_exit(void) {
+    if (s_uds_state == 2) {
+        udsDestroyNetwork();
+    } else if (s_uds_state == 3) {
+        udsDisconnectNetwork();
+    }
+    if (s_uds_state >= 2) {
+        udsUnbind(&s_uds_bind);
+    }
+    if (s_uds_state) {
+        udsExit();
+    }
+    s_uds_state = 0;
+}

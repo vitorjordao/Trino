@@ -481,6 +481,27 @@ mod n3ds {
                 return;
             }
         }
+        // The consoles' lockstep (issue #117) on the ARM11, then the local
+        // wireless service it rides on (Azahar emulates `uds`; a failure is
+        // reported, not fatal: no network is joined here).
+        match castle64::selftest::lockstep_checks() {
+            Ok(r) => castle64::selftest::log_lockstep(platform, &r),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                while runtime::running() {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+                return;
+            }
+        }
+        match trino_platform_3ds::uds::init() {
+            Ok(()) => {
+                runtime::log("TRINO_UDS: probe init=ok\n");
+                trino_platform_3ds::uds::exit();
+            }
+            Err(r) => runtime::log(&format!("TRINO_UDS: probe init={r:#x}\n")),
+        }
         runtime::log("TRINO_STEP:showcase demo\n");
         // 0b) Collision from scenes + runtime entities: the showcase demo
         // (editor scene exported to code) plays through every coin to the goal.

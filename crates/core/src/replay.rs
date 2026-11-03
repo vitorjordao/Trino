@@ -25,12 +25,21 @@
 //!
 //! A recording replays from the state its game started in: the header's
 //! [`Header::start_hash`] is the hash before the first frame, and a replay
-//! that starts elsewhere reports `diverged at frame 0`. A *tail* (the last
-//! minute a crash report keeps, [`Header::start_frame`] > 0) has no state to
-//! start from: it is a diagnostic of what the player did, not replayable
-//! from boot.
+//! that starts elsewhere reports `diverged at frame 0`.
 //!
-//! Format (`TREC` v1, little-endian):
+//! **Snapshots (issue #117, `TREC` v2).** A recording may start mid-game:
+//! [`Recorder::begin_from`] stores the game's [`save_state`](crate::Game::save_state)
+//! after the header ([`FLAG_SNAPSHOT`], [`Header::start_frame`] the session
+//! frame it was taken on), and a replay loads it first
+//! ([`Replay::restore`], [`Session::restore`]) and holds the loaded state to
+//! the start hash. The PC's crash tail (`crash-*.trec`) is one, so it
+//! replays to the crash; `TRINO_RECORD_FROM` and `cargo xtask replay cut`
+//! make others. A snapshot is the game's own bytes, so it replays on the
+//! build and target that wrote it (the start hash says when it doesn't:
+//! `diverged at frame 0`). A recording without one is written as v1, byte
+//! for byte as before.
+//!
+//! Format (`TREC` v1, little-endian; v2 adds the snapshot after it):
 //!
 //! | Bytes | Field |
 //! |---|---|
@@ -45,6 +54,7 @@
 //! | 4 | start frame (0: from boot) |
 //! | 4 | frame count (0 with flag 0: read to the end) |
 //! | 8 | start hash (0: none) |
+//! | (v2) 4 + n | the snapshot's length, then its bytes |
 //!
 //! Then one record per frame: a head byte (bit 0 `dt` follows, bit 1 a hash
 //! follows, bit 2 the connected mask follows, bits 4..7 which players
@@ -60,13 +70,21 @@ use crate::players::{MAX_PLAYERS, PlayersInput};
 
 /// `TREC`.
 pub const MAGIC: [u8; 4] = *b"TREC";
-/// The format version this build writes and reads.
+/// The format version of a recording that starts from boot (this build
+/// writes it whenever there is no snapshot, and reads it).
 pub const VERSION: u16 = 1;
-/// Bytes before the first frame.
+/// The version of a recording that starts from a snapshot (issue #117).
+pub const VERSION_SNAPSHOT: u16 = 2;
+/// Bytes of the header (a snapshot follows it in v2).
 pub const HEADER_LEN: usize = 36;
 
 /// Header flag: the frame count is final (the recording was finished).
 pub const FLAG_FINISHED: u16 = 1;
+/// Header flag: a snapshot of the game follows the header (v2 only).
+pub const FLAG_SNAPSHOT: u16 = 2;
+/// The largest snapshot a reader accepts (a hostile file can't make a
+/// replay copy more).
+pub const MAX_SNAPSHOT: usize = 16 << 20;
 
 /// The recording's header.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -134,8 +152,12 @@ impl Header {
         let u32_at =
             |i: usize| u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
         let version = u16_at(4);
-        if version != VERSION {
+        if version != VERSION && version != VERSION_SNAPSHOT {
             return Err(ReplayError::Version(version));
+        }
+        // A v2 recording has a snapshot, a v1 never.
+        if (u16_at(6) & FLAG_SNAPSHOT != 0) != (version == VERSION_SNAPSHOT) {
+            return Err(ReplayError::Corrupt);
         }
         let players = bytes[16];
         if players == 0 || players as usize > MAX_PLAYERS {
@@ -160,6 +182,33 @@ impl Header {
     pub fn finished(&self) -> bool {
         self.flags & FLAG_FINISHED != 0
     }
+
+    /// Does a snapshot follow the header (a mid-game start)?
+    pub fn has_snapshot(&self) -> bool {
+        self.flags & FLAG_SNAPSHOT != 0
+    }
+}
+
+/// A recording's snapshot (v2) and where its frames start.
+fn snapshot_of(
+    header: &Header,
+    bytes: &[u8],
+) -> Result<(Option<(usize, usize)>, usize), ReplayError> {
+    if !header.has_snapshot() {
+        return Ok((None, HEADER_LEN));
+    }
+    let len = bytes
+        .get(HEADER_LEN..HEADER_LEN + 4)
+        .ok_or(ReplayError::Truncated)?;
+    let len = u32::from_le_bytes([len[0], len[1], len[2], len[3]]) as usize;
+    if len > MAX_SNAPSHOT {
+        return Err(ReplayError::Corrupt);
+    }
+    let start = HEADER_LEN + 4;
+    if bytes.len() < start + len {
+        return Err(ReplayError::Truncated);
+    }
+    Ok((Some((start, len)), start + len))
 }
 
 /// Why a recording can't be read or replayed.
@@ -552,6 +601,23 @@ impl Recorder {
         }
     }
 
+    /// Start from a snapshot (issue #117): `header` (its `start_frame` the
+    /// session frame `state` was taken on, its `start_hash` the game's hash
+    /// then) becomes v2 with [`FLAG_SNAPSHOT`], and `state` (the game's
+    /// [`save_state`](crate::Game::save_state)) follows it.
+    pub fn begin_from(header: Header, state: &[u8], sink: &mut dyn Sink) -> Recorder {
+        let header = Header {
+            version: VERSION_SNAPSHOT,
+            flags: header.flags | FLAG_SNAPSHOT,
+            ..header
+        };
+        let mut rec = Recorder::begin(header, sink);
+        sink.put(&(state.len() as u32).to_le_bytes());
+        sink.put(state);
+        rec.bytes += 4 + state.len();
+        rec
+    }
+
     pub fn header(&self) -> &Header {
         &self.header
     }
@@ -668,6 +734,7 @@ pub struct Frame {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Cursor {
     header: Header,
+    frames_at: usize,
     at: usize,
     cur: PlayersInput,
     dt: f32,
@@ -679,6 +746,9 @@ pub struct Cursor {
 pub struct Reader<'a> {
     header: Header,
     bytes: &'a [u8],
+    /// Where the first frame starts (after a snapshot).
+    frames_at: usize,
+    snapshot: Option<(usize, usize)>,
     at: usize,
     cur: PlayersInput,
     dt: f32,
@@ -688,10 +758,13 @@ pub struct Reader<'a> {
 impl<'a> Reader<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<Reader<'a>, ReplayError> {
         let header = Header::parse(bytes)?;
+        let (snapshot, frames_at) = snapshot_of(&header, bytes)?;
         Ok(Reader {
             header,
             bytes,
-            at: HEADER_LEN,
+            frames_at,
+            snapshot,
+            at: frames_at,
             cur: PlayersInput::NONE,
             dt: 0.0,
             index: 0,
@@ -700,6 +773,11 @@ impl<'a> Reader<'a> {
 
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// The game state a mid-game recording starts from (v2).
+    pub fn snapshot(&self) -> Option<&'a [u8]> {
+        self.snapshot.map(|(at, n)| &self.bytes[at..at + n])
     }
 
     /// Frames decoded so far.
@@ -712,6 +790,7 @@ impl<'a> Reader<'a> {
     pub fn cursor(&self) -> Cursor {
         Cursor {
             header: self.header,
+            frames_at: self.frames_at,
             at: self.at,
             cur: self.cur,
             dt: self.dt,
@@ -724,6 +803,8 @@ impl<'a> Reader<'a> {
         Reader {
             header: cursor.header,
             bytes,
+            frames_at: cursor.frames_at,
+            snapshot: snapshot_of(&cursor.header, bytes).ok().and_then(|s| s.0),
             at: cursor.at,
             cur: cursor.cur,
             dt: cursor.dt,
@@ -733,7 +814,7 @@ impl<'a> Reader<'a> {
 
     /// Back to the first frame.
     pub fn rewind(&mut self) {
-        self.at = HEADER_LEN;
+        self.at = self.frames_at;
         self.cur = PlayersInput::NONE;
         self.dt = 0.0;
         self.index = 0;
@@ -921,6 +1002,26 @@ impl<'a> Replay<'a> {
         self.reader.position()
     }
 
+    /// The snapshot a mid-game recording starts from.
+    pub fn snapshot(&self) -> Option<&'a [u8]> {
+        self.reader.snapshot()
+    }
+
+    /// Load the recording's snapshot into `game` (issue #117; before
+    /// [`start`](Self::start)). True when there is none, or the game took
+    /// it; false when the game refused it (another build's or target's
+    /// state, or a game whose snapshots don't leave their process:
+    /// [`Game::portable_state`](crate::Game::portable_state)), and
+    /// [`start`](Self::start) will then report the start.
+    pub fn restore(&mut self, game: &mut dyn crate::Game) -> bool {
+        match self.reader.snapshot() {
+            None => true,
+            // A game whose snapshots hold addresses never loads one from a
+            // file (`Game::portable_state`).
+            Some(state) => game.portable_state() && game.load_state(state),
+        }
+    }
+
     /// Compare the fresh game's state with the recording's start hash
     /// (nothing to compare when either has none).
     pub fn start(&mut self, game: &dyn crate::Game) -> Check {
@@ -1035,6 +1136,18 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// Record into `sink` from a snapshot of the game (issue #117,
+    /// [`Recorder::begin_from`]): `header`'s `start_frame` and `start_hash`
+    /// say where and what it was.
+    pub fn record_from(header: Header, state: &[u8], sink: &mut dyn Sink) -> Session<'a> {
+        Session {
+            mode: SessionMode::Record {
+                rec: Recorder::begin_from(header, state, sink),
+                hashes: 0,
+            },
+        }
+    }
+
     /// Replay `bytes`, a recording of `game`, stopping after `until`
     /// frames when given.
     pub fn replay(
@@ -1072,12 +1185,26 @@ impl<'a> Session<'a> {
         matches!(self.mode, SessionMode::Record { .. })
     }
 
+    /// A replay of a mid-game recording loads its snapshot into `game`
+    /// ([`Replay::restore`]); call it before [`start`](Self::start). True
+    /// for anything else.
+    pub fn restore(&mut self, game: &mut dyn crate::Game) -> bool {
+        match &mut self.mode {
+            SessionMode::Replay { replay, .. } => replay.restore(game),
+            _ => true,
+        }
+    }
+
     /// The game before its first frame. Recording: the header with its
     /// start hash (write it over the sink's first bytes). Replay: the start
     /// state is compared (a different start is `diverged at frame 0`).
     pub fn start(&mut self, game: &dyn crate::Game) -> Option<[u8; HEADER_LEN]> {
         match &mut self.mode {
             SessionMode::Live => None,
+            SessionMode::Record { rec, .. } if rec.header.has_snapshot() => {
+                // The snapshot's hash, set when it was taken.
+                Some(rec.header.to_bytes())
+            }
             SessionMode::Record { rec, .. } => {
                 rec.header.start_hash = game.state_hash().unwrap_or(0);
                 Some(rec.header.to_bytes())
@@ -1544,6 +1671,25 @@ mod tests {
         fn state_hash(&self) -> Option<u64> {
             Some(*StateHasher::new().u64(self.sum).f32(self.dt)).map(|h| h.value())
         }
+        fn state_size(&self) -> usize {
+            12
+        }
+        fn save_state(&self, out: &mut [u8]) -> Option<usize> {
+            out.get_mut(..8)?.copy_from_slice(&self.sum.to_le_bytes());
+            out.get_mut(8..12)?.copy_from_slice(&self.dt.to_le_bytes());
+            Some(12)
+        }
+        fn portable_state(&self) -> bool {
+            true
+        }
+        fn load_state(&mut self, b: &[u8]) -> bool {
+            if b.len() != 12 {
+                return false;
+            }
+            self.sum = u64::from_le_bytes(b[..8].try_into().unwrap());
+            self.dt = f32::from_le_bytes(b[8..12].try_into().unwrap());
+            true
+        }
     }
 
     struct Fake {
@@ -1628,5 +1774,89 @@ mod tests {
         let mut replay = Replay::new(&bytes, "summer").unwrap();
         assert!(matches!(replay.start(&g), Check::Diverged { .. }));
         assert_eq!(replay.diverged.unwrap().frame, 0);
+    }
+
+    /// Issue #117: a recording that starts from a mid-game snapshot (v2)
+    /// replays to the same end as the whole run; one without a snapshot is
+    /// still v1, byte for byte; a snapshot the game refuses or a damaged
+    /// length is an error, not a panic.
+    #[test]
+    fn a_snapshot_recording_replays_from_the_middle() {
+        let s = session(30);
+        let whole = recorded_game(&s);
+        assert_eq!(Header::parse(&whole).unwrap().version, VERSION);
+        // Play 12 frames, snapshot, record the other 18 from there.
+        let mut g = Summer { sum: 0, dt: 0.0 };
+        for (p, dt) in &s[..12] {
+            crate::Game::update(&mut g, &p.players[0], &mut Mute, *dt);
+        }
+        let mut state = [0u8; 12];
+        let n = crate::Game::save_state(&g, &mut state).unwrap();
+        let mut header = Header::new("summer", (320, 240), 2, 1);
+        header.start_frame = 12;
+        header.start_hash = crate::Game::state_hash(&g).unwrap();
+        let mut out = std::vec::Vec::new();
+        let mut sink = |b: &[u8]| out.extend_from_slice(b);
+        let mut session_rec = Session::record_from(header, &state[..n], &mut sink);
+        assert_eq!(session_rec.start(&g).map(|h| h[..4] == MAGIC), Some(true));
+        for (p, dt) in &s[12..] {
+            crate::Game::update(&mut g, &p.players[0], &mut Mute, *dt);
+            session_rec.after(&g, p, *dt, &mut sink);
+        }
+        let head = session_rec.finish_header().unwrap();
+        out[..HEADER_LEN].copy_from_slice(&head);
+        let end = crate::Game::state_hash(&g).unwrap();
+        let h = Header::parse(&out).unwrap();
+        assert_eq!(
+            (h.version, h.has_snapshot(), h.start_frame, h.frames),
+            (2, true, 12, 18)
+        );
+        assert_eq!(Reader::new(&out).unwrap().snapshot(), Some(&state[..]));
+        // A fresh game replays it: restored, the start matches, the end too.
+        let mut fresh = Summer { sum: 0, dt: 0.0 };
+        let mut fake = Fake {
+            hosted: crate::HostedPlayers::new(),
+        };
+        let mut replay = Session::replay(&out, "summer", None).unwrap();
+        assert!(replay.restore(&mut fresh));
+        replay.start(&fresh);
+        let mut frames = 0;
+        while let Some((p, dt)) = replay.input(&PlayersInput::NONE, 0.0) {
+            crate::Game::update_with(&mut fresh, &mut fake, &p.players[0], &mut Mute, dt);
+            replay.after(&fresh, &p, dt, &mut |_: &[u8]| {});
+            frames += 1;
+        }
+        assert_eq!(frames, 18);
+        let r = replay.replay_state().unwrap();
+        assert_eq!((r.diverged, r.checked, r.last_hash), (None, 18, Some(end)));
+        // Without the restore the start differs: diverged at frame 0.
+        let mut skip = Replay::new(&out, "summer").unwrap();
+        assert!(matches!(
+            skip.start(&Summer { sum: 0, dt: 0.0 }),
+            Check::Diverged { .. }
+        ));
+        // A game that refuses the snapshot says so.
+        let mut short = out.clone();
+        short[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&11u32.to_le_bytes());
+        short.remove(HEADER_LEN + 4);
+        let mut r = Replay::new(&short, "summer").unwrap();
+        assert!(!r.restore(&mut Summer { sum: 0, dt: 0.0 }));
+        // Damaged lengths and flags.
+        let mut huge = out.clone();
+        huge[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Reader::new(&huge).unwrap_err(), ReplayError::Corrupt);
+        assert_eq!(
+            Reader::new(&out[..HEADER_LEN + 6]).unwrap_err(),
+            ReplayError::Truncated
+        );
+        let mut v1_flag = whole.clone();
+        v1_flag[6] |= FLAG_SNAPSHOT as u8;
+        assert_eq!(Reader::new(&v1_flag).unwrap_err(), ReplayError::Corrupt);
+        // Rewinding starts at the first frame, after the snapshot.
+        let mut r = Reader::new(&out).unwrap();
+        let first = r.next_frame().unwrap().unwrap();
+        r.next_frame();
+        r.rewind();
+        assert_eq!(r.next_frame().unwrap().unwrap(), first);
     }
 }

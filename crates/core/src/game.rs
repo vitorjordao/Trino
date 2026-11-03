@@ -71,6 +71,21 @@ pub trait Game {
         false
     }
 
+    /// May a [`save_state`](Self::save_state) snapshot leave its process
+    /// (issue #117)? Written to a file and loaded by another process of
+    /// the same build: the PC's crash tail, `TRINO_RECORD_FROM`, `cargo
+    /// xtask replay cut` (`TREC` v2). True only when the snapshot carries
+    /// no address — no `&'static` into a blob or the binary, which ASLR
+    /// moves between runs — and [`load_state`](Self::load_state) keeps
+    /// what belongs to the loading process and its host (its blob borrows,
+    /// its save policy, the player's settings, the screen). `false` (the
+    /// default): snapshots stay in their process (rollback, the editor's
+    /// scrubber), the crash tail records input only, and a replay refuses
+    /// a recording that starts from a snapshot.
+    fn portable_state(&self) -> bool {
+        false
+    }
+
     /// Turn a save an older version of the game wrote into the current
     /// version, in place (issue #68): `data[..len]` holds version `from`'s
     /// bytes (0 = a save from before the game tagged its versions); return

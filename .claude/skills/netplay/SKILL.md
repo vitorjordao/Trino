@@ -1,6 +1,6 @@
 ---
 name: netplay
-description: Local multiplayer, input recordings/replays and rollback netplay in Trino — `Platform::players` (seats, the N64's four ports, PC/Web pads, `Join`, per-player bindings), `TREC` recordings (`TRINO_RECORD`/`TRINO_REPLAY`, `?record`/`?replay=`, the consoles' debug channel, `cargo xtask replay dump|run|check`, the `replay` self-test gate, the crash report's input tail), `Game::state_hash`/`save_state`/`load_state`, `trino-net` (ggrs rollback over UDP, WebRTC and a simulated network, the lobby, `TRINO_NET`, `cargo xtask net`), the editor's Play here record/replay/scrubber and Net tab, and the determinism traps. Use for "two players", "split screen input", "record/replay a session", "a replay diverged", "desync", "online", "rollback", "netcode", "lobby", "lockstep".
+description: Local multiplayer, input recordings/replays and netplay in Trino — `Platform::players` and `local_seats` (seats, the N64's four ports, PC/Web pads, `Join`, per-player bindings, whose seat this machine plays online), `TREC` recordings (`TRINO_RECORD`/`TRINO_REPLAY`, `TRINO_RECORD_FROM`, v2 snapshots, `?record`/`?replay=`, the consoles' debug channel, `cargo xtask replay dump|run|cut|check`, `replay run --device` on real consoles, the `replay` self-test gate, the replayable crash tail), `Game::state_hash`/`save_state`/`load_state`/`portable_state`, `trino-net` (ggrs rollback over UDP, WebRTC and a simulated network; spectators; 2–4 peers; the lobby with its fingerprint check, NAT hole punching and relay; `NetInput` keys/pointer; `TRINO_NET`, `cargo xtask net local|web|3ds|lobby`), the consoles' delay lockstep (`trino_core::lockstep`) over the 3DS's local wireless (`uds`, two Azahar instances), the editor's Play here record/replay/scrubber and Net tab, and the determinism traps. Use for "two players", "split screen input", "record/replay a session", "a replay diverged", "desync", "online", "rollback", "netcode", "lobby", "NAT", "relay", "spectator", "lockstep", "local wireless", "uds", "crash replay".
 ---
 
 # netplay: players, recordings, online play
@@ -37,6 +37,12 @@ Players, recordings and netplay.
   4. passes `players.players[0]` as the update's input.
 
   A platform without `hosted_players` reports `PlayersInput::NONE` (nobody).
+- **Whose seat is this machine's** (issue #117): `platform.local_seats()`, a bit per
+  seat, never empty. Locally every connected seat; online only this machine's
+  (`HostedPlayers::publish_net`); a spectator the seat it follows. A shared camera or
+  HUD follows `trino_core::first_seat(mask)`. **Presentation only:** keep it out of
+  `state_hash` and out of anything the sim reads, or the peers desync by design.
+  Solid Eleven's HUD guides read `Session::viewer` (left out of its hash).
 
 ## Recordings and replays
 
@@ -91,8 +97,28 @@ Players, recordings and netplay.
   N64/3DS hosts and in the Web self-test. After a sim change, run `cargo test -p
   solid-eleven write_two_player_recording -- --ignored`
   (`the_two_player_recording_is_fresh_and_replays` fails on a stale file).
-- **Crash reports:** the runner writes `crash-*.trec` (the last 3 600 frames) beside the
-  report. It is a tail, so it doesn't replay from boot; read it with `dump`.
+- **Recordings from a snapshot (`TREC` v2, issue #117):** the game's `save_state`
+  follows the header, and `Session::restore` / `Replay::restore` load it before `start`.
+  Make one with `TRINO_RECORD_FROM=<frame>` (with `TRINO_RECORD`) or `cargo xtask replay
+  cut <file> --from N --out <cut>`. A recording without a snapshot is still v1, byte for
+  byte (the console re-recordings compare against the fixtures).
+- **A snapshot leaves its process only for a game with `Game::portable_state()`**
+  (default `false`): raw snapshots (`save_raw`) hold `&'static` borrows of blobs and of
+  the binary, and ASLR moves both between runs. castle64 opts in. Its `load_state` keeps
+  its own `HostLocal` fields (blob borrows, captions, services, the player's settings,
+  the screen, the save policy), so a replay never writes progress. Solid Eleven doesn't
+  opt in (its UI and kick tables hold static borrows): its tails stay v1 and `replay cut`
+  refuses it. A new game opting in lists its process-local fields the same way and gets
+  a test like castle64's `a_snapshot_brings_the_sim_and_keeps_the_hosts_state`.
+- **Crash reports:** the runner writes `crash-*.trec` beside the report. For a portable
+  game the tail starts from the oldest snapshot still in its last-minute ring (snapshots
+  at the start and every 30 s, a hash every second), so `TRINO_REPLAY=crash-….trec`
+  replays to the crash on that build. Otherwise it is input only (a v1 tail: `dump` it).
+- **On real consoles:** `cargo xtask replay run <file> --platform n64|3ds --device
+  sc64|everdrive|network [--ip IP] [--no-build]` builds the image with `replay.trec` and
+  deploys it. The loader's log is followed under `script` (a pty) until the
+  `TRINO_REPLAY` verdict. Never pipe a loader: its unflushed stdio arrives in 4 KB
+  blocks. Snapshot recordings are refused: they are the PC's.
 
 ## Netplay (`trino-net`)
 
@@ -114,9 +140,36 @@ Players, recordings and netplay.
     examples/solid-eleven/assets/shared/replays/two_players.trec --frames 900` and
     `cargo xtask net web`. Each instance plays its seat of the recording and both print
     `TRINO_NET_HASH:760:<hash>`. PC and wasm agree: `0xaeadc42f3bbe07f9` today.
-- **What crosses the wire** is a `NetPad`: the 16 buttons, both sticks (1/127), the
-  triggers (1/255), the pad flag. The local seat sees its own input quantized the same
-  way. The keyboard, the pointer and the wheel don't cross.
+- **What crosses the wire** is a `NetInput` (32 bytes): a `NetPad` (the 16 buttons, both
+  sticks at 1/127, the triggers at 1/255, the pad flag), then the keyboard, the pointer,
+  its buttons and the wheel, but only when the sender opts in (`[net] keys = true`,
+  `pointer = true`, `TRINO_NET_KEYS/POINTER`, `?net_keys/?net_pointer`).
+  - Receivers decode whatever arrives, so a mismatch there can't desync.
+  - The pointer crosses as a fraction of the sender's screen and arrives in `[net]
+    pointer_space` units (default 320×240) on every peer: a game reads it in those units
+    online.
+  - The local seat sees its own input quantized the same way. `NetPad::from_bytes`
+    reads a hostile −128 axis as −127 (a fuzz find).
+- **Spectators and 2–4 peers:** `NetSession::with_spectators` on seat 0,
+  `NetSession::spectate` on the watcher (confirmed frames only: no rollbacks; `follow`
+  picks its view). Lobby `WATCH <code> <players>` seats them after the players, before
+  the room fills. A late spectator isn't supported (ggrs fixes them at build time).
+  - PC: `TRINO_NET=watch:<code>@<lobby>` or `watch:<host>` (`TRINO_NET_FOLLOW=2`).
+  - Web: `?net_watch&net_follow=2`.
+  - `cargo xtask net local --watch`.
+- **NAT traversal (`udp::meet`):** peers are seats (`PeerAddr::Room`).
+  - Direct once both hear each other: `0xA9` datagrams carry an "I hear you" flag, and
+    hellos go every 100 ms to the public and LAN candidates.
+  - Through the lobby's relay otherwise (`0xAA`).
+  - `TRINO_NET_ROUTE=auto|direct|relay`. The `TRINO_NET:` line ends with `routes=[2:direct]`.
+  - Only symmetric against port-restricted or symmetric NATs needs the relay
+    (`natsim::NatKind::punches_with`, proved by `crates/net/tests/nat.rs` over a
+    simulated Internet).
+  - `cargo xtask net local --lobby --route relay --watch` runs the real binary through
+    the real relay. `docker/lobby` packages the server; nothing public runs it.
+- **The settings fingerprint:** `NetConfig::fingerprint()` (mode, window, delay,
+  players, fps, desync interval, pointer space) rides on every `JOIN`, and the lobby
+  refuses a mismatch with both values. ggrs checks none of it and would just desync.
 - **Modes:** `rollback` (default: 8-frame window, 2 frames of input delay) or `delay`
   (lockstep, prediction window 0; no snapshots needed). Set in `trino.toml [net]`, `cargo
   xtask net config set net.mode=delay`, or the editor's Net tab.
@@ -162,6 +215,40 @@ The football template's console self-tests log `TRINO_ROLLBACK:` through
 | N64 (ares) | 34.6 KB | 3.4 ms | 3.3 ms | 4.2 ms | 64.6 ms |
 | 3DS (Azahar) | 34.6 KB | 0.13 ms | 0.13 ms | 1.37 ms | 12.1 ms |
 
-Azahar doesn't time the 3DS's clocks: the old and the New 3DS read alike there. A 3DS
-local-wireless session would be delay-based (one update a frame). The `uds` transport
-is not written (BACKLOG P2 #20).
+Azahar doesn't time the 3DS's clocks: the old and the New 3DS read alike there, so the
+3DS plays local wireless in delay-based lockstep (one update a frame).
+
+## Consoles: lockstep over local wireless (issue #117)
+
+- **`trino_core::lockstep::Lockstep`** is `no_std`, does no I/O and allocates nothing.
+  The 3DS can't use `trino-net`/ggrs (`build-std=core,alloc`). Per host frame:
+  1. `receive` what arrived;
+  2. `poll(now)` (silent peers leave);
+  3. `add_local(input)`;
+  4. `advance()` → `Some(players)`: play that frame and `note_hash`;
+  5. send `packet(to)` to every peer.
+
+  Packets repeat every unacknowledged input, so losses cost nothing. A differing hash →
+  `LockState::Desynced`. Solid Eleven in lockstep reaches ggrs's rollback hash
+  (`crates/net/tests/lockstep.rs`).
+- **3DS `uds`:** `trino_platform_3ds::uds` over the shim's `trino_uds_*`.
+  - A RomFS `/uds` file (`host 2 delay=4 hash_at=600`, or `join 2`) makes
+    `N3dsHost::run_named` meet and play the whole run in lockstep. `/uds_script` (a
+    `.trec`) plays this console's seat of a recording.
+  - Stage them with `TRINO_UDS="host 2 …" TRINO_UDS_SCRIPT=<file> cargo xtask
+    build|run 3ds`.
+  - On hardware: two units, `run 3ds --device network` each (not run yet).
+- **Two Azahar instances:** `cargo xtask net 3ds [--docker <image>]` (Linux) builds both
+  apps and runs `tools/uds-test/two-azahar.sh` under Xvfb + openbox + xdotool.
+  - The script creates an unlisted room on A.
+  - It renames B's console (a room refuses a second "AZAHAR", the name every fresh
+    Azahar has) and regenerates its MAC.
+  - It direct-connects B, then checks that both print the same `TRINO_NET_HASH`.
+  - castle64 at frame 600: `0x94fa2260aa5f5154`, equal to the PC's lockstep
+    (`replay_gate.rs::castle64_in_lockstep_ends_where_the_two_azahar_consoles_did`).
+  - Keyboard shortcuts reach Azahar only with a window manager running: without one,
+    use clicks.
+- **The `lockstep` self-test step** (PC, Azahar, the browsers; not the N64, which has no
+  network and a thin heap) ends on `castle64::selftest::LOCKSTEP_HASH`. `test 3ds|web`
+  hold the line to it. A change to `Lockstep`'s rules or to the step's mixing re-pins
+  that hash, on purpose.

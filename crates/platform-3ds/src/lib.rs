@@ -54,6 +54,8 @@ mod stereo;
 #[cfg(target_os = "horizon")]
 mod system;
 #[cfg(any(target_os = "horizon", test))]
+pub mod uds;
+#[cfg(any(target_os = "horizon", test))]
 pub mod worker;
 
 #[cfg(target_os = "horizon")]

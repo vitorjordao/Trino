@@ -2,23 +2,33 @@
 //! [`Game`](trino_core::Game) through the engine's own contract.
 //!
 //! Each host frame, [`NetSession::frame`] polls the network, hands ggrs
-//! this machine's input (quantized: [`NetPad`]) and runs what ggrs asks:
+//! this machine's input (quantized: [`NetInput`]) and runs what ggrs asks:
 //! save the game's state (with its [`state_hash`](trino_core::Game::state_hash)
 //! as the checksum the peers compare), load an older one (a rollback), and
 //! advance with every player's input — published as the platform's
-//! [`PlayersInput`] before each update, with a fixed `dt`. Simulated-again
-//! frames play no sound: only a frame past the newest one already played
-//! hears the game's audio (a batch may re-simulate without a new frame).
+//! [`PlayersInput`] before each update, with a fixed `dt`, and with this
+//! machine's seat as [`Platform::local_seats`](trino_core::Platform::local_seats).
+//! Simulated-again frames play no sound: only a frame past the newest one
+//! already played hears the game's audio (a batch may re-simulate without a
+//! new frame).
+//!
+//! A session has 2–4 players, each on their own machine, and any number of
+//! **spectators** (issue #117): a seat-0 host built with
+//! [`NetSession::with_spectators`] sends every confirmed input to them, and
+//! a spectator ([`NetSession::spectate`]) plays the match from those inputs
+//! without sending any (no rollback: it only ever sees confirmed frames).
 
 use core::net::SocketAddr;
 use std::time::Duration;
 
 use ggrs::{
     Config, DesyncDetection, GgrsError, GgrsEvent, GgrsRequest, InputStatus, NonBlockingSocket,
-    P2PSession, PlayerType, PredictRepeatLast, SessionBuilder, SessionState,
+    P2PSession, PlayerType, PredictRepeatLast, SessionBuilder, SessionState, SpectatorSession,
 };
 use serde::{Deserialize, Serialize};
-use trino_core::{Audio, Game, InputState, NET_PAD_LEN, NetPad, Platform, PlayersInput};
+use trino_core::{
+    Audio, Game, InputState, NET_INPUT_LEN, NetExtras, NetInput, Platform, PlayersInput,
+};
 
 use crate::config::NetConfig;
 
@@ -31,11 +41,18 @@ pub enum PeerAddr {
     Udp(SocketAddr),
     /// A WebRTC data channel, by the lobby's peer number (the Web).
     Rtc(u16),
+    /// A member of a lobby room by its seat (spectators after the players;
+    /// issue #117): the UDP socket sends it directly once both sides hear
+    /// each other, through the lobby's relay until then
+    /// ([`crate::udp::meet`]).
+    Room(u16),
 }
 
-/// What crosses the network per player and frame: a [`NetPad`]'s bytes.
+/// What crosses the network per player and frame: a [`NetInput`]'s bytes
+/// (a pad-only game leaves 23 of them zero, which ggrs's delta encoding
+/// sends as almost nothing).
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
-pub struct Wire(pub [u8; NET_PAD_LEN]);
+pub struct Wire(pub [u8; NET_INPUT_LEN]);
 
 /// The engine's ggrs configuration.
 #[derive(Debug)]
@@ -90,9 +107,14 @@ impl Audio for Mute {
     fn set_master_volume(&mut self, _: f32) {}
 }
 
-/// One peer's session.
+enum Inner {
+    Play(Box<P2PSession<TrinoGgrs>>),
+    Watch(Box<SpectatorSession<TrinoGgrs>>),
+}
+
+/// One peer's session (a player's or a spectator's).
 pub struct NetSession {
-    p2p: P2PSession<TrinoGgrs>,
+    inner: Inner,
     local: usize,
     input_delay: u8,
     players: usize,
@@ -104,6 +126,14 @@ pub struct NetSession {
     last: PlayersInput,
     remote: Option<PeerAddr>,
     clock: FrameClock,
+    /// What this machine shares, its screen (the pointer's units) and the
+    /// space a shared pointer arrives in.
+    extras: NetExtras,
+    screen: (u16, u16),
+    space: (u16, u16),
+    /// The seats a spectator's view follows (`local_seats`).
+    follow: u8,
+    spectators: usize,
 }
 
 /// Where the game is in ggrs's frame numbers, and the newest frame it
@@ -124,16 +154,24 @@ impl NetSession {
         peers: &[(usize, PeerAddr)],
         socket: impl NonBlockingSocket<PeerAddr> + 'static,
     ) -> Result<NetSession, String> {
+        NetSession::with_spectators(cfg, local, peers, &[], socket)
+    }
+
+    /// [`new`](Self::new) with spectators this peer sends every confirmed
+    /// input to (issue #117). One peer serves them (the lobby gives them to
+    /// seat 0); they never slow the players down beyond their bandwidth.
+    pub fn with_spectators(
+        cfg: &NetConfig,
+        local: usize,
+        peers: &[(usize, PeerAddr)],
+        spectators: &[PeerAddr],
+        socket: impl NonBlockingSocket<PeerAddr> + 'static,
+    ) -> Result<NetSession, String> {
         let players = cfg.players.clamp(2, trino_core::MAX_PLAYERS as u8) as usize;
         let e = |e: GgrsError| e.to_string();
-        let mut b = SessionBuilder::<TrinoGgrs>::new()
-            .with_num_players(players)
-            .map_err(e)?
+        let mut b = builder(cfg, players)?
             .with_max_prediction_window(cfg.prediction())
             .with_input_delay(cfg.input_delay as usize)
-            .with_fps(cfg.fps as usize)
-            .map_err(e)?
-            .with_disconnect_timeout(Duration::from_millis(cfg.disconnect_ms as u64))
             .with_desync_detection_mode(if cfg.desync_every == 0 {
                 DesyncDetection::Off
             } else {
@@ -146,20 +184,72 @@ impl NetSession {
         for (seat, addr) in peers {
             b = b.add_player(PlayerType::Remote(*addr), *seat).map_err(e)?;
         }
+        for (k, addr) in spectators.iter().enumerate() {
+            b = b
+                .add_player(PlayerType::Spectator(*addr), players + k)
+                .map_err(e)?;
+        }
         let p2p = b.start_p2p_session(socket).map_err(e)?;
-        Ok(NetSession {
-            p2p,
+        Ok(NetSession::wrap(
+            Inner::Play(Box::new(p2p)),
+            cfg,
+            local,
+            peers.first().map(|p| p.1),
+            spectators.len(),
+        ))
+    }
+
+    /// Watch a session whose `host` serves this machine as a spectator
+    /// (issue #117). The game advances on confirmed inputs only, catching
+    /// up two frames at a time when it falls more than 8 behind; the view
+    /// follows seat 0 ([`follow`](Self::follow) changes it).
+    pub fn spectate(
+        cfg: &NetConfig,
+        host: PeerAddr,
+        socket: impl NonBlockingSocket<PeerAddr> + 'static,
+    ) -> Result<NetSession, String> {
+        let players = cfg.players.clamp(2, trino_core::MAX_PLAYERS as u8) as usize;
+        let e = |e: GgrsError| e.to_string();
+        let watch = builder(cfg, players)?
+            .with_max_frames_behind(8)
+            .map_err(e)?
+            .with_catchup_speed(2)
+            .map_err(e)?
+            .start_spectator_session(host, socket);
+        Ok(NetSession::wrap(
+            Inner::Watch(Box::new(watch)),
+            cfg,
+            usize::MAX,
+            Some(host),
+            0,
+        ))
+    }
+
+    fn wrap(
+        inner: Inner,
+        cfg: &NetConfig,
+        local: usize,
+        remote: Option<PeerAddr>,
+        spectators: usize,
+    ) -> NetSession {
+        NetSession {
+            inner,
             local,
             input_delay: cfg.input_delay,
-            players,
+            players: cfg.players.clamp(2, trino_core::MAX_PLAYERS as u8) as usize,
             dt: cfg.dt(),
             state: NetState::Synchronizing { count: 0, total: 0 },
             stats: NetStats::default(),
             skip: 0,
             last: PlayersInput::NONE,
-            remote: peers.first().map(|p| p.1),
+            remote,
             clock: FrameClock::default(),
-        })
+            extras: cfg.extras,
+            screen: cfg.pointer_space,
+            space: cfg.pointer_space,
+            follow: 1,
+            spectators,
+        }
     }
 
     pub fn state(&self) -> NetState {
@@ -170,9 +260,43 @@ impl NetSession {
         self.stats
     }
 
-    /// The seat this machine plays.
+    /// The seat this machine plays (`usize::MAX` for a spectator).
     pub fn local_seat(&self) -> usize {
         self.local
+    }
+
+    /// Is this machine only watching?
+    pub fn is_spectator(&self) -> bool {
+        matches!(self.inner, Inner::Watch(_))
+    }
+
+    /// Spectators this peer serves.
+    pub fn spectators(&self) -> usize {
+        self.spectators
+    }
+
+    /// The seats this machine's view follows, a bit per seat
+    /// (`Platform::local_seats`): its own seat, or a spectator's choice.
+    pub fn local_seats(&self) -> u8 {
+        match self.inner {
+            Inner::Play(_) => 1 << self.local,
+            Inner::Watch(_) => self.follow,
+        }
+    }
+
+    /// The seats a spectator's camera and HUD follow (a mask; seat 0 by
+    /// default). No effect on a player.
+    pub fn follow(&mut self, seats: u8) {
+        let all = ((1u16 << self.players) - 1) as u8;
+        if seats & all != 0 {
+            self.follow = seats & all;
+        }
+    }
+
+    /// This machine's game screen in pixels, the units its pointer comes
+    /// in (only a session that shares the pointer reads it).
+    pub fn set_local_screen(&mut self, screen: (u16, u16)) {
+        self.screen = screen;
     }
 
     /// Frames a local input waits before it plays.
@@ -185,14 +309,29 @@ impl NetSession {
         self.dt
     }
 
-    /// The newest frame ggrs has confirmed on every peer.
+    /// The newest frame ggrs has confirmed on every peer (a spectator only
+    /// plays confirmed frames: its current one).
     pub fn confirmed_frame(&self) -> i32 {
-        self.p2p.confirmed_frame()
+        match &self.inner {
+            Inner::Play(p) => p.confirmed_frame(),
+            Inner::Watch(w) => w.current_frame(),
+        }
     }
 
     /// The newest frame this peer simulated.
     pub fn current_frame(&self) -> i32 {
-        self.p2p.current_frame()
+        match &self.inner {
+            Inner::Play(p) => p.current_frame(),
+            Inner::Watch(w) => w.current_frame(),
+        }
+    }
+
+    /// A spectator's frames behind its host (0 for a player).
+    pub fn frames_behind(&self) -> usize {
+        match &self.inner {
+            Inner::Play(_) => 0,
+            Inner::Watch(w) => w.frames_behind_host(),
+        }
     }
 
     /// The players the game saw on the newest frame.
@@ -201,7 +340,10 @@ impl NetSession {
     }
 
     fn events(&mut self) {
-        let events: Vec<_> = self.p2p.events().collect();
+        let events: Vec<_> = match &mut self.inner {
+            Inner::Play(p) => p.events().collect(),
+            Inner::Watch(w) => w.events().collect(),
+        };
         for ev in events {
             match ev {
                 GgrsEvent::Synchronizing { count, total, .. } => {
@@ -230,25 +372,38 @@ impl NetSession {
                 GgrsEvent::NetworkInterrupted { .. } | GgrsEvent::NetworkResumed { .. } => {}
             }
         }
-        if self.p2p.current_state() == SessionState::Running
-            && matches!(self.state, NetState::Synchronizing { .. })
-        {
+        let running = match &self.inner {
+            Inner::Play(p) => p.current_state() == SessionState::Running,
+            Inner::Watch(w) => w.current_state() == SessionState::Running,
+        };
+        if running && matches!(self.state, NetState::Synchronizing { .. }) {
             self.state = NetState::Running;
         }
-        if let Some(addr) = self.remote {
-            let handles = self.p2p.handles_by_address(addr);
-            if let Some(h) = handles.first()
-                && let Ok(s) = self.p2p.network_stats(*h)
-            {
-                self.stats.ping_ms = s.ping as u32;
+        match &self.inner {
+            Inner::Play(p) => {
+                if let Some(addr) = self.remote {
+                    let handles = p.handles_by_address(addr);
+                    if let Some(h) = handles.first()
+                        && let Ok(s) = p.network_stats(*h)
+                    {
+                        self.stats.ping_ms = s.ping as u32;
+                    }
+                }
+                self.stats.frames_ahead = p.frames_ahead();
+            }
+            Inner::Watch(w) => {
+                if let Ok(s) = w.network_stats() {
+                    self.stats.ping_ms = s.ping as u32;
+                }
+                self.stats.frames_ahead = -(w.frames_behind_host() as i32);
             }
         }
-        self.stats.frames_ahead = self.p2p.frames_ahead();
     }
 
-    /// One host frame: `local` is this machine's input. Returns true when
-    /// the game advanced to a new frame (then render it); false while the
-    /// peers synchronize or this peer waits for a late one.
+    /// One host frame: `local` is this machine's input (a spectator's is
+    /// ignored). Returns true when the game advanced to a new frame (then
+    /// render it); false while the peers synchronize or this peer waits for
+    /// a late one.
     pub fn frame(
         &mut self,
         game: &mut dyn Game,
@@ -256,27 +411,48 @@ impl NetSession {
         audio: &mut dyn Audio,
         local: &InputState,
     ) -> bool {
-        self.p2p.poll_remote_clients();
-        self.events();
-        if self.p2p.current_state() != SessionState::Running {
-            return false;
-        }
-        if self.skip > 0 {
-            self.skip -= 1;
-            self.stats.stalls += 1;
-            return false;
-        }
-        let wire = Wire(NetPad::from_input(local).to_bytes());
-        if self.p2p.add_local_input(self.local, wire).is_err() {
-            return false;
-        }
-        let requests = match self.p2p.advance_frame() {
-            Ok(r) => r,
-            Err(GgrsError::PredictionThreshold | GgrsError::NotSynchronized) => {
-                self.stats.stalls += 1;
-                return false;
+        let wire = Wire(NetInput::from_input(local, self.extras, self.screen).to_bytes());
+        let seats = self.local_seats();
+        let requests = match &mut self.inner {
+            Inner::Play(p2p) => {
+                p2p.poll_remote_clients();
+                self.events_then_check()
             }
-            Err(_) => return false,
+            Inner::Watch(w) => {
+                w.poll_remote_clients();
+                self.events_then_check()
+            }
+        };
+        if !requests {
+            return false;
+        }
+        let requests = match &mut self.inner {
+            Inner::Play(p2p) => {
+                if self.skip > 0 {
+                    self.skip -= 1;
+                    self.stats.stalls += 1;
+                    return false;
+                }
+                if p2p.add_local_input(self.local, wire).is_err() {
+                    return false;
+                }
+                match p2p.advance_frame() {
+                    Ok(r) => r,
+                    Err(GgrsError::PredictionThreshold | GgrsError::NotSynchronized) => {
+                        self.stats.stalls += 1;
+                        return false;
+                    }
+                    Err(_) => return false,
+                }
+            }
+            Inner::Watch(w) => match w.advance_frame() {
+                Ok(r) => r,
+                // Waiting for the host's next confirmed frame.
+                Err(_) => {
+                    self.stats.stalls += 1;
+                    return false;
+                }
+            },
         };
         let advances = requests
             .iter()
@@ -291,24 +467,48 @@ impl NetSession {
             game,
             platform,
             audio,
-            self.players,
+            (self.players, seats, self.space),
             self.dt,
             (&mut self.stats, &mut self.clock),
         ) {
             self.last = p;
         }
-        if self.p2p.desync_detection() != DesyncDetection::Off {
-            self.stats.checksums = self.stats.frames / self.desync_interval().max(1) as u64;
+        let interval = self.desync_interval();
+        if interval > 0 {
+            self.stats.checksums = self.stats.frames / interval as u64;
         }
         advances > 0
     }
 
-    pub(crate) fn desync_interval(&self) -> u32 {
-        match self.p2p.desync_detection() {
-            DesyncDetection::On { interval } => interval,
-            DesyncDetection::Off => 0,
+    /// Read the events; true when the session runs.
+    fn events_then_check(&mut self) -> bool {
+        self.events();
+        match &self.inner {
+            Inner::Play(p) => p.current_state() == SessionState::Running,
+            Inner::Watch(w) => w.current_state() == SessionState::Running,
         }
     }
+
+    pub(crate) fn desync_interval(&self) -> u32 {
+        match &self.inner {
+            Inner::Play(p) => match p.desync_detection() {
+                DesyncDetection::On { interval } => interval,
+                DesyncDetection::Off => 0,
+            },
+            Inner::Watch(_) => 0,
+        }
+    }
+}
+
+/// A builder with the settings every session kind shares.
+fn builder(cfg: &NetConfig, players: usize) -> Result<SessionBuilder<TrinoGgrs>, String> {
+    let e = |e: GgrsError| e.to_string();
+    Ok(SessionBuilder::<TrinoGgrs>::new()
+        .with_num_players(players)
+        .map_err(e)?
+        .with_fps(cfg.fps as usize)
+        .map_err(e)?
+        .with_disconnect_timeout(Duration::from_millis(cfg.disconnect_ms as u64)))
 }
 
 /// Carry out a batch of ggrs requests on `game`: snapshots with the state
@@ -323,7 +523,9 @@ pub fn run_requests(
     game: &mut dyn Game,
     platform: &mut dyn Platform,
     audio: &mut dyn Audio,
-    players: usize,
+    // Seats in the session, the ones this machine plays
+    // (`Platform::local_seats`, issue #117) and the shared pointer's space.
+    (players, local, space): (usize, u8, (u16, u16)),
     dt: f32,
     // What the session counts, and where it is in ggrs's frames.
     (stats, clock): (&mut NetStats, &mut FrameClock),
@@ -352,11 +554,11 @@ pub fn run_requests(
                 for (i, (w, status)) in inputs.iter().enumerate().take(players) {
                     if *status != InputStatus::Disconnected {
                         p.connected |= 1 << i;
-                        p.players[i] = NetPad::from_bytes(w.0).to_input();
+                        p.players[i] = NetInput::from_bytes(w.0).to_input(space);
                     }
                 }
                 if let Some(h) = platform.hosted_players_mut() {
-                    h.publish_players(&p);
+                    h.publish_net(&p, local);
                 }
                 if clock.at > clock.newest {
                     clock.newest = clock.at;
@@ -414,7 +616,9 @@ impl SyncTest {
         inputs: &PlayersInput,
     ) -> Result<(), String> {
         for i in 0..self.players {
-            let w = Wire(NetPad::from_input(&inputs.players[i]).to_bytes());
+            let w = Wire(
+                NetInput::from_input(&inputs.players[i], NetExtras::PAD, (320, 240)).to_bytes(),
+            );
             self.s.add_local_input(i, w).map_err(|e| e.to_string())?;
         }
         let requests = self.s.advance_frame().map_err(|e| e.to_string())?;
@@ -423,7 +627,7 @@ impl SyncTest {
             game,
             platform,
             audio,
-            self.players,
+            (self.players, ((1u16 << self.players) - 1) as u8, (320, 240)),
             self.dt,
             (&mut self.stats, &mut self.clock),
         );
@@ -504,7 +708,7 @@ mod tests {
                         frame,
                     },
                     _ => GgrsRequest::AdvanceFrame {
-                        inputs: vec![(Wire([0; NET_PAD_LEN]), InputStatus::Confirmed); 2],
+                        inputs: vec![(Wire([0; NET_INPUT_LEN]), InputStatus::Confirmed); 2],
                     },
                 }
             })
@@ -528,7 +732,7 @@ mod tests {
                 game,
                 &mut Host,
                 speaker,
-                2,
+                (2, 1, (320, 240)),
                 1.0 / 60.0,
                 (&mut stats, &mut clock),
             )

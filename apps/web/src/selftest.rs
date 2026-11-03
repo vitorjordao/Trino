@@ -343,6 +343,14 @@ impl Run {
                         return Flow::Continue;
                     }
                 }
+                // The consoles' lockstep (issue #117), in wasm.
+                match castle64::selftest::lockstep_checks() {
+                    Ok(r) => castle64::selftest::log_lockstep(&host.platform, &r),
+                    Err(e) => {
+                        self.fail(e.to_string());
+                        return Flow::Continue;
+                    }
+                }
                 host.platform.log("TRINO_STEP:ktx2 transcode\n");
                 if let Err(e) = ktx2_check(host) {
                     self.fail(format!("ktx2: {e}"));

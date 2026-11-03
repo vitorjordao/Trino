@@ -79,6 +79,12 @@ impl WebSession {
         self.session.is_replay()
     }
 
+    /// A mid-game recording's snapshot into `game` (issue #117), before
+    /// [`start`](Self::start).
+    pub fn restore(&mut self, game: &mut dyn Game) -> bool {
+        self.session.restore(game)
+    }
+
     pub fn start(&mut self, game: &dyn Game) {
         if let Some(head) = self.session.start(game) {
             self.out[..HEADER_LEN].copy_from_slice(&head);

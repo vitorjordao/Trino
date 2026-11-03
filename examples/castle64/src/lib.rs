@@ -267,6 +267,48 @@ struct SaveState {
     status: trino_core::SaveStatus,
 }
 
+/// What a snapshot never brings in ([`Game::load_state`], issue #117):
+/// this process's blob borrows and its host's state.
+struct HostLocal {
+    access_data: AccessBlob,
+    captions: Captions,
+    strings: trino_core::ui::StringsBlob,
+    ach_table: AchievementTable<'static>,
+    ach_state: AchievementState,
+    reported: (u32, u32, u32, usize),
+    access: AccessSettings,
+    screen: Vec2,
+    saves: SaveState,
+}
+
+impl HostLocal {
+    fn take(g: &Castle64Game) -> HostLocal {
+        HostLocal {
+            access_data: g.access_data,
+            captions: g.captions,
+            strings: g.strings,
+            ach_table: g.ach_table,
+            ach_state: g.ach_state,
+            reported: g.reported,
+            access: g.access,
+            screen: g.screen,
+            saves: g.saves,
+        }
+    }
+
+    fn put(self, g: &mut Castle64Game) {
+        g.access_data = self.access_data;
+        g.captions = self.captions;
+        g.strings = self.strings;
+        g.ach_table = self.ach_table;
+        g.ach_state = self.ach_state;
+        g.reported = self.reported;
+        g.access = self.access;
+        g.screen = self.screen;
+        g.saves = self.saves;
+    }
+}
+
 /// castle64's achievements (`assets/achievements.ron`).
 pub const ACH_FIRST_COIN: AchievementId = AchievementId::new("FIRST_COIN");
 pub const ACH_FIRST_STAR: AchievementId = AchievementId::new("FIRST_STAR");
@@ -975,6 +1017,40 @@ impl Game for Castle64Game {
             .bool(self.achievement_list.is_some());
         h.u32(self.stomps);
         Some(h.value())
+    }
+
+    /// The whole game, byte for byte (issue #117): the PC's crash tail
+    /// snapshots it every 30 s so `crash-*.trec` replays to the crash, and
+    /// `TRINO_RECORD_FROM` / `cargo xtask replay cut` start recordings
+    /// mid-game.
+    fn state_size(&self) -> usize {
+        trino_core::snapshot::size_of_raw::<Castle64Game>()
+    }
+
+    fn save_state(&self, out: &mut [u8]) -> Option<usize> {
+        // SAFETY: plain data (no_std, no alloc): values, arrays, `'static`
+        // borrows of baked blobs.
+        unsafe { trino_core::snapshot::save_raw(self, out) }
+    }
+
+    /// The sim comes from the snapshot; what belongs to this process and
+    /// its host stays (issue #117: a crash tail or a cut recording is
+    /// loaded by another process, whose blobs, and binary, sit elsewhere):
+    /// the borrows of the access, string and achievement blobs, the caption
+    /// queue, the services' state, the player's settings, the screen and
+    /// the save policy (a replay never writes the player's progress).
+    fn load_state(&mut self, bytes: &[u8]) -> bool {
+        let local = HostLocal::take(self);
+        // SAFETY: as `save_state`. The fields that could hold another
+        // process's addresses are overwritten below before anything reads
+        // them.
+        let ok = unsafe { trino_core::snapshot::load_raw(self, bytes) };
+        local.put(self);
+        ok
+    }
+
+    fn portable_state(&self) -> bool {
+        true
     }
 
     fn render(&mut self, renderer: &mut dyn Renderer) {
@@ -1710,6 +1786,40 @@ mod tests {
             "Castle64Game: {} bytes",
             core::mem::size_of::<Castle64Game>()
         );
+    }
+
+    /// Issue #117: a snapshot loaded by another game (another process: a
+    /// crash tail, a cut recording) brings the sim and nothing of the
+    /// host's — the loading game keeps its screen, its save policy and its
+    /// blob borrows, and plays on to the same hashes.
+    #[test]
+    fn a_snapshot_brings_the_sim_and_keeps_the_hosts_state() {
+        let mut a = Castle64Game::new(Vec2::new(320.0, 240.0)).with_saves();
+        let mut au = audio();
+        let mut run = InputState::default();
+        run.stick = Vec2::new(0.3, 1.0);
+        for _ in 0..90 {
+            a.update(&run, &mut au, DT);
+        }
+        assert!(a.portable_state() && a.saves.on);
+        let mut buf = std::vec![0u8; a.state_size()];
+        let n = a.save_state(&mut buf).unwrap();
+        // What the loading process has of its own.
+        let mut b = Castle64Game::new(Vec2::new(400.0, 240.0));
+        b.access.text_scale = 150;
+        assert!(b.load_state(&buf[..n]));
+        assert_eq!(b.state_hash(), a.state_hash());
+        assert_eq!(b.screen, Vec2::new(400.0, 240.0), "the host's screen");
+        assert!(
+            !b.saves.on,
+            "a replay never takes the live run's save policy"
+        );
+        assert_eq!(b.access.text_scale, 150, "the player's own settings");
+        for _ in 0..60 {
+            a.update(&run, &mut au, DT);
+            b.update(&run, &mut au, DT);
+        }
+        assert_eq!(b.state_hash(), a.state_hash(), "the sims go on together");
     }
 
     struct CountAudio {

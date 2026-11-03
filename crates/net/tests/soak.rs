@@ -3,7 +3,10 @@
 //! latency (0–200 ms, with jitter) and loss (0–10 %), state hashes compared
 //! on every frame by ggrs's desync detection, and both peers' final state
 //! held to a single-machine simulation of the same inputs. Then delay mode
-//! (lockstep), a third peer, and a peer that leaves.
+//! (lockstep), three and four peers, spectators (issue #117), and a peer
+//! that leaves. Every peer's game also reads `Platform::local_seats` and
+//! must see its own seat only (a spectator the seat it follows), while the
+//! hashes still agree.
 
 use trino_core::snapshot::{load_copy, save_copy, size_of_copy};
 use trino_core::{
@@ -20,6 +23,9 @@ struct Synth {
     rng: u64,
     frame: u32,
     sounds: u32,
+    /// `Platform::local_seats` as the game last read it: presentation
+    /// state, never hashed (peers differ here by design).
+    viewer: u8,
 }
 
 impl Synth {
@@ -29,6 +35,7 @@ impl Synth {
             rng: 0x9e37_79b9_7f4a_7c15,
             frame: 0,
             sounds: 0,
+            viewer: 0,
         }
     }
 
@@ -71,6 +78,7 @@ impl Game for Synth {
         _: f32,
     ) {
         let players = *platform.players();
+        self.viewer = platform.local_seats();
         self.step(&players);
         if self.frame.is_multiple_of(30) {
             audio.play_sound(SoundId(1));
@@ -164,30 +172,70 @@ fn reference(players: usize, frames: i32, idle_from: i32, delay: i32) -> Vec<u64
 }
 
 fn peers(cfg: &NetConfig, net: &SimNet, n: usize) -> Vec<Peer> {
-    (0..n)
+    peers_and_spectators(cfg, net, n, 0)
+}
+
+/// `n` players, seat 0 also serving `watchers` spectators (addresses after
+/// the players'), each spectator following seat `k % n`.
+fn peers_and_spectators(cfg: &NetConfig, net: &SimNet, n: usize, watchers: usize) -> Vec<Peer> {
+    let peer = |session| Peer {
+        session,
+        game: Synth::new(),
+        host: Host {
+            players: HostedPlayers::new(),
+        },
+        speaker: Speaker(0),
+    };
+    let mut out: Vec<Peer> = (0..n)
         .map(|seat| {
             let others: Vec<(usize, PeerAddr)> = (0..n)
                 .filter(|s| *s != seat)
                 .map(|s| (s, PeerAddr::Sim(s as u8)))
                 .collect();
-            Peer {
-                session: NetSession::new(cfg, seat, &others, net.socket(PeerAddr::Sim(seat as u8)))
-                    .unwrap(),
-                game: Synth::new(),
-                host: Host {
-                    players: HostedPlayers::new(),
-                },
-                speaker: Speaker(0),
-            }
+            let spectators: Vec<PeerAddr> = (0..if seat == 0 { watchers } else { 0 })
+                .map(|k| PeerAddr::Sim((n + k) as u8))
+                .collect();
+            peer(
+                NetSession::with_spectators(
+                    cfg,
+                    seat,
+                    &others,
+                    &spectators,
+                    net.socket(PeerAddr::Sim(seat as u8)),
+                )
+                .unwrap(),
+            )
         })
-        .collect()
+        .collect();
+    for k in 0..watchers {
+        let mut s = NetSession::spectate(
+            cfg,
+            PeerAddr::Sim(0),
+            net.socket(PeerAddr::Sim((n + k) as u8)),
+        )
+        .unwrap();
+        s.follow(1 << (k % n));
+        out.push(peer(s));
+    }
+    out
 }
 
 /// Run `n` peers until every one simulated `frames` frames and confirmed
 /// them all; returns the peers.
 fn soak(cfg: NetConfig, cond: Conditions, n: usize, frames: i32, seed: u64) -> Vec<Peer> {
+    soak_watched(cfg, cond, n, 0, frames, seed)
+}
+
+fn soak_watched(
+    cfg: NetConfig,
+    cond: Conditions,
+    n: usize,
+    watchers: usize,
+    frames: i32,
+    seed: u64,
+) -> Vec<Peer> {
     let net = SimNet::new(cond, seed);
-    let mut ps = peers(&cfg, &net, n);
+    let mut ps = peers_and_spectators(&cfg, &net, n, watchers);
     let idle_from = frames - 60;
     // A hang is no progress for a while of *real* time: lockstep under loss
     // waits on ggrs's 200 ms wall-clock resends, so loop counts depend on
@@ -199,7 +247,11 @@ fn soak(cfg: NetConfig, cond: Conditions, n: usize, frames: i32, seed: u64) -> V
         for p in ps.iter_mut() {
             // ggrs plays an input added on frame `c` on frame `c + delay`.
             let f = p.session.current_frame() + cfg.input_delay as i32;
-            let local = input(p.session.local_seat(), f, idle_from);
+            let local = if p.session.is_spectator() {
+                InputState::IDLE
+            } else {
+                input(p.session.local_seat(), f, idle_from)
+            };
             advanced |= p
                 .session
                 .frame(&mut p.game, &mut p.host, &mut p.speaker, &local);
@@ -233,6 +285,8 @@ fn soak(cfg: NetConfig, cond: Conditions, n: usize, frames: i32, seed: u64) -> V
         if !advanced {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        // Spectators trail the players; the players keep idling (their
+        // input is idle from `idle_from` on) until every spectator is in.
         let done = ps
             .iter()
             .all(|p| p.game.frame as i32 >= frames && p.session.confirmed_frame() >= frames - 1);
@@ -259,6 +313,12 @@ fn soak(cfg: NetConfig, cond: Conditions, n: usize, frames: i32, seed: u64) -> V
 fn check(ps: &[Peer], cfg: &NetConfig, frames: i32, cond: Conditions, players: usize) {
     let refs = reference(players, frames + 400, frames - 60, cfg.input_delay as i32);
     for p in ps {
+        // Each machine's view follows its own seat (a spectator its
+        // choice), whatever the others see (issue #117).
+        assert_eq!(p.game.viewer, p.session.local_seats());
+        if !p.session.is_spectator() {
+            assert_eq!(p.game.viewer, 1 << p.session.local_seat());
+        }
         let f = p.game.frame as usize;
         assert_eq!(
             p.game.hash(),
@@ -344,6 +404,54 @@ fn three_players_stay_in_step() {
     };
     let ps = soak(cfg, cond, 3, 2_000, 5);
     check(&ps, &cfg, 2_000, cond, 3);
+}
+
+#[test]
+fn four_players_stay_in_step() {
+    let cfg = NetConfig {
+        players: 4,
+        desync_every: 1,
+        ..NetConfig::DEFAULT
+    };
+    let cond = Conditions {
+        latency_ms: 50,
+        jitter_ms: 10,
+        loss: 0.03,
+    };
+    let ps = soak(cfg, cond, 4, 2_000, 11);
+    check(&ps, &cfg, 2_000, cond, 4);
+    let seats: Vec<u8> = ps.iter().map(|p| p.game.viewer).collect();
+    assert_eq!(seats, [1, 2, 4, 8]);
+}
+
+/// Two players and three spectators (issue #117): seat 0 serves them,
+/// they play only confirmed frames (never a rollback), follow the seat they
+/// chose, and end on the players' hashes.
+#[test]
+fn spectators_watch_the_same_match() {
+    let cfg = NetConfig {
+        desync_every: 1,
+        ..NetConfig::DEFAULT
+    };
+    let cond = Conditions {
+        latency_ms: 60,
+        jitter_ms: 10,
+        loss: 0.02,
+    };
+    let ps = soak_watched(cfg, cond, 2, 3, 3_000, 21);
+    check(&ps, &cfg, 3_000, cond, 2);
+    assert_eq!(ps[0].session.spectators(), 3);
+    for (k, w) in ps[2..].iter().enumerate() {
+        assert!(w.session.is_spectator());
+        let s = w.session.stats();
+        assert_eq!(
+            (s.rollbacks, s.resimulated),
+            (0, 0),
+            "a spectator rolled back"
+        );
+        assert_eq!(w.game.viewer, 1 << (k % 2));
+        assert!(w.game.frame >= 3_000);
+    }
 }
 
 #[test]

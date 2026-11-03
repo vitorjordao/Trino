@@ -455,3 +455,85 @@ fn no_build_needs_an_existing_rom() {
     );
     assert!(f.calls().is_empty(), "nothing deployed: {:?}", f.calls());
 }
+
+/// Issue #117: `replay run --platform n64 --device everdrive` deploys the
+/// image and follows the console's log under a pseudo-terminal until its
+/// `TRINO_REPLAY` verdict, then stops the loader (which here would go on
+/// for half a minute). A diverged verdict fails the command.
+#[cfg(target_os = "linux")]
+#[test]
+fn replay_run_on_a_device_reads_the_console_verdict() {
+    let f = Fixture::new();
+    // The fixture's PATH holds only the stubs: give it `script` and `sh`.
+    for tool in ["script", "sh", "sleep"] {
+        let real = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| Path::new(d).join(tool))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("no {tool}"));
+        std::os::unix::fs::symlink(real, f.stubs.join(tool)).unwrap();
+    }
+    let rec = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../assets/shared/replays/castle64_green.trec")
+        .canonicalize()
+        .unwrap();
+    let rec = rec.to_str().unwrap();
+    for (verdict, ok) in [
+        ("ok frames=761 checked=761 hash=0x03b2b02ef43cc1b3", true),
+        (
+            "diverged at frame 12 (expected 0x0000000000000001, got 0x0000000000000002)",
+            false,
+        ),
+    ] {
+        stub(
+            &f.stubs,
+            "UNFLoader",
+            &format!(
+                "echo 'TRINO_HW n64 ram=4194304'\n\
+                 echo 'TRINO_REPLAY: {verdict} on n64'\n\
+                 echo 'TRINO_REPLAY_DONE'\n\
+                 sleep 30"
+            ),
+        );
+        let _ = std::fs::remove_file(&f.log);
+        let t0 = std::time::Instant::now();
+        let o = f.xtask(
+            &[
+                "replay",
+                "run",
+                rec,
+                "--platform",
+                "n64",
+                "--device",
+                "everdrive",
+                "--no-build",
+                "--json",
+            ],
+            &[],
+            Some(&f.stubs),
+        );
+        assert!(t0.elapsed().as_secs() < 20, "the loader was not stopped");
+        assert_eq!(o.status.success(), ok, "{}\n{}", stdout(&o), stderr(&o));
+        assert_eq!(f.calls(), [format!("-b -f 3 -r {} -d", f.rom())]);
+        let out = stdout(&o);
+        assert!(out.contains("[n64] TRINO_HW n64 ram=4194304"), "{out}");
+        let json: serde_json::Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
+        assert_eq!(json["ok"], ok);
+        assert_eq!(json["platform"], "n64");
+    }
+    // A recording from a snapshot is the PC's: refused for a console.
+    let cut = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fuzz/seeds/trec/v2snapshot");
+    let o = f.xtask(
+        &[
+            "replay",
+            "run",
+            cut.to_str().unwrap(),
+            "--device",
+            "everdrive",
+            "--no-build",
+        ],
+        &[],
+        Some(&f.stubs),
+    );
+    assert_fails_with(&o, "consoles replay recordings from boot");
+}

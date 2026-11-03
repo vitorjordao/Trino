@@ -201,6 +201,43 @@ Luma3DS's Rosalina has a GDB stub. Its README gives the ports:
 
 The release ELF has symbols (function names, backtraces) but no line tables.
 
+## Replays and local wireless on hardware (issue #117)
+
+**A recording on a console** (`cargo xtask replay run … --device`):
+
+```
+cargo xtask replay run assets/shared/replays/castle64_green.trec --platform n64 --device sc64
+cargo xtask replay run run.trec --platform 3ds --device network --ip <IP> [--no-build]
+```
+
+- The image is built with the recording in it (`replay.trec` in the DFS or RomFS), as
+  `replay run --platform n64|3ds` does for the emulators, then deployed like `run
+  --device`.
+- The console's log is followed until its `TRINO_REPLAY:` verdict, then the loader is
+  stopped (`TRINO_REPLAY_TIMEOUT`, default 600 s). xtask exits 0 only when every hash
+  matched.
+- The log step runs under `script` (a pseudo-terminal). On a pipe the loaders' unflushed
+  output arrives in 4 KB blocks (see How the log gets out). Windows has no `script`:
+  there the log scrolls on the terminal, and you read the verdict yourself.
+- A recording that starts from a snapshot (`TREC` v2) is the PC's and is refused.
+
+**Two 3DS units over local wireless.** Stage the plan in each build:
+
+```
+TRINO_UDS="host 2 hash_at=600" TRINO_UDS_SCRIPT=assets/shared/replays/castle64_green.trec \
+  cargo xtask run 3ds --device network --ip <first 3DS>
+TRINO_UDS="join 2 hash_at=600" TRINO_UDS_SCRIPT=assets/shared/replays/castle64_green.trec \
+  cargo xtask run 3ds --device network --ip <second 3DS>
+```
+
+- The host creates the network and the other unit finds it. Both print `TRINO_UDS:`
+  lines and, on frame 600, `TRINO_NET_HASH:600:0x94fa2260aa5f5154`: the hash two Azahar
+  instances and the PC reach (`cargo xtask net 3ds`).
+- Without `TRINO_UDS_SCRIPT` each unit plays its own pad.
+
+**Status (2026-11-03):** both paths ran with stub loaders (`xtask/tests/hardware.rs`)
+and in Azahar. Not yet on a physical cart or on two physical units.
+
 ## Save power cuts
 
 A save must survive the power going in the middle of it (issue #121): the
@@ -286,7 +323,9 @@ external project. Stub loaders take the place of `sc64deployer`, `UNFLoader` and
 - that a failed upload stops the deploy;
 - the tool lookup, through the override variables and through `PATH`;
 - the gdb scripts;
-- that the loaders' output reaches xtask's stdout.
+- that the loaders' output reaches xtask's stdout;
+- `replay run --device`: the verdict read through the pseudo-terminal, the loader
+  stopped, a diverged verdict failing (#117).
 
 The 3DS shim's 3dslink path compiles (`cargo xtask build 3ds`), and the ares and
 Azahar self-tests stay green with the same goldens.

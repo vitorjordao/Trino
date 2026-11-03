@@ -162,6 +162,34 @@ tests follow the same pattern: add a step to `castle64::selftest` so the PC suit
   written when the emulator closes or times out. Play in a local ares or Azahar
   window: `TRINO_ARES=docker` has no window to play in.
 
+- **The `lockstep` step (issue #117):** `test 3ds` and `test web` expect `TRINO_STEP:
+  lockstep … hash=0x031055f051d3adfe` (`castle64::selftest::LOCKSTEP_HASH`). Azahar also
+  prints `TRINO_UDS: probe init=ok`, its local-wireless service answering. The N64 skips
+  the step: it has no network, and the step would add code to its thin base heap.
+
+## Two Azahar instances over local wireless (issue #117)
+
+`cargo xtask net 3ds [--docker <image>] [--no-build]` builds a host and a join castle64
+(`TRINO_UDS` / `TRINO_UDS_SCRIPT` staged into the RomFS). It then runs
+`tools/uds-test/two-azahar.sh` (Linux: Xvfb, openbox, xdotool, ImageMagick; or inside
+`--docker`, which installs them).
+- **Separate settings.** Each instance has its own `HOME`/`XDG_*`, so the per-user log
+  and config never mix (the same trap as two `test 3ds` runs).
+- **The room.** A runs Multiplayer › Create Room as Unlisted. The fresh B is renamed
+  (Configure › System › Username, Regenerate MAC) before it boots the join build:
+  rooms refuse a second "AZAHAR". B then runs Direct Connect to 127.0.0.1.
+- **Clicks, not shortcuts.** Without a window manager Qt never gets keyboard focus, so
+  start openbox. The clicks are for 1600×900 and Azahar 2126.2. If Azahar's dialogs
+  move, take an `import -window root` shot and find the new positions.
+- **Verdict:** both logs print `TRINO_NET_HASH:600:0x94fa2260aa5f5154`, the hash
+  `replay_gate.rs` gets from the PC's lockstep. Shots and logs land in
+  `target/net-3ds/run/`.
+- **Status (2026-11-03):** it passed under `trino-ci3ds-boot`, a local image only:
+  the CI's 3DS environment plus apt. CI doesn't run it yet.
+- **Killing Azahar:** it ignores SIGTERM in a container; use `kill -9`. Never `pkill
+  -f <app>.3dsx` from a `docker exec sh -c`: the shell's own command line matches, and
+  it kills itself.
+
 ## Hardware tiers (issue #54, ADR 0020)
 
 Both consoles have a base and an expanded variant, and one ROM / app runs on both. The

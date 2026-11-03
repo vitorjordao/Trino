@@ -369,6 +369,21 @@ pub trait Platform {
         }
     }
 
+    /// The seats this machine plays, a bit per seat (issue #117): what the
+    /// camera, the HUD and the touch screen should follow. Locally (one
+    /// machine, any number of pads) it is every connected seat; in a network
+    /// session only this machine's own, so two peers each follow their own
+    /// player while every seat's input reaches both sims. Never empty: seat
+    /// 0 (`0b0001`) when nobody is plugged or the platform hosts no players.
+    ///
+    /// **Presentation only.** Peers differ here by design, so a game reads
+    /// it into state it neither hashes ([`Game::state_hash`](crate::Game::state_hash))
+    /// nor lets touch the sim; [`crate::first_seat`] picks the one a shared
+    /// view follows.
+    fn local_seats(&self) -> u8 {
+        self.hosted_players().map_or(1, |h| h.local_seats())
+    }
+
     /// The controllers the host sees, with their seats and their own input
     /// (an assignment screen reads them: [`crate::Join`]). Empty where the
     /// players come from a recording or a network session.

@@ -172,7 +172,7 @@ impl App {
         let player = std::env::var("TRINO_SCENE").ok().map(|p| {
             scene_player::ScenePlayer::load(PathBuf::from(p)).unwrap_or_else(|e| panic!("{e}"))
         });
-        let showcase = (std::env::var("TRINO_GAME").as_deref() == Ok("showcase")).then(|| {
+        let mut showcase = (std::env::var("TRINO_GAME").as_deref() == Ok("showcase")).then(|| {
             let (w, h) = self.profile.internal_resolution();
             showcase::ShowcaseGame::with_screen(Vec2::new(w as f32, h as f32))
         });
@@ -261,7 +261,7 @@ impl App {
         });
 
         let (iw, ih) = renderer.internal_size();
-        let game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
+        let mut game = castle64::Castle64Game::new(Vec2::new(iw as f32, ih as f32));
         // The game a recording names: the scene player records nothing.
         let name = match (&player, &showcase) {
             (Some(_), _) => "scene",
@@ -270,9 +270,16 @@ impl App {
         };
         let mut session =
             InputSession::from_env(name, (iw as u16, ih as u16)).unwrap_or_else(|e| panic!("{e}"));
-        match &showcase {
-            Some(s) => session.start(s),
-            None => session.start(&game),
+        // A mid-game recording (a crash tail) starts from its snapshot.
+        match &mut showcase {
+            Some(s) => {
+                session.restore(s);
+                session.start(s);
+            }
+            None => {
+                session.restore(&mut game);
+                session.start(&game);
+            }
         }
         let bot = match std::env::var("TRINO_BOT").as_deref() {
             Ok("green") => Some(castle64::bot::Bot::new(castle64::bot::GREEN_RUN)),

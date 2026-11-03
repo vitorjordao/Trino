@@ -4,7 +4,9 @@
 //! the game's first frame (the PC's `TRINO_NET`, in a page).
 //!
 //! Also `?players=2..4`, `?stun=stun:<host>:<port>`, `?net_delay=N`,
-//! `?net_mode=rollback|delay`, and for the end-to-end test
+//! `?net_mode=rollback|delay`, `?net_keys` / `?net_pointer` (share the
+//! keyboard / the pointer, issue #117), `?net_watch` (spectate the room;
+//! `?net_follow=2` follows player 2), and for the end-to-end test
 //! `?net_script=<url.trec>` (this page plays its seat of a recording) with
 //! `?net_hash_at=N` (logs `TRINO_NET_HASH:N:<hash>` on game frame N).
 //! `__trino.info.net` shows the connection.
@@ -28,6 +30,8 @@ pub struct WebNet {
     hash_at: Option<u64>,
     last_status: String,
     frames: u64,
+    watch: bool,
+    follow: u8,
 }
 
 impl WebNet {
@@ -54,6 +58,18 @@ impl WebNet {
                 over.push_str(&format!("{key} = {v}\n"));
             }
         }
+        for (q, key) in [("net_keys", "keys"), ("net_pointer", "pointer")] {
+            if let Some(v) = query.get(q) {
+                let on = if v.is_empty() { "true" } else { v.as_str() };
+                over.push_str(&format!("{key} = {on}\n"));
+            }
+        }
+        let watch = query.get("net_watch").is_some();
+        let follow = query
+            .get("net_follow")
+            .and_then(|v| v.parse::<u8>().ok())
+            .filter(|s| (1..=4).contains(s))
+            .map_or(1, |s| 1 << (s - 1));
         for p in cfg.apply_text(&over) {
             js::log(&format!("TRINO_NET: {p}"));
         }
@@ -74,6 +90,8 @@ impl WebNet {
             &code,
             cfg.players as usize,
             query.get("stun").as_deref(),
+            watch,
+            &cfg.fingerprint(),
         )?;
         js::log(&format!("TRINO_NET: room `{code}` at {lobby}"));
         Ok(Some(WebNet {
@@ -83,6 +101,8 @@ impl WebNet {
             hash_at: query.get("net_hash_at").and_then(|v| v.parse().ok()),
             last_status: String::new(),
             frames: 0,
+            watch,
+            follow,
         }))
     }
 
@@ -95,13 +115,15 @@ impl WebNet {
     }
 
     /// One page frame: meet, then play. True when the game moved to a new
-    /// frame.
+    /// frame. `screen` is the game's screen in pixels (what a shared
+    /// pointer is measured in).
     pub fn frame(
         &mut self,
         game: &mut dyn Game,
         platform: &mut dyn Platform,
         audio: &mut dyn Audio,
         live: &InputState,
+        screen: (u16, u16),
     ) -> bool {
         match self.phase.take() {
             Some(Phase::Meeting(m)) => {
@@ -110,15 +132,39 @@ impl WebNet {
                 self.phase = Some(match st {
                     MeetStatus::Failed(_) => Phase::Failed,
                     MeetStatus::Ready => match m.take() {
-                        Ok((seat, _, peers, socket)) => {
-                            match NetSession::new(&self.cfg, seat, &peers, socket) {
+                        Ok(met) => {
+                            let seat = met.seat;
+                            let session = match met.watching {
+                                Some(host) => NetSession::spectate(&self.cfg, host, met.socket)
+                                    .map(|mut s| {
+                                        s.follow(self.follow);
+                                        s
+                                    }),
+                                None => NetSession::with_spectators(
+                                    &self.cfg,
+                                    seat,
+                                    &met.peers,
+                                    &met.spectators,
+                                    met.socket,
+                                ),
+                            };
+                            match session {
                                 Ok(s) => {
-                                    js::log(&format!(
-                                        "TRINO_NET: player {} of {}, {} mode",
-                                        seat + 1,
-                                        self.cfg.players,
-                                        self.cfg.mode.key()
-                                    ));
+                                    js::log(&if self.watch {
+                                        format!(
+                                            "TRINO_NET: watching {} players, {} mode",
+                                            self.cfg.players,
+                                            self.cfg.mode.key()
+                                        )
+                                    } else {
+                                        format!(
+                                            "TRINO_NET: player {} of {}, {} mode, {} spectator(s)",
+                                            seat + 1,
+                                            self.cfg.players,
+                                            self.cfg.mode.key(),
+                                            s.spectators()
+                                        )
+                                    });
                                     Phase::Playing(Box::new(s))
                                 }
                                 Err(e) => {
@@ -134,8 +180,10 @@ impl WebNet {
                 false
             }
             Some(Phase::Playing(mut s)) => {
+                s.set_local_screen(screen);
                 let scripted;
                 let local = match &self.script {
+                    Some(_) if s.is_spectator() => live,
                     Some(frames) => {
                         let f = s.current_frame() + s.input_delay() as i32;
                         scripted = frames

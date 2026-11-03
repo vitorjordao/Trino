@@ -1,0 +1,1 @@
+scenes/interior.scene.ron: 7 solid(s), 0 one-way, 0 ramp(s), 0 mesh collider(s) (0 triangles), 1 trigger(s), 0 character(s); 4 cell part(s), grids 6 cells, 11 refs; baked section 510 B

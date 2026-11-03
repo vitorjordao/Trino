@@ -1,0 +1,21 @@
+{
+  "feet": [
+    -6.0,
+    0.8399993777275085,
+    6.5
+  ],
+  "feet_bits": [
+    -393216,
+    55050,
+    425984
+  ],
+  "fixed_point": true,
+  "ground": {
+    "entity": "dome",
+    "kind": "mesh",
+    "triangle": 7
+  },
+  "on_ground": true,
+  "query": "drop",
+  "sliding": false
+}

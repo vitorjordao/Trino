@@ -1,0 +1,81 @@
+[3ds] group selftest_physics: 1 entries, 72 KB raw, 16 KB stored (lz4)
+   Compiling trino-app-3ds v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/apps/3ds)
+   Compiling trino-core v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/crates/core)
+   Compiling trino-game-api v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/crates/game-api)
+   Compiling trino-platform-3ds v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/crates/platform-3ds)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/examples/castle64)
+   Compiling showcase v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/examples/showcase)
+[3ds] app: /home/v/Documents/projects/Trino-wt/physics115/target/3ds/trino.3dsx
+TRINO_STEP:physics
+TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=21743 rays_grid_us=1120 steps=16 steps_scan_us=828 steps_grid_us=458 hub_solids=17 hub_scan_us=30 hub_grid_us=25
+TRINO_STEP:physics casts
+TRINO_STEP:physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=20130 scan_us=20050
+TRINO_STEP:physics cells
+TRINO_STEP:physics cells hash=9974afd8 load_frames=1
+[azahar] TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=562 gathered_us=2318
+[3ds] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/physics115/target/traces/3ds.json
+[3ds] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/castle64_hub.png: mean diff 0.01, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/showcase_river.png: mean diff 0.27, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+TRINO_STEP:physics
+TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=21743 rays_grid_us=1185 steps=16 steps_scan_us=828 steps_grid_us=394 hub_solids=17 hub_scan_us=30 hub_grid_us=25
+TRINO_STEP:physics casts
+TRINO_STEP:physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=20194 scan_us=20051
+TRINO_STEP:physics cells
+TRINO_STEP:physics cells hash=9974afd8 load_frames=2
+[azahar] TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=545 gathered_us=2318
+[3ds] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/physics115/target/traces/3ds.json
+[3ds] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/castle64_hub.png: mean diff 0.01, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (bottom): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/castle64_hub_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase bottom): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/showcase_bottom.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[3ds] golden frame (showcase river): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/showcase_river.png: mean diff 0.27, 0.29% far pixels (limits 3, 2.0%)
+[3ds] golden frame (texture formats): /home/v/Documents/projects/Trino-wt/physics115/tests/golden/3ds/texture_formats.png: mean diff 0.00, 0.00% far pixels (limits 3, 2.0%)
+[n64] group selftest_physics: 1 entries, 72 KB raw, 16 KB stored (libdragon level 1)
+   Compiling trino-platform-n64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/crates/platform-n64)
+   Compiling castle64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/examples/castle64)
+   Compiling trino-app-n64 v0.2.0-dev.1 (/home/v/Documents/projects/Trino-wt/physics115/apps/n64)
+[n64] ROM: /home/v/Documents/projects/Trino-wt/physics115/target/n64/trino.z64
+[ares] TRINO_STEP:physics
+[ares] TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[ares] TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+[ares] TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=118169 rays_grid_us=6057 steps=16 steps_scan_us=10987 steps_grid_us=2387 hub_solids=17 hub_scan_us=158 hub_grid_us=175
+[ares] TRINO_STEP:physics casts
+[ares] TRINO_STEP:physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=0 bvh_us=0 scan_us=0
+[ares] TRINO_STEP:physics cells
+[ares] TRINO_STEP:physics cells hash=9974afd8 load_frames=2
+[ares] TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=3354 gathered_us=6982
+[n64] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/physics115/target/traces/n64.json
+[n64] perf reports: 30 reports -> /home/v/Documents/projects/Trino-wt/physics115/target/perf
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/shadows_far.png matches
+[ares] TRINO_STEP:physics
+[ares] TRINO_STEP:physics course hash=ba581be1 fx=ffa322c7
+[ares] TRINO_STEP:physics hash=ba581be1 fx=ffa322c7 mesh_tris=28 feet_mm=1320
+[ares] TRINO_PHYSICS_COST: solids=500 rays=64 rays_scan_us=118173 rays_grid_us=6050 steps=16 steps_scan_us=10993 steps_grid_us=2367 hub_solids=17 hub_scan_us=158 hub_grid_us=177
+[ares] TRINO_STEP:physics casts
+[ares] TRINO_STEP:physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=0 bvh_us=0 scan_us=0
+[ares] TRINO_STEP:physics cells
+[ares] TRINO_STEP:physics cells hash=9974afd8 load_frames=2 venue skipped (heap)
+[n64] trace: 2 lines, 1 sessions, 7 events -> /home/v/Documents/projects/Trino-wt/physics115/target/traces/n64.json
+[n64] perf reports: 30 reports -> /home/v/Documents/projects/Trino-wt/physics115/target/perf
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/showcase.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/castle64_hub.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/showcase_river.png matches
+[n64] golden frame: /home/v/Documents/projects/Trino-wt/physics115/tests/golden/n64/shadows_far.png matches
+physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=520 scan_us=560
+physics cells hash=9974afd8 load_frames=1
+TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=15 gathered_us=35
+physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=450 scan_us=406 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+physics cells hash=9974afd8 load_frames=1 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=17 gathered_us=61 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+physics casts hash=49c8ac0d fx_mesh=5d3c8f29 hits=48 bvh_us=451 scan_us=470 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+physics cells hash=9974afd8 load_frames=1 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 
+TRINO_PHYSICS_LOAD: nodes=204 solids=200 baked_us=21 gathered_us=59 color:#111;background:#9b59b6;padding:0 4px;border-radius:2px 

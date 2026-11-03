@@ -1,0 +1,16 @@
+{
+  "feet": [
+    12.0,
+    -100.0830078125,
+    4.0
+  ],
+  "ground": null,
+  "normal": [
+    0.0,
+    1.0,
+    0.0
+  ],
+  "on_ground": false,
+  "query": "drop",
+  "sliding": false
+}

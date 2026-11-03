@@ -1,0 +1,301 @@
+{
+  "layers": [],
+  "ok": true,
+  "scenes": [
+    {
+      "budget": [
+        {
+          "collision_tris": 0,
+          "fits": true,
+          "max_collision_tris": 4096,
+          "platform": "n64"
+        },
+        {
+          "collision_tris": 0,
+          "fits": true,
+          "max_collision_tris": 16384,
+          "platform": "3ds"
+        },
+        {
+          "collision_tris": 0,
+          "fits": true,
+          "max_collision_tris": 1000000,
+          "platform": "pc"
+        },
+        {
+          "collision_tris": 0,
+          "fits": true,
+          "max_collision_tris": 1000000,
+          "platform": "web"
+        }
+      ],
+      "cells": [
+        {
+          "cell": 0,
+          "first_index": 0,
+          "grid": {
+            "bytes": 286,
+            "cell_size": 20.0,
+            "nx": 6,
+            "nz": 6,
+            "refs": 106
+          },
+          "meshes": 0,
+          "solids": 48,
+          "triggers": 0
+        },
+        {
+          "cell": 1,
+          "first_index": 48,
+          "grid": {
+            "bytes": 284,
+            "cell_size": 20.0,
+            "nx": 6,
+            "nz": 6,
+            "refs": 105
+          },
+          "meshes": 0,
+          "solids": 48,
+          "triggers": 0
+        },
+        {
+          "cell": 2,
+          "first_index": 96,
+          "grid": {
+            "bytes": 284,
+            "cell_size": 20.0,
+            "nx": 6,
+            "nz": 6,
+            "refs": 105
+          },
+          "meshes": 0,
+          "solids": 48,
+          "triggers": 0
+        },
+        {
+          "cell": 3,
+          "first_index": 144,
+          "grid": {
+            "bytes": 282,
+            "cell_size": 20.0,
+            "nx": 6,
+            "nz": 6,
+            "refs": 104
+          },
+          "meshes": 0,
+          "solids": 48,
+          "triggers": 0
+        },
+        {
+          "cell": null,
+          "first_index": 192,
+          "grid": {
+            "bytes": 36,
+            "cell_size": 24.0,
+            "nx": 9,
+            "nz": 1,
+            "refs": 8
+          },
+          "meshes": 0,
+          "solids": 8,
+          "triggers": 0
+        }
+      ],
+      "characters": [],
+      "grid": {
+        "bytes": 1172,
+        "cells": 153,
+        "refs": 428
+      },
+      "issues": [
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s0` and `hall-0/s43` overlap (19.233 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s1` and `hall-0/s19` overlap (0.753 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s2` and `hall-0/s11` overlap (11.109 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s12` and `hall-0/s21` overlap (0.486 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s16` and `hall-0/s19` overlap (2.834 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s18` and `hall-0/s25` overlap (7.893 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s28` and `hall-0/s35` overlap (10.342 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-0/s33` and `hall-0/s38` overlap (5.173 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s1` and `hall-1/s4` overlap (1.156 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s1` and `hall-1/s37` overlap (9.926 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s2` and `hall-1/s18` overlap (0.648 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s2` and `hall-1/s46` overlap (8.540 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s3` and `hall-1/s41` overlap (3.118 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s4` and `hall-1/s11` overlap (25.752 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s4` and `hall-1/s37` overlap (67.896 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s8` and `hall-1/s9` overlap (0.436 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s9` and `hall-1/s33` overlap (7.650 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s10` and `hall-1/s27` overlap (1.273 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s11` and `hall-1/s37` overlap (31.266 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s14` and `hall-1/s44` overlap (0.066 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s18` and `hall-1/s46` overlap (12.748 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s20` and `hall-1/s39` overlap (15.215 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s24` and `hall-1/s35` overlap (13.451 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s25` and `hall-1/s34` overlap (1.451 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-1/s40` and `hall-1/s42` overlap (8.100 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s2` and `hall-2/s8` overlap (26.076 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s3` and `hall-2/s20` overlap (9.533 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s11` and `hall-2/s37` overlap (34.079 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s16` and `hall-2/s34` overlap (30.456 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s18` and `hall-2/s32` overlap (1.928 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s19` and `hall-2/s26` overlap (36.958 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s19` and `hall-2/s31` overlap (49.305 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s26` and `hall-2/s31` overlap (23.891 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s28` and `hall-2/s33` overlap (1.172 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-2/s30` and `hall-2/s35` overlap (0.274 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-3/s4` and `hall-3/s14` overlap (10.281 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-3/s5` and `hall-3/s29` overlap (10.796 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-3/s20` and `hall-3/s46` overlap (0.942 m³)"
+        },
+        {
+          "level": "warning",
+          "message": "solids `hall-3/s28` and `hall-3/s45` overlap (2.531 m³)"
+        },
+        {
+          "level": "info",
+          "message": "ramp `hall-2/s12` is 72.5°: steeper than any character's limit (45°), so it is a wall and a slide"
+        },
+        {
+          "level": "info",
+          "message": "ramp `hall-2/s42` is 47.6°: steeper than any character's limit (45°), so it is a wall and a slide"
+        },
+        {
+          "level": "info",
+          "message": "ramp `hall-3/s0` is 48.9°: steeper than any character's limit (45°), so it is a wall and a slide"
+        },
+        {
+          "level": "info",
+          "message": "ramp `hall-3/s12` is 73.5°: steeper than any character's limit (45°), so it is a wall and a slide"
+        },
+        {
+          "level": "info",
+          "message": "ramp `hall-3/s24` is 60.5°: steeper than any character's limit (45°), so it is a wall and a slide"
+        },
+        {
+          "level": "info",
+          "message": "ramp `hall-3/s36` is 68.0°: steeper than any character's limit (45°), so it is a wall and a slide"
+        }
+      ],
+      "meshes": [],
+      "one_way": 32,
+      "ramps": 32,
+      "scene": "scenes/physics-venue.scene.ron",
+      "section_bytes": 7072,
+      "solids": 136,
+      "triggers": []
+    }
+  ]
+}

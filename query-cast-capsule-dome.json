@@ -1,0 +1,22 @@
+{
+  "hit": {
+    "center": [
+      -6.0,
+      1.540086269378662,
+      6.5
+    ],
+    "entity": "dome",
+    "fraction": 0.5766522884368896,
+    "inside": false,
+    "kind": "mesh",
+    "normal": [
+      0.0,
+      1.0000019073486328,
+      -1.589005933055887e-6
+    ],
+    "t": 3.459906578063965,
+    "triangle": 7
+  },
+  "query": "cast",
+  "shape": "Capsule { radius: 0.3, height: 1.4 }"
+}

@@ -1214,7 +1214,7 @@ impl<const N: usize> TriggerTracker<N> {
         let mut k = 0;
         for i in 0..n {
             let e = out[i];
-            if e.phase == TriggerPhase::Stay && !live(e.trigger) {
+            if e.phase != TriggerPhase::Enter && !live(e.trigger) {
                 continue;
             }
             out[k] = e;

@@ -337,8 +337,8 @@ The 500-solid venue (400 × 400 m, four layers, a floor), and castle64's hub fra
 - **Triggers across a stream.** `TriggerTracker::end_frame_held(out, live)` keeps a pair
   whose trigger's cell unloaded (no Exit). Back in a loaded cell, a body still inside is
   a Stay, never a second Enter; one that left meanwhile is an Exit. Held pairs take
-  room in the tracker: size `N` for the live pairs plus the held ones, or a full
-  tracker drops a held pair (counted in `dropped`) and it comes back as an Enter.
+  room in the tracker: size `N` for the live pairs plus the held ones. A full tracker
+  drops a held pair (counted in `dropped`) silently, and it comes back as an Enter.
 - **The section.** The bake gathers the nodes' colliders (`gather_nodes`), sorts them by
   cell, grids each cell at `grid_cell_size` and writes the result (`write_section`)
   after the data table. The environment's last 8 bytes point to it (TSCN v9).

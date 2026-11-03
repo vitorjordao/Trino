@@ -546,6 +546,27 @@ uint32_t trino_heap_top_free(void)
     return (uint32_t)m.keepcost + (uint32_t)(__heap_top - __heap_end);
 }
 
+// Give newlib's free top chunk back to sbrk (GitHub #110): newlib's
+// malloc extends the heap by a request's whole size when the top chunk is
+// too small, so a free top chunk next to the sbrk room made a block larger
+// than either fail. Returns 1 when memory went back.
+uint32_t trino_heap_trim(void)
+{
+    return (uint32_t)malloc_trim(0);
+}
+
+// The global allocator's memalign, with one retry after giving the free top
+// chunk back (see trino_heap_trim): a block bigger than either the top chunk
+// or the sbrk room, but not their sum, then fits. Out of line here, so each
+// Rust allocation site stays one call.
+void *trino_memalign(size_t align, size_t size)
+{
+    void *p = memalign(align, size);
+    if (!p && malloc_trim(0))
+        p = memalign(align, size);
+    return p;
+}
+
 // pts: 6 floats (x0,y0,x1,y1,x2,y2) in screen pixels;
 // colors: 12 bytes (r,g,b,a per vertex);
 // zs: 3 floats, normalized depth 0..1 (0 = near plane).

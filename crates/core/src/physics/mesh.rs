@@ -19,8 +19,9 @@
 //! [`MeshCollider::parse`] validates every index, range and child order up
 //! front, so queries never fail and the tree is acyclic.
 
+use super::convex::Convex;
 use super::scalar::{Box3, MeshQuery, MeshSupport, V3};
-use super::{Aabb, ray_box};
+use super::{Aabb, CastShape, ShapeHit, cast_convex, merge_hit, ray_box};
 use crate::math::Vec3;
 use crate::math3d::{Mat34, sqrt};
 
@@ -28,7 +29,7 @@ pub const TCOL_MAGIC: &[u8; 4] = b"TCOL";
 pub const TCOL_VERSION: u16 = 1;
 pub const TCOL_HEADER: usize = 20;
 const NODE_BYTES: usize = 32;
-const LEAF: u32 = 0x8000_0000;
+pub(crate) const LEAF: u32 = 0x8000_0000;
 /// Triangles per BVH leaf.
 pub const TCOL_LEAF_TRIS: usize = 4;
 /// Deepest tree a query walks (the writer's median splits stay far below).
@@ -340,7 +341,7 @@ impl<'a> MeshCollider<'a> {
     }
 
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
-    fn node(&self, n: usize) -> (Aabb, u32, u32) {
+    pub(crate) fn node(&self, n: usize) -> (Aabb, u32, u32) {
         let at = TCOL_HEADER + self.verts * 12 + self.tris * 8 + n * NODE_BYTES;
         let d = self.data;
         (
@@ -566,6 +567,42 @@ impl<'a> MeshInstance<'a> {
         })
     }
 
+    /// Sweep `shape` (centered at `from`) to `to` against the triangles,
+    /// exactly (issue #115): spheres against each triangle's face, edges and
+    /// corners, Y-capsules against the triangle extruded by their half
+    /// segment, boxes by separating axes. The earliest contact wins, the
+    /// lowest triangle on ties; `ShapeHit::index` is the triangle. Equals
+    /// [`shape_cast_mesh_scan`] (the brute force), which runs the same
+    /// per-triangle test on every triangle.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn shape_cast(&self, shape: CastShape, from: Vec3, to: Vec3) -> Option<ShapeHit> {
+        let q = grown(&shape.bounds(from).union(&shape.bounds(to)));
+        let mut best = None;
+        self.mesh.for_each_tri(&self.local_query(&q), |t| {
+            merge_hit(&mut best, cast_tri(shape, from, to, &self.triangle(t), t));
+            true
+        });
+        best
+    }
+
+    /// Triangles `shape` centered at `c` overlaps (exactly), ascending by
+    /// triangle into `out`; returns how many. Equals
+    /// [`overlap_shape_mesh_scan`].
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn overlap_shape(&self, shape: CastShape, c: Vec3, out: &mut [u32]) -> usize {
+        let q = grown(&shape.bounds(c));
+        let (mut total, mut kept) = (0usize, 0usize);
+        self.mesh.for_each_tri(&self.local_query(&q), |t| {
+            if tri_overlaps(shape, c, &self.triangle(t)) {
+                total += 1;
+                kept = insert_lowest_u32(out, kept, t as u32);
+            }
+            true
+        });
+        out[..kept].sort_unstable();
+        total
+    }
+
     /// Triangles meeting a world box (tools, overlays): returns how many,
     /// `out` keeps the first ones visited.
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
@@ -580,6 +617,122 @@ impl<'a> MeshInstance<'a> {
         });
         n
     }
+}
+
+/// A query box grown so that the inverse transform's rounding can never
+/// drop a triangle the box touches.
+fn grown(q: &Aabb) -> Aabb {
+    let e = 1e-3 + 1e-5 * (q.max - q.min).dot(Vec3::ONE).abs();
+    Aabb::new(q.min - Vec3::ONE * e, q.max + Vec3::ONE * e)
+}
+
+/// One triangle (world corners) against a swept shape. A triangle outside
+/// the swept bounds (grown a little) cannot be touched: skipped before the
+/// exact test, which costs ~100 µs a triangle on the consoles.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn cast_tri(
+    shape: CastShape,
+    from: Vec3,
+    to: Vec3,
+    t: &[Vec3; 3],
+    index: usize,
+) -> Option<ShapeHit> {
+    let swept = grown(&shape.bounds(from).union(&shape.bounds(to)));
+    if !touches(&swept, &tri_bounds_of(t)) {
+        return None;
+    }
+    cast_convex(shape, from, to, &|seg| Convex::triangle(t, seg), index)
+}
+
+fn tri_bounds_of(t: &[Vec3; 3]) -> Aabb {
+    Aabb::new(t[0], t[0])
+        .union(&Aabb::new(t[1], t[1]))
+        .union(&Aabb::new(t[2], t[2]))
+}
+
+/// Does `shape` centered at `c` overlap the triangle? Touching does not.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn tri_overlaps(shape: CastShape, c: Vec3, t: &[Vec3; 3]) -> bool {
+    if !touches(&grown(&shape.bounds(c)), &tri_bounds_of(t)) {
+        return false;
+    }
+    match shape {
+        CastShape::Box { half } => Convex::triangle(t, 0.0).overlaps_box(c, half),
+        _ => {
+            let (r, seg) = shape.round();
+            Convex::triangle(t, seg).closest(c).1 < r * r
+        }
+    }
+}
+
+/// [`MeshInstance::shape_cast`]'s brute-force reference: every triangle,
+/// in index order.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn shape_cast_mesh_scan(
+    shape: CastShape,
+    from: Vec3,
+    to: Vec3,
+    mesh: &MeshInstance,
+) -> Option<ShapeHit> {
+    let mut best = None;
+    for t in 0..mesh.mesh.triangle_count() {
+        merge_hit(&mut best, cast_tri(shape, from, to, &mesh.triangle(t), t));
+    }
+    best
+}
+
+/// [`MeshInstance::overlap_shape`]'s brute-force reference.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn overlap_shape_mesh_scan(
+    shape: CastShape,
+    c: Vec3,
+    mesh: &MeshInstance,
+    out: &mut [u32],
+) -> usize {
+    let mut n = 0;
+    for t in 0..mesh.mesh.triangle_count() {
+        if tri_overlaps(shape, c, &mesh.triangle(t)) {
+            if n < out.len() {
+                out[n] = t as u32;
+            }
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Keep the `out.len()` lowest values in `out[..kept]` (unordered).
+fn insert_lowest_u32(out: &mut [u32], kept: usize, v: u32) -> usize {
+    if kept < out.len() {
+        out[kept] = v;
+        return kept + 1;
+    }
+    if let Some((at, &max)) = out.iter().enumerate().max_by_key(|&(_, x)| *x)
+        && v < max
+    {
+        out[at] = v;
+    }
+    kept
+}
+
+/// Sweep `shape` against several meshes: the earliest contact as (mesh
+/// index, hit), the lowest (mesh, triangle) on ties.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn shape_cast_meshes(
+    shape: CastShape,
+    from: Vec3,
+    to: Vec3,
+    meshes: &[&MeshInstance],
+) -> Option<(usize, ShapeHit)> {
+    let mut best: Option<(usize, ShapeHit)> = None;
+    for (mi, m) in meshes.iter().enumerate() {
+        if let Some(h) = m.shape_cast(shape, from, to)
+            && best.is_none_or(|(_, b)| h.t < b.t)
+        {
+            best = Some((mi, h));
+        }
+    }
+    best
 }
 
 #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]

@@ -19,7 +19,7 @@
 //! [`World`](super::World) grid first.
 
 use super::scalar::{Box3, MeshQuery, Scalar, V3};
-use super::{SKIN, Solid, World};
+use super::{SKIN, Solid, SolidSource, World};
 use crate::math3d;
 
 /// The side a ramp's top rises toward.
@@ -112,6 +112,7 @@ impl<S: Scalar> Surface<S> {
     /// Height of the top under the XZ footprint of `foot`: the box's top,
     /// or a ramp's surface at the footprint's highest point (within the
     /// ramp).
+    #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn top_at(&self, foot: &Box3<S>) -> S {
         let b = &self.aabb;
@@ -148,6 +149,7 @@ impl<S: Scalar> Surface<S> {
     }
 
     /// The top's unit normal (up for boxes).
+    #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub fn normal(&self) -> V3<S> {
         match self.kind {
@@ -681,7 +683,8 @@ impl<S: Scalar> CharacterController<S> {
         S::controller_step(self, dt, surfaces, meshes)
     }
 
-    /// [`step`](Self::step)'s body.
+    /// [`step`](Self::step)'s body (out of line: one copy per scalar).
+    #[inline(never)]
     #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
     pub(crate) fn step_impl(
         &mut self,
@@ -801,11 +804,25 @@ impl CharacterController<f32> {
     /// [`step`](Self::step) against a [`World`]: the grid's and the dynamic
     /// list's surfaces near the frame's move, in world index order, so
     /// `standing_on` is a world index.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    #[inline]
     pub fn step_world(
         &mut self,
         dt: f32,
         world: &World,
+        meshes: &[&dyn MeshQuery<f32>],
+    ) -> StepReport<f32> {
+        self.step_in(dt, world, meshes)
+    }
+
+    /// [`step`](Self::step) against any [`SolidSource`]: a [`World`] or a
+    /// streamed [`CellWorld`](super::CellWorld) (only its loaded cells).
+    /// `standing_on` stays a global index; a body whose ground unloaded
+    /// loses it and falls.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn step_in(
+        &mut self,
+        dt: f32,
+        world: &dyn SolidSource,
         meshes: &[&dyn MeshQuery<f32>],
     ) -> StepReport<f32> {
         let c = self.cfg;
@@ -817,18 +834,11 @@ impl CharacterController<f32> {
         let r = V3::new(c.half.x + reach, c.half.y + reach, c.half.z + reach);
         let q = Box3::from_center_half(self.pos, r).to_aabb();
         let mut ids = [0u16; STEP_WORLD_CANDIDATES];
-        let total = world.overlap_aabb(&q, c.mask, &mut ids);
+        let total = world.gather(&q, c.mask, &mut ids);
         let n = total.min(ids.len());
         let mut local = [Surface::solid(Box3::new(V3::ZERO, V3::ZERO)); STEP_WORLD_CANDIDATES];
-        let base = world.statics.len();
         for (k, &id) in ids[..n].iter().enumerate() {
-            let id = id as usize;
-            let s = if id < base {
-                &world.statics.solids()[id]
-            } else {
-                &world.dynamics[id - base]
-            };
-            local[k] = s.into();
+            local[k] = (&world.solid_at(id as usize)).into();
         }
         // standing_on is kept in world indices between frames.
         self.standing_on = self

@@ -78,7 +78,7 @@ fn the_pc_recording_replays_hash_for_hash_and_a_tampered_one_does_not() {
             Some(&mut |b: &[u8]| again.extend_from_slice(b)),
         )
         .unwrap_or_else(|e| panic!("{profile:?}: {e}"));
-        assert_eq!((r.frames, r.checked), (731, 731), "{profile:?}: {r:?}");
+        assert_eq!((r.frames, r.checked), (761, 761), "{profile:?}: {r:?}");
         // What this target fed and hashed, recorded again: the PC's file,
         // byte for byte.
         let fixture =

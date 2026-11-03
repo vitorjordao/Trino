@@ -4,7 +4,9 @@
 // for the console self-tests (`castle64::selftest::portals`). Rooms B and C
 // also name the asset groups their contents would stream from (scene v6,
 // `trino_core::CellGroups`; `cargo xtask assets check` holds them to the
-// manifest).
+// manifest). The floors and outer walls collide, and room B has a trigger
+// pad: the `physics cells` self-test step streams the rooms' physics with
+// their groups (issue #115).
 (
     version: 6,
     name: "interior",
@@ -40,6 +42,7 @@
         scale: (8.0, 0.2, 8.0),
     ),
     model: Some((path: "models/wall", tint: Some((230, 190, 160, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
 ),
 (
     name: "pillar",
@@ -78,6 +81,16 @@
         scale: (8.0, 0.2, 8.0),
     ),
     model: Some((path: "models/wall", tint: Some((160, 200, 235, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
+),
+(
+    name: "pad",
+    transform: (
+        pos: (0.0, -2.0, 0.0),
+        rot: (0.0, 0.0, 0.0),
+        scale: (1.0, 1.0, 1.0),
+    ),
+    collider: Some((shape: Box(size: (2.0, 2.0, 2.0)), offset: (0.0, 1.0, 0.0), trigger: true)),
 ),
 (
     name: "pillar",
@@ -116,6 +129,7 @@
         scale: (8.0, 0.2, 8.0),
     ),
     model: Some((path: "models/wall", tint: Some((190, 230, 170, 255)))),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
 ),
 (
     name: "pillar",
@@ -171,6 +185,7 @@
         scale: (24.6, 4.0, 0.3),
     ),
     model: Some((path: "models/wall")),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
 ),
 (
     name: "south",
@@ -180,6 +195,7 @@
         scale: (24.6, 4.0, 0.3),
     ),
     model: Some((path: "models/wall")),
+    collider: Some((shape: Box(size: (1.0, 1.0, 1.0)), offset: (0.0, 0.5, 0.0))),
 ),
 (
     name: "west",
@@ -189,6 +205,7 @@
         scale: (0.3, 4.0, 8.0),
     ),
     model: Some((path: "models/wall")),
+    collider: Some((shape: Box(size: (1.0, 1.0, 0.95)), offset: (0.0, 0.5, 0.0))),
 ),
 (
     name: "east",
@@ -198,6 +215,7 @@
         scale: (0.3, 4.0, 8.0),
     ),
     model: Some((path: "models/wall")),
+    collider: Some((shape: Box(size: (1.0, 1.0, 0.95)), offset: (0.0, 0.5, 0.0))),
 ),
 (
     name: "div-8-l",

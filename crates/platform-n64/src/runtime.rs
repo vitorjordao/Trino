@@ -55,6 +55,14 @@ pub fn heap() -> (u32, u32) {
 /// top chunk + the unclaimed sbrk room; allocates nothing). On the base
 /// N64 the free bytes fragment and this is what a big `Vec` finds
 /// (GitHub #110).
+/// Give newlib's free top chunk back to sbrk (GitHub #110, issue #115):
+/// newlib extends the heap by a request's whole size when its top chunk is
+/// too small, so a free top chunk beside the sbrk room made a block bigger
+/// than either fail although their sum fit (the base N64's micro scenes).
+pub fn heap_trim() -> bool {
+    unsafe { ffi::trino_heap_trim() != 0 }
+}
+
 pub fn heap_top_free() -> u32 {
     unsafe { ffi::trino_heap_top_free() }
 }
@@ -206,7 +214,8 @@ struct LibdragonAlloc;
 
 unsafe impl GlobalAlloc for LibdragonAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { ffi::memalign(layout.align().max(8), layout.size()) as *mut u8 }
+        // `trino_memalign` retries once after `malloc_trim` (issue #115).
+        unsafe { ffi::trino_memalign(layout.align().max(8), layout.size()) as *mut u8 }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {

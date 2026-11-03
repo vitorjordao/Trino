@@ -66,7 +66,11 @@ freezes v1**; after that, any layout change bumps the version and adds a migrati
 Later versions, each refusing the older blobs (rebake): v2 LOD records of 32 bytes
 (impostors, ADR 0009), v3 a surface block (ADR 0011), v4 water (ADR 0015), v5 shadows
 (ADR 0025), v6 glow (issue #64), **v7 a 24-byte physics block per node** (collider layer,
-one-way, ramp direction, mesh blob, the character component; ADR 0035).
+one-way, ramp direction, mesh blob, the character component; ADR 0035), v8 semantic slots and
+outlines (issue #96), **v9 a physics section** (every cell's solids, triggers, mesh colliders
+and baked grid, pointed to by the environment's last 8 bytes; ADR 0035 §13). v9 is the first
+version with a migration: a v8 blob still parses, and its physics is gathered and gridded at
+load (`physics::load_scene`).
 
 Manifest kind `[scenes.*]`: paths are relative to the project root, and the blob id is
 `fnv1a("scenes/<name>")`.

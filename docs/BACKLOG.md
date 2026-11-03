@@ -228,9 +228,10 @@ shipping a 3D game first**, then by cost:
 11. **Scene streaming** (M). Load and unload TSCN chunks by portal cell or distance, for
     levels larger than RDRAM. The base is in (#56, ADR 0022 §5): cells name asset groups
     (scene v6) and `trino_core::CellGroups` streams them by visibility, verified on the
-    PC's real groups. Left: TSCN chunks per cell (the scene's nodes still load whole), a
-    distance trigger for exteriors, castle64's interior split into grouped rooms on the
-    consoles.
+    PC's real groups, and since #115 each cell's physics streams with it (`CellWorld`,
+    TSCN v9's physics section). Left: TSCN chunks per cell (the scene's nodes still load
+    whole), a distance trigger for exteriors, castle64's interior split into grouped rooms
+    on the consoles.
 12. **Audio**: Doppler and occlusion through portals, only if a game needs them. From
     #53 (ADR 0021 follow-ups): tracker music (XM/MOD; libdragon's `xm64`) on every target;
     Opus on the PC and the Web; stereo masters (mono today, stereo averaged);
@@ -312,6 +313,21 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — physics 2.1: physics per cell, exact casts against meshes and ramps, fixed-point meshes, a baked grid, castle64 on the controller's options (2026-11-02, branch `feat/115-physics21`, GitHub #115, ADR 0035 §10–§15)
+
+| Item | Evidence |
+|---|---|
+| Shape casts and overlaps exact against triangle meshes (sphere, Y-capsule, box; BVH = brute force), ramps (their wedge) and one-way boxes (from above) | `physics_casts.rs` (7), the grid == scan contract with ramps and one-ways; the `physics casts` step's hash `0x49c8ac0d` on the PC, Azahar (New and old) and the browsers |
+| Capsules: the body stays a box on every tier, declared in `Caps::capsule_bodies` | ADR 0035 §11; `bodies_are_boxes_on_every_tier_and_capsules_are_exact_in_queries` |
+| `FxMesh`: a mesh collider in Q16.16, `CharacterController<Fx>` over it | `physics_fx_mesh.rs` (3); `PHYSICS_FX_MESH_HASH` `0x5d3c8f29` on the PC, ares (both tiers), Azahar (both) and the browsers |
+| Physics per cell: `CellWorld`, fixed global indices, held triggers, pinned cells | `physics_cells.rs` (4); the `physics cells` step (the interior's rooms streamed with `selftest_level`, `0x9974afd8`) on the PC, ares (both tiers), Azahar (both) and the browsers |
+| TSCN v9 physics section + the v8 migration, load measured | `scene_physics.rs` (2), `baked_scene_rejects_bad_blobs`; the 200-solid venue: 545 µs baked vs 2 318 µs gathered (New 3DS), 3.4 vs 7.0 ms (N64 + Pak, re-gridding only) |
+| castle64 on step height and snap (0.3 m), a stone landing on the hub's route | `bot_plays_the_whole_game` (3 ledges climbed, 4 snaps), goldens and recordings re-blessed |
+| CLI and editor parity | `physics_cli.rs::cells_stream_their_physics`; `physics_cells_mask_labels_and_hud` (Play ▸ Physics cells, cell labels, the HUD's cells and baked bytes) |
+| The base N64's heap with the new code | `malloc_trim` in `trim_buffers`, `perf::sort_models`, ramp overlaps by plane; base peak 2 038 296 / 2 190 192 (ADR 0035 §15) |
+
+Not done: real-hardware numbers (no cart or 3DS here); slopes in castle64 (its levels are boxes); mesh casts in the N64 self-test (the base heap).
 
 ## Done — animation graphs for crowds: decoded tables, sized instances, synced layers, one graph per rig family (2026-11-02, branch `feat/138-graph-runtime`, GitHub #138, ADR 0040)
 

@@ -247,6 +247,21 @@ The model is used by:
 - **When to grid:** past a few dozen solids. Below that, the scan is fine.
 - **Mind the RAM:** keep the physics code's instantiations few (meshes as trait
   objects); the base N64 heap is the binding constraint.
+- **Over 8 layouts (#115, ADR 0035 §15):** venue rays 116 ms scan / 6.3 ms grid, steps
+  12.3 / 2.9 ms, the hub's 170 vs 196 µs is layout noise. A 200-solid venue's physics
+  loads in 3.3 ms from TSCN v9's baked section vs 6.9 ms re-gridding it.
+- **Code is heap on the base N64 (#115).** The self-test ROM links every feature; diff
+  `mips64-elf-size -A trino.elf` (`.text` + `.rodata`) and the `nm -S` symbol sizes
+  against main's ELF (strip `::h…`, mind `trino_text_pad`). What cut #115's 65 KB:
+  an enum probe instead of `&dyn Fn` closures per query, no `[T; N]::map`/iterator
+  adaptors in hot-free code (`try_map` was 1.3 KB), the perf reports' `sort_unstable`
+  (6 KB) as an insertion sort, and leaving test-only paths out of the N64 self-test.
+- **Big blocks after frees: `runtime::heap_trim`.** newlib asks sbrk for a request's
+  whole size when the top chunk is short, so free top + sbrk room don't add up;
+  `trim_buffers` trims first (the micro scenes' 79 KB batch) and the global allocator's
+  `trino_memalign` (shim) retries once after a trim. libdragon's sbrk keeps ~32 KB of
+  its own before the stack, which `top=` includes. Code in Rust's `alloc` is inlined at
+  every allocation site: a retry branch there cost 11 KB.
 
 ### Measured fixed costs (micro scenes)
 

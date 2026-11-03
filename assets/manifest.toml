@@ -511,7 +511,7 @@ compression = { n64 = 1, 3ds = "lz4" }
 # scenes that `require` it (scenes/striders.scene.ron).
 [groups.strider]
 
-# Issue #67: a PC recording of castle64's bot (green hills, 731 frames, a
+# Issue #67: a PC recording of castle64's bot (green hills, 761 frames, a
 # state hash every frame; `TRINO_BOT=green TRINO_RECORD=...`). The `replay`
 # self-test step plays it on every target and compares the hashes: the
 # cross-platform determinism gate. Loaded by that step only.
@@ -558,6 +558,15 @@ file = "scenes/showcase.scene.ron"
 # Portal/cell demo (three rooms); loaded by the console self-tests.
 [scenes.interior]
 file = "scenes/interior.scene.ron"
+
+# A 200-solid streamed venue (issue #115): the self-test times its load from
+# the baked physics section (TSCN v9) against gathering and gridding its
+# nodes. In its own group, loaded by that step only.
+[scenes.physics-venue]
+file = "scenes/physics-venue.scene.ron"
+groups = ["selftest_physics"]
+
+[groups.selftest_physics]
 
 # Hardware-tier probe (selftest::hw_tier, issue #54): one card whose
 # `n64_expanded` / `n3ds_new` variant draws `models/selftest_tier_card`.

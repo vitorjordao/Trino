@@ -212,7 +212,7 @@ impl N64Host {
         }
         let vblanks = runtime::vblanks().wrapping_sub(v0);
         let n = (frames as u64).max(1);
-        models[..n_models].sort_unstable_by(|a, b| b.us.cmp(&a.us));
+        trino_core::perf::sort_models(&mut models[..n_models]);
         let mut top = [(0u32, 0, 0, 0); 8];
         for (t, m) in top.iter_mut().zip(models[..n_models].iter()) {
             let f = frames.max(1);

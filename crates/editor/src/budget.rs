@@ -341,6 +341,27 @@ pub fn collision_line(
     if tris > 0 {
         line.push_str(&format!(" · mesh {tris}/{} tris", caps.max_collision_tris));
     }
+    // Physics per cell (issue #115): the cells and the bytes of the baked
+    // physics section (TSCN v9) the bake writes.
+    let nodes: Vec<_> = resolved
+        .items
+        .iter()
+        .filter(|i| i.exported())
+        .map(|i| i.collider.map(|c| (i.cell, c, i.matrix)))
+        .collect();
+    let cells = resolved
+        .items
+        .iter()
+        .filter(|i| i.collider.is_some() && i.cell != trino_core::vis::NO_CELL)
+        .map(|i| i.cell)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if cells > 0 {
+        line.push_str(&format!(" · {cells} cells"));
+    }
+    if let Some(section) = trino_scene::bake::physics_section(&nodes) {
+        line.push_str(&format!(" · baked {} B", section.len()));
+    }
     line.push_str(&format!(" · N64 ≈{:.2} ms/body", scan_us / 1000.0));
     let level = if tris as u32 > caps.max_collision_tris {
         Level::Over

@@ -8,11 +8,17 @@
 //!   unnamed triggers, unknown layers, ramps too steep for every character)
 //!   and the collision-triangle budget per platform (`Caps::
 //!   max_collision_tris`). Non-zero exit on an error.
+//!   Since #115 also each cell's physics (solids, triggers, meshes, its
+//!   grid) and the bytes of the scene's baked physics section (TSCN v9).
 //! - `physics query <scene.ron> --ray x,y,z dx,dy,dz [--max m]`,
 //!   `--cast sphere:r|capsule:r,h|box:x,y,z x,y,z x,y,z`,
-//!   `--overlap x,y,z hx,hy,hz`, `--drop x,y,z [--character r,h,slope,step]`
-//!   `[--mask bits] [--json]` — what the engine's queries answer (the same
-//!   `StaticWorld` grid and mesh instances a game builds).
+//!   `--overlap x,y,z hx,hy,hz`, `--drop x,y,z [--character r,h,slope,step]
+//!   [--fixed]` `[--mask bits] [--cells bits] [--json]` — what the engine's
+//!   queries answer: the same per-cell grids (`CellWorld`, only the cells
+//!   in `--cells` loaded; default all) and mesh instances a game builds.
+//!   Casts are exact against boxes, ramps (their wedge), one-way boxes
+//!   (from above) and meshes (#115); `--fixed` drops a `CharacterController
+//!   <Fx>` on the fixed-point meshes (`FxMesh`).
 //! - `physics layers [--json]`, `layers add <name>`, `layers remove <name>`,
 //!   `layers set <a> <b> on|off` — `assets/physics.ron`, as the editor's
 //!   Project › Physics matrix edits it.
@@ -23,16 +29,19 @@ use std::process::ExitCode;
 use serde_json::json;
 use trino_core::Vec3;
 use trino_core::physics::{
-    CastShape, Character, CharacterController, LAYER_ALL, MeshCollider, MeshInstance, Shape, Solid,
-    StaticWorld, Surface, SurfaceKind, V3, World,
+    self, Box3, CastShape, CellPart, CellWorld, Character, CharacterController, Fx, FxMesh, FxNode,
+    FxTri, LAYER_ALL, MeshCollider, MeshInstance, MeshQuery, Scalar, Shape, Solid, Surface,
+    SurfaceKind, V3,
 };
+use trino_core::vis::NO_CELL;
 use trino_scene::physics::PhysicsSettings;
 use trino_scene::{Scene, Target, resolve_for};
 
 const USAGE: &str = "xtask: usage:\n  cargo xtask physics check [scene.ron ...] [--json]\n  \
      cargo xtask physics query <scene.ron> (--ray x,y,z dx,dy,dz [--max m] | \
      --cast sphere:r|capsule:r,h|box:hx,hy,hz x,y,z x,y,z | --overlap x,y,z hx,hy,hz | \
-     --drop x,y,z [--character r,h,slope,step]) [--mask bits] [--json]\n  \
+     --drop x,y,z [--character r,h,slope,step] [--fixed]) [--mask bits] [--cells bits] \
+     [--json]\n  \
      cargo xtask physics layers [--json] | layers add <name> | layers remove <name> | \
      layers set <a> <b> on|off";
 
@@ -51,12 +60,17 @@ pub fn run(root: &Path, args: &[&str]) -> ExitCode {
 /// A scene's collision, resolved like the bake does (PC: variants are a
 /// look, colliders stay the PC ones).
 pub struct Level {
+    /// Sorted by cell (the order of the scene's global indices).
     pub solids: Vec<Solid>,
     /// Entity name of each solid.
     pub solid_names: Vec<String>,
-    pub triggers: Vec<(String, Solid)>,
+    /// The cell of each solid (`NO_CELL`: none).
+    pub solid_cells: Vec<u8>,
+    /// (entity, volume, cell), sorted by cell.
+    pub triggers: Vec<(String, Solid, u8)>,
     /// (entity, model, its matrix, the baked TCOL blob if any).
     pub meshes: Vec<(String, String, trino_core::Mat34, Option<Vec<u8>>)>,
+    pub mesh_cells: Vec<u8>,
     pub characters: Vec<(String, Vec3, Character)>,
     pub warnings: Vec<String>,
 }
@@ -75,8 +89,10 @@ impl Level {
         let mut level = Level {
             solids: Vec::new(),
             solid_names: Vec::new(),
+            solid_cells: Vec::new(),
             triggers: Vec::new(),
             meshes: Vec::new(),
+            mesh_cells: Vec::new(),
             characters: Vec::new(),
             warnings: r.warnings.clone(),
         };
@@ -93,11 +109,13 @@ impl Level {
                 continue;
             };
             if let Some(t) = c.world_trigger(&item.matrix) {
-                level.triggers.push((item.name.clone(), t));
+                level.triggers.push((item.name.clone(), t, item.cell));
             } else if let Some(s) = c.world_solid(&item.matrix) {
                 level.solids.push(s);
                 level.solid_names.push(item.name.clone());
+                level.solid_cells.push(item.cell);
             } else if let Shape::Mesh { mesh, .. } = c.shape {
+                level.mesh_cells.push(item.cell);
                 let model = scene_mesh_model(scene, &item.name).unwrap_or_default();
                 let blob = baked
                     .iter()
@@ -108,7 +126,54 @@ impl Level {
                     .push((item.name.clone(), model, item.matrix, blob));
             }
         }
+        // The engine's order (`physics::gather_nodes`): stable by cell.
+        let mut order: Vec<usize> = (0..level.solids.len()).collect();
+        order.sort_by_key(|&i| level.solid_cells[i]);
+        level.solids = order.iter().map(|&i| level.solids[i]).collect();
+        level.solid_names = order
+            .iter()
+            .map(|&i| level.solid_names[i].clone())
+            .collect();
+        level.solid_cells = order.iter().map(|&i| level.solid_cells[i]).collect();
+        level.triggers.sort_by_key(|t| t.2);
         Ok(level)
+    }
+
+    /// The per-cell parts a game loads (`physics::build_parts`, the
+    /// bake's cell sizes), into `u16s` / `parts`.
+    pub fn parts<'a>(
+        &'a self,
+        triggers: &'a [Solid],
+        u16s: &'a mut Vec<u16>,
+        parts: &'a mut Vec<CellPart<'a>>,
+    ) -> &'a [CellPart<'a>] {
+        let tc: Vec<u8> = self.triggers.iter().map(|t| t.2).collect();
+        let n = physics::grids_size(&self.solids, &self.solid_cells, 0.0).unwrap_or(0);
+        u16s.resize(n, 0);
+        parts.resize(
+            physics::part_count(&self.solid_cells, &tc),
+            CellPart {
+                cell: 0,
+                base: 0,
+                grid: None,
+                trigger_base: 0,
+                triggers: &[],
+            },
+        );
+        physics::build_parts(
+            &self.solids,
+            &self.solid_cells,
+            triggers,
+            &tc,
+            0.0,
+            u16s,
+            parts,
+        )
+        .unwrap_or(&[])
+    }
+
+    pub fn trigger_solids(&self) -> Vec<Solid> {
+        self.triggers.iter().map(|t| t.1).collect()
     }
 
     /// The meshes with a baked blob, placed.
@@ -273,7 +338,7 @@ fn check(root: &Path, args: &[&str]) -> ExitCode {
                 }
             }
         }
-        for (name, _) in &level.triggers {
+        for (name, _, _) in &level.triggers {
             let leaf = name.rsplit('/').next().unwrap_or(name);
             if leaf.is_empty() || leaf.starts_with("Entity") {
                 issues.push((
@@ -341,9 +406,40 @@ fn check(root: &Path, args: &[&str]) -> ExitCode {
                 "fits": !over,
             }));
         }
-        let grid = (!level.solids.is_empty())
-            .then(|| StaticWorld::size(&level.solids, GRID_CELL))
-            .flatten();
+        let trig = level.trigger_solids();
+        let (mut u16s, mut parts) = (Vec::new(), Vec::new());
+        let parts = level.parts(&trig, &mut u16s, &mut parts);
+        let mesh_records: Vec<(u8, u32)> = level.mesh_cells.iter().map(|&c| (c, 0)).collect();
+        let section =
+            (!parts.is_empty()).then(|| physics::section_bytes(parts, mesh_records.len()));
+        let grid_cells: usize = parts
+            .iter()
+            .filter_map(|p| p.grid)
+            .map(|g| g.raw().5.len() - 1)
+            .sum();
+        let grid_refs: usize = parts
+            .iter()
+            .filter_map(|p| p.grid)
+            .map(|g| g.raw().6.len())
+            .sum();
+        let grid = (!level.solids.is_empty()).then_some((grid_cells, grid_refs));
+        let cells_json: Vec<serde_json::Value> = parts
+            .iter()
+            .map(|p| {
+                let meshes = level.mesh_cells.iter().filter(|&&c| c == p.cell).count();
+                json!({
+                    "cell": if p.cell == NO_CELL { serde_json::Value::Null } else { json!(p.cell) },
+                    "solids": p.solids().len(),
+                    "triggers": p.triggers.len(),
+                    "meshes": meshes,
+                    "first_index": p.base,
+                    "grid": p.grid.map(|g| {
+                        let (_, _, cell, nx, nz, st, rf) = g.raw();
+                        json!({ "cell_size": cell, "nx": nx, "nz": nz, "refs": rf.len(), "bytes": (st.len() + rf.len()) * 2 })
+                    }),
+                })
+            })
+            .collect();
         let count =
             |k: fn(&SurfaceKind) -> bool| level.solids.iter().filter(|s| k(&s.kind)).count();
         let boxes = count(|k| *k == SurfaceKind::Solid);
@@ -357,11 +453,10 @@ fn check(root: &Path, args: &[&str]) -> ExitCode {
                 level.meshes.len(),
                 level.triggers.len(),
                 level.characters.len(),
-                grid.map_or(String::new(), |g| format!(
-                    "; grid {} cells, {} refs ({} B)",
-                    g.starts - 1,
-                    g.refs,
-                    (g.starts + g.refs) * 2
+                grid.map_or(String::new(), |(c, r)| format!(
+                    "; {} cell part(s), grids {c} cells, {r} refs; baked section {} B",
+                    parts.len(),
+                    section.unwrap_or(0)
                 ))
             );
             for (sev, msg) in &issues {
@@ -378,7 +473,7 @@ fn check(root: &Path, args: &[&str]) -> ExitCode {
                 "model": m,
                 "triangles": b.as_ref().and_then(|b| MeshCollider::parse(b).ok()).map(|m| m.triangle_count()),
             })).collect::<Vec<_>>(),
-            "triggers": level.triggers.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+            "triggers": level.triggers.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>(),
             "characters": level.characters.iter().map(|(n, at, c)| json!({
                 "entity": n,
                 "at": [at.x, at.y, at.z],
@@ -387,7 +482,9 @@ fn check(root: &Path, args: &[&str]) -> ExitCode {
                 "max_slope_deg": c.max_slope_deg,
                 "step_height": c.step_height,
             })).collect::<Vec<_>>(),
-            "grid": grid.map(|g| json!({ "cells": g.starts - 1, "refs": g.refs, "bytes": (g.starts + g.refs) * 2 })),
+            "grid": grid.map(|(c, r)| json!({ "cells": c, "refs": r, "bytes": u16s.len() * 2 })),
+            "cells": cells_json,
+            "section_bytes": section,
             "budget": budgets,
             "issues": issues_json(&issues),
         }));
@@ -416,9 +513,6 @@ fn issues_json(issues: &[(Severity, String)]) -> Vec<serde_json::Value> {
         .map(|(s, m)| json!({ "level": s.label(), "message": m }))
         .collect()
 }
-
-/// The grid cell the tools build levels with (games pick their own).
-pub const GRID_CELL: f32 = 8.0;
 
 fn vec3(s: &str) -> Result<Vec3, String> {
     let v: Vec<f32> = s
@@ -473,12 +567,26 @@ fn query_inner(root: &Path, args: &[&str]) -> Result<(), String> {
     let mut drop = None;
     let mut max = 100.0f32;
     let mut mask = LAYER_ALL;
+    let mut cells = u64::MAX;
+    let mut fixed = false;
     let mut character = Character::DEFAULT;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut next = || it.next().copied().ok_or(format!("`{a}` needs a value"));
         match *a {
             "--json" => json = true,
+            "--fixed" => fixed = true,
+            "--cells" => {
+                let v = next()?;
+                cells = if let Some(h) = v.strip_prefix("0x") {
+                    u64::from_str_radix(h, 16)
+                } else if let Some(b) = v.strip_prefix("0b") {
+                    u64::from_str_radix(b, 2)
+                } else {
+                    v.parse()
+                }
+                .map_err(|e| format!("--cells: {e}"))?;
+            }
             "--ray" => ray = Some((vec3(next()?)?, vec3(next()?)?)),
             "--cast" => cast = Some((cast_shape(next()?)?, vec3(next()?)?, vec3(next()?)?)),
             "--overlap" => overlap = Some((vec3(next()?)?, vec3(next()?)?)),
@@ -519,13 +627,17 @@ fn query_inner(root: &Path, args: &[&str]) -> Result<(), String> {
     let file = file.ok_or("which scene?")?;
     let scene = Scene::load(&root.join(file))?;
     let level = Level::load(root, &scene)?;
-    let size = StaticWorld::size(&level.solids, GRID_CELL);
-    let (mut starts, mut refs) = (
-        vec![0u16; size.map_or(1, |s| s.starts)],
-        vec![0u16; size.map_or(1, |s| s.refs)],
-    );
-    let grid = StaticWorld::build(&level.solids, GRID_CELL, &mut starts, &mut refs);
-    let instances = level.instances();
+    let trig = level.trigger_solids();
+    let (mut u16s, mut parts) = (Vec::new(), Vec::new());
+    let parts = level.parts(&trig, &mut u16s, &mut parts);
+    let mut world = CellWorld::new(parts, &[], &[]).ok_or("the scene's cells don't fit")?;
+    world.set_loaded(cells);
+    let live = |cell: u8| cell == NO_CELL || (cell < 64 && cells & (1 << cell) != 0);
+    let instances: Vec<(usize, MeshInstance<'_>)> = level
+        .instances()
+        .into_iter()
+        .filter(|(i, _)| live(level.mesh_cells[*i]))
+        .collect();
     let name_of = |i: usize| level.solid_names.get(i).cloned().unwrap_or_default();
     let kind_of = |i: usize| match level.solids.get(i).map(|s| s.kind) {
         Some(SurfaceKind::Solid) => "solid",
@@ -535,7 +647,7 @@ fn query_inner(root: &Path, args: &[&str]) -> Result<(), String> {
     };
     let out = if let Some((origin, dir)) = ray {
         let dir = dir.normalized();
-        let solid = grid.and_then(|g| g.raycast(origin, dir, max, mask));
+        let solid = world.raycast(origin, dir, max, mask);
         let mut best = solid.map(|h| {
             json!({
                 "t": h.t, "entity": name_of(h.index), "kind": kind_of(h.index),
@@ -560,49 +672,72 @@ fn query_inner(root: &Path, args: &[&str]) -> Result<(), String> {
         }
         json!({ "query": "ray", "origin": [origin.x, origin.y, origin.z], "dir": [dir.x, dir.y, dir.z], "hit": best })
     } else if let Some((shape, from, to)) = cast {
-        let hit = grid.and_then(|g| g.shape_cast(shape, from, to, mask));
-        json!({
-            "query": "cast", "shape": format!("{shape:?}"),
-            "hit": hit.map(|h| json!({
+        let solid = world.shape_cast(shape, from, to, mask);
+        let mut hit = solid.map(|h| {
+            json!({
                 "t": h.t, "fraction": h.fraction, "entity": name_of(h.index), "kind": kind_of(h.index),
                 "normal": [h.normal.x, h.normal.y, h.normal.z], "inside": h.inside,
-            })),
-            "note": "shape casts test boxes, one-way boxes and ramps as their box; rays test meshes too",
-        })
+            })
+        });
+        let mut best_t = solid.map_or(f32::INFINITY, |h| h.t);
+        for (mi, inst) in &instances {
+            if inst.layer & mask == 0 {
+                continue;
+            }
+            if let Some(h) = inst.shape_cast(shape, from, to)
+                && h.t < best_t
+            {
+                best_t = h.t;
+                hit = Some(json!({
+                    "t": h.t, "fraction": h.fraction, "entity": level.meshes[*mi].0, "kind": "mesh",
+                    "triangle": h.index, "normal": [h.normal.x, h.normal.y, h.normal.z], "inside": h.inside,
+                }));
+            }
+        }
+        if let Some(h) = hit.as_mut() {
+            let d = to - from;
+            let p = from + d * h["fraction"].as_f64().unwrap_or(0.0) as f32;
+            h["center"] = json!([p.x, p.y, p.z]);
+        }
+        json!({ "query": "cast", "shape": format!("{shape:?}"), "hit": hit })
     } else if let Some((c, h)) = overlap {
         let q = trino_core::Aabb::from_center_half(c, h);
         let mut ids = vec![0u16; level.solids.len().max(1)];
-        let n = grid.map_or(0, |g| g.overlap_aabb(&q, mask, &mut ids));
+        let n = world.overlap_aabb(&q, mask, &mut ids);
         let triggers: Vec<String> = level
             .triggers
             .iter()
-            .filter(|(_, t)| t.layer & mask != 0 && t.aabb.overlaps(&q))
-            .map(|(n, _)| n.clone())
+            .filter(|(_, t, c)| live(*c) && t.layer & mask != 0 && t.aabb.overlaps(&q))
+            .map(|(n, _, _)| n.clone())
+            .collect();
+        let meshes: Vec<serde_json::Value> = instances
+            .iter()
+            .filter_map(|(mi, inst)| {
+                let k = inst.overlap_shape(CastShape::Box { half: h }, c, &mut [0u32; 1]);
+                (k > 0).then(|| json!({ "entity": level.meshes[*mi].0, "triangles": k }))
+            })
             .collect();
         json!({
             "query": "overlap",
             "solids": ids[..n].iter().map(|&i| name_of(i as usize)).collect::<Vec<_>>(),
             "triggers": triggers,
+            "meshes": meshes,
         })
     } else if let Some(at) = drop {
         // A character dropped at `at` (its feet) settles for up to 4 s.
         let cfg = character.config(25.0, 30.0);
         let mut c = CharacterController::new(cfg, V3::new(at.x, at.y + cfg.half.y, at.z));
         c.cfg.mask = mask;
-        let world = grid.map(|g| World {
-            statics: g,
-            dynamics: &[],
-        });
-        let meshes: Vec<&dyn trino_core::physics::MeshQuery<f32>> = instances
+        if fixed {
+            return drop_fixed(&level, &world, &instances, cfg, at, mask, json);
+        }
+        let meshes: Vec<&dyn MeshQuery<f32>> = instances
             .iter()
-            .map(|(_, m)| m as &dyn trino_core::physics::MeshQuery<f32>)
+            .map(|(_, m)| m as &dyn MeshQuery<f32>)
             .collect();
         let mut rep = None;
         for _ in 0..240 {
-            let r = match &world {
-                Some(w) => c.step_world(1.0 / 60.0, w, &meshes),
-                None => c.step(1.0 / 60.0, &[] as &[Surface<f32>], &meshes),
-            };
+            let r = c.step_in(1.0 / 60.0, &world, &meshes);
             rep = Some(r);
             if c.on_ground && c.vel.y == 0.0 && r.on_ground {
                 break;
@@ -629,6 +764,93 @@ fn query_inner(root: &Path, args: &[&str]) -> Result<(), String> {
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
         println!("{}", human(&out));
+    }
+    Ok(())
+}
+
+/// `--drop --fixed`: the same drop on `CharacterController<Fx>`, the loaded
+/// cells' solids as fixed-point surfaces and the meshes as `FxMesh`es.
+fn drop_fixed(
+    level: &Level,
+    world: &CellWorld,
+    instances: &[(usize, MeshInstance<'_>)],
+    cfg: trino_core::physics::ControllerConfig<f32>,
+    at: Vec3,
+    mask: u16,
+    json: bool,
+) -> Result<(), String> {
+    let fx = |v: V3<f32>| V3::new(Fx::from_f32(v.x), Fx::from_f32(v.y), Fx::from_f32(v.z));
+    let mut ids = vec![0u16; level.solids.len().max(1)];
+    let all = trino_core::Aabb::new(Vec3::ONE * -1.0e6, Vec3::ONE * 1.0e6);
+    let n = world.overlap_bounds(&all, mask, &mut ids);
+    let surfaces: Vec<Surface<Fx>> = ids[..n]
+        .iter()
+        .map(|&i| {
+            let s = world.solid(i as usize).expect("loaded");
+            Surface {
+                aabb: Box3::from_aabb(&s.aabb),
+                layer: s.layer,
+                kind: s.kind,
+            }
+        })
+        .collect();
+    let mut bufs: Vec<(Vec<FxTri>, Vec<FxNode>)> = instances
+        .iter()
+        .map(|(_, m)| {
+            let (t, n) = FxMesh::size(m);
+            (vec![FxTri::default(); t], vec![FxNode::default(); n])
+        })
+        .collect();
+    let meshes: Vec<FxMesh> = instances
+        .iter()
+        .zip(bufs.iter_mut())
+        .map(|((_, m), (t, n))| FxMesh::build(m, t, n).expect("sized"))
+        .collect();
+    let dyn_meshes: Vec<&dyn MeshQuery<Fx>> =
+        meshes.iter().map(|m| m as &dyn MeshQuery<Fx>).collect();
+    let fcfg = trino_core::physics::ControllerConfig {
+        half: fx(cfg.half),
+        gravity: Fx::from_f32(cfg.gravity),
+        max_fall: Fx::from_f32(cfg.max_fall),
+        substep_hz: Fx::from_f32(cfg.substep_hz),
+        max_substeps: cfg.max_substeps,
+        step_height: Fx::from_f32(cfg.step_height),
+        snap_down: Fx::from_f32(cfg.snap_down),
+        max_slope_tan: Fx::from_f32(cfg.max_slope_tan),
+        min_normal_y: cfg.min_normal_y,
+        coyote_time: Fx::ZERO,
+        jump_buffer: Fx::ZERO,
+        mask,
+    };
+    let mut c = CharacterController::new(fcfg, fx(V3::new(at.x, at.y + cfg.half.y, at.z)));
+    let mut rep = None;
+    for _ in 0..240 {
+        let r = c.step(Fx::from_f32(1.0 / 60.0), &surfaces, &dyn_meshes);
+        rep = Some(r);
+        if c.on_ground && c.vel.y == Fx::ZERO && r.on_ground {
+            break;
+        }
+    }
+    let rep = rep.unwrap();
+    let p = c.pos.to_f32();
+    let feet = [p.x, p.y - cfg.half.y, p.z];
+    let out = json!({
+        "query": "drop",
+        "fixed_point": true,
+        "feet": feet,
+        "feet_bits": [c.pos.x.0, (c.pos.y - fcfg.half.y).0, c.pos.z.0],
+        "on_ground": c.on_ground,
+        "sliding": rep.sliding,
+        "ground": match (rep.standing_on, rep.mesh_ground) {
+            (Some(i), _) => json!({ "entity": level.solid_names[ids[i] as usize], "kind": "solid" }),
+            (None, Some((m, t))) => json!({ "entity": level.meshes[instances[m].0].0, "kind": "mesh", "triangle": t }),
+            _ => serde_json::Value::Null,
+        },
+    });
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    } else {
+        println!("{} (fixed point)", human(&out));
     }
     Ok(())
 }

@@ -37,7 +37,7 @@ fn dump_reads_a_recording_as_json() {
     assert!(o.status.success(), "{}", text(&o.stderr));
     let r = json(&o);
     assert_eq!(r["header"]["game"], "castle64");
-    assert_eq!(r["header"]["frames"], 731);
+    assert_eq!(r["header"]["frames"], 761);
     assert_eq!(r["header"]["hash_every"], 1);
     let f = &r["frames"][100];
     assert_eq!(f["frame"], 100);
@@ -63,9 +63,9 @@ fn run_replays_on_the_pc_and_catches_a_tampered_copy() {
     let r = json(&o);
     assert_eq!(
         (r["ok"].as_bool(), r["frames"].as_u64()),
-        (Some(true), Some(731))
+        (Some(true), Some(761))
     );
-    assert_eq!(r["checked"], 731);
+    assert_eq!(r["checked"], 761);
     // Stopped early.
     let r = json(&xtask(&[
         "replay",

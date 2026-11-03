@@ -101,3 +101,75 @@ fn record_castle64_gameplay_gif() {
     assert_eq!(game.star_count(), 1, "o bot deve terminar com a estrela");
     eprintln!("gameplay gif: {}", out.display());
 }
+
+/// Issue #115: the bot's walk over the hub's stone landing (two 0.25 m
+/// steps up and down, climbed by the controller's step height and followed
+/// down by its snap), until it reaches the green door. Writes
+/// target/c64_shots/landing.gif and says how many ledges it climbed.
+#[test]
+#[ignore = "utilitário local: grava target/c64_shots/landing.gif (GPU + assets)"]
+fn record_castle64_landing_gif() {
+    let root = repo_root();
+    let baked = root.join("target/assets/pc");
+    trino_asset_pipeline::bake_all(
+        &root.join("assets"),
+        trino_asset_pipeline::Platform::Pc,
+        &baked,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let assets = trino_asset_pipeline::load_dir(&baked, None).unwrap();
+    let mut renderer = pollster::block_on(PcRenderer::new_headless(SimProfile::N64))
+        .expect("gravação precisa de um adapter de GPU");
+    renderer.set_n64_look(true);
+    for sprite in assets.sprites {
+        renderer.upload_sprite(
+            trino_core::SpriteId(sprite.id),
+            sprite.width,
+            sprite.height,
+            &sprite.rgba,
+        );
+    }
+    for model in assets.models {
+        renderer.upload_mesh(trino_core::ModelId(model.id), model.tmdl);
+    }
+    for font in assets.fonts {
+        renderer.upload_font(trino_core::FontId(font.id), font.table);
+    }
+    let mut game = castle64::Castle64Game::new(Vec2::new(320.0, 240.0));
+    let mut bot = castle64::bot::Bot::new(castle64::bot::GREEN_RUN);
+    let mut audio = NullAudio;
+    let (w, h) = renderer.internal_size();
+    let out_dir = root.join("target/c64_shots");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let out = out_dir.join("landing.gif");
+    let file = std::fs::File::create(&out).unwrap();
+    let mut encoder = gif::Encoder::new(file, w as u16, h as u16, &[]).unwrap();
+    encoder.set_repeat(gif::Repeat::Infinite).unwrap();
+    const DT: f32 = 1.0 / 60.0;
+    let mut frames = 0u32;
+    while game.level == 0 && frames < 60 * 20 {
+        let input = bot.drive(&game);
+        game.update(&input, &mut audio, DT);
+        frames += 1;
+        if frames.is_multiple_of(2) {
+            game.render(&mut renderer);
+            let mut rgba = renderer.read_offscreen();
+            let mut gif_frame = gif::Frame::from_rgba_speed(w as u16, h as u16, &mut rgba, 10);
+            gif_frame.delay = 3;
+            encoder.write_frame(&gif_frame).unwrap();
+        }
+    }
+    drop(encoder);
+    assert!(
+        game.steps_climbed >= 2 && game.snaps >= 1,
+        "climbed {} snapped {}",
+        game.steps_climbed,
+        game.snaps
+    );
+    eprintln!(
+        "landing gif: {} ({frames} frames, {} ledges climbed, {} snaps)",
+        out.display(),
+        game.steps_climbed,
+        game.snaps
+    );
+}

@@ -121,6 +121,11 @@ const HUB_BLOCKS: &[Block] = &[
     // Ilhas decorativas com moedas.
     blk(-13.0, 0.0, -8.0, 2.0, 1.0, 2.0, BlockKind::Brick),
     blk(-9.0, 0.0, -12.0, 2.0, 2.0, 2.0, BlockKind::Brick),
+    // A low stone landing on the way to the green door (issue #115): two
+    // 0.25 m steps up and down that the player walks over without jumping
+    // (the controller's step height and snap, 0.3 m).
+    blk(-5.0, 0.0, -9.5, 3.0, 0.25, 4.0, BlockKind::Stone),
+    blk(-4.25, 0.25, -8.75, 1.5, 0.25, 2.5, BlockKind::Stone),
 ];
 
 const HUB_COINS: &[Vec3] = &[

@@ -150,13 +150,86 @@ fn queries_answer_like_the_engine() {
     let r = q(&["--overlap", "1.5,1,9", "0.3,0.3,0.3"]);
     assert_eq!(r["triggers"][0], "goal-zone");
     assert!(r["solids"].as_array().unwrap().is_empty());
-    // A box cast toward the 30° ramp stops at its box (shape casts test
-    // ramps as their box).
+    // A box cast toward the 30° ramp stops on its wedge (#115: exact).
     let r = q(&["--cast", "box:0.3,0.3,0.3", "-7,0.6,4", "-7,0.6,-10"]);
     assert_eq!(r["hit"]["entity"], "ramp-30");
+    // Casts land on the dome's triangles (#115), and on the ramp's slope
+    // where its box would have stopped them higher.
+    let r = q(&["--cast", "capsule:0.3,1.4", "-6,5,6.5", "-6,-1,6.5"]);
+    assert_eq!(
+        (r["hit"]["entity"].as_str(), r["hit"]["kind"].as_str()),
+        (Some("dome"), Some("mesh"))
+    );
+    assert!(r["hit"]["triangle"].is_u64());
+    let r = q(&["--cast", "sphere:0.25", "-7,5,-5", "-7,-1,-5"]);
+    assert_eq!(r["hit"]["entity"], "ramp-30");
+    assert!(r["hit"]["normal"][1].as_f64().unwrap() < 0.9, "{r}");
+    // The fixed-point controller stands on the dome's fixed-point mesh
+    // where the f32 one does (within a step of Q16.16).
+    let a = q(&["--drop", "-6,4,6.5"]);
+    let b = q(&["--drop", "-6,4,6.5", "--fixed"]);
+    assert_eq!(b["fixed_point"], true);
+    assert_eq!(a["ground"]["entity"], b["ground"]["entity"]);
+    let (ya, yb) = (
+        a["feet"][1].as_f64().unwrap(),
+        b["feet"][1].as_f64().unwrap(),
+    );
+    assert!((ya - yb).abs() < 1e-3, "{ya} vs {yb}");
     // Bad arguments say what is wrong.
     let o = xtask(&["physics", "query", PLAYGROUND, "--ray", "1,2", "0,-1,0"]);
     assert!(!o.status.success() && text(&o.stderr).contains("expected x,y,z"));
+}
+
+#[test]
+fn cells_stream_their_physics() {
+    // The interior: a part per room and the outer walls in none, and the
+    // bytes its baked physics section (TSCN v9) takes.
+    let o = xtask(&["physics", "check", "scenes/interior.scene.ron", "--json"]);
+    assert!(o.status.success(), "{}{}", text(&o.stdout), text(&o.stderr));
+    let s = &json(&o)["scenes"][0];
+    let cells = s["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 4);
+    assert_eq!(cells[1]["cell"], 1);
+    assert_eq!(cells[1]["triggers"], 1);
+    assert!(cells[3]["cell"].is_null() && cells[3]["solids"] == 4);
+    assert!(s["section_bytes"].as_u64().unwrap() > 0);
+    // Room B's floor holds a body only while its cell is loaded.
+    let drop = |cells: &str| {
+        let o = xtask(&[
+            "physics",
+            "query",
+            "scenes/interior.scene.ron",
+            "--drop",
+            "12,2,4",
+            "--cells",
+            cells,
+            "--json",
+        ]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+        json(&o)
+    };
+    assert_eq!(drop("0b001")["on_ground"], false);
+    let r = drop("0b011");
+    assert_eq!(
+        (r["on_ground"].as_bool(), r["ground"]["entity"].as_str()),
+        (Some(true), Some("room-b/floor"))
+    );
+    // The trigger pad answers only with its room loaded.
+    let pad = |cells: &str| {
+        let o = xtask(&[
+            "physics",
+            "query",
+            "scenes/interior.scene.ron",
+            "--overlap",
+            "12,1,4",
+            "0.3,0.3,0.3",
+            "--cells",
+            cells,
+            "--json",
+        ]);
+        json(&o)["triggers"].as_array().unwrap().len()
+    };
+    assert_eq!((pad("1"), pad("3")), (0, 1));
 }
 
 #[test]

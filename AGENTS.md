@@ -1031,6 +1031,28 @@ since #122.
   - **Measured on the 500-solid venue** (ares): a ray 1.8 ms → 94 µs, a controller step
     749 → 153 µs.
   - **Worked example:** `scenes/physics_playground.scene.ron`.
+- **Physics 2.1 (2026-11-02, ADR 0035 §10–§15, GitHub #115):**
+  - **Exact casts and overlaps:** spheres, Y-capsules and boxes against triangle meshes
+    (`MeshInstance::shape_cast` / `overlap_shape`, equal to the brute force
+    `shape_cast_mesh_scan`), ramps (their wedge) and one-way boxes (from above);
+    `physics/convex.rs` sweeps a sphere against a small convex polytope.
+  - **Capsules:** the body stays a box on every tier (`Caps::capsule_bodies` false, for
+    cross-target replays and lockstep).
+  - **Fixed-point meshes:** `FxMesh` (a `MeshInstance` in Q16.16, built once at load)
+    is a `MeshQuery<Fx>`, so `CharacterController<Fx>` walks meshes.
+  - **Physics per cell:** `CellPart`/`CellWorld` (fixed global indices, a loaded-cell
+    mask), `step_in(&dyn SolidSource)`, `CellGroups::ready_cells`,
+    `CellWorld::cells_under` (pin the cells under a body),
+    `TriggerTracker::end_frame_held` (no Exit when a trigger's cell unloads).
+  - **TSCN v9:** a physics section (every cell's solids, triggers and baked grid);
+    v8 blobs still load (`physics::load_scene` gathers them); `TscnView` reads a grouped
+    scene's physics.
+  - **castle64:** `step_height`/`snap_down` 0.3 and a stone landing on the hub's route.
+  - **Tools:** `physics check` per cell + `section_bytes`, `physics query --cells`,
+    `--drop --fixed`; the editor's Play ▸ Physics cells (`TRINO_EDITOR_PHYSICS_CELLS`).
+  - **Self-test steps** `physics casts` (cast and Fx-mesh hashes `0x49c8ac0d`,
+    `0x5d3c8f29`; the N64 runs the Fx part only) and `physics cells` (the interior's rooms
+    streamed with real groups, `0x9974afd8`; the venue's load timed).
 
 - **Gamepad families (2026-10-19, #86 item 7, ADR 0028):** `trino_core::pad` —
   `PadFamily { Xbox, PlayStation, Nintendo, EightBitDo, Generic }` detected from USB ids
@@ -1755,6 +1777,23 @@ cargo test --workspace
   everything up to the last 3D draw (2D included) renders at the preset's scale and is
   upscaled; only the 2D after it draws at the window's resolution. 2D coordinates are
   output pixels either way (`screen_size()` is the output's): never scale them yourself.
+- **newlib's heap: a free top chunk and the sbrk room don't add up.** When the top
+  chunk is too small for a request, newlib asks sbrk for the request's whole size, so
+  68 KB free at the top and 57 KB of room failed a 79 KB block (the base N64's micro
+  scenes, issue #115). The N64's global allocator (`trino_memalign` in the shim)
+  retries once after `malloc_trim`, and `trim_buffers` trims too. libdragon's sbrk also
+  keeps ~32 KB before the stack that `top=` counts. Keep such retries in C: a branch in
+  Rust's `alloc` is inlined at every allocation site (+11 KB of `.text`).
+- **The N64 self-test links every engine feature, and code is heap there.** A feature's
+  code moves the base console's heap total by its size (#115's new physics took 65 KB at
+  first). Diff `mips64-elf-size -A` and `nm -S` against main, trim (no closures with
+  `impl Fn`, no `sort_unstable` for small lists, no generic-per-call iterator adaptors),
+  and keep the base self-test's peak under the 128 KB margin.
+- **A scene in its own asset group can't be a `BakedScene`** (`'static` bytes; a
+  `group_blob` lives until the unload). Read its physics through `TscnView`.
+- **Gather controller candidates by bounding boxes.** `overlap_aabb` is exact for ramps
+  since #115 (the wedge); the controller gathers with `overlap_bounds` (a superset), or
+  it would miss a ramp whose box, not wedge, meets its reach.
 - **Never compare a `Caps` with `==` to tell the console.** A tier's table differs
   (`Caps::N64_EXPANDED != Caps::N64`) and the PC renderer's carries its picture size.
   Compare `caps.base()` with the console's table, or ask the renderer's profile

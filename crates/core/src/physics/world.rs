@@ -19,6 +19,7 @@
 //!   against trigger volumes.
 
 use super::controller::{RampDir, SurfaceKind};
+use super::convex::{Convex, one_way_takes};
 use super::{Aabb, RayHit, ray_box};
 use crate::math::Vec3;
 use crate::math3d::{sqrt, to_i32};
@@ -28,8 +29,10 @@ pub const LAYER_ALL: u16 = 0xFFFF;
 
 /// A level solid or a dynamic body's box, on a layer. `kind` makes it a
 /// one-way platform or a ramp for the
-/// [`CharacterController`](super::CharacterController) and for rays (a ramp
-/// is hit on its slope); overlaps and shape casts use its box.
+/// [`CharacterController`](super::CharacterController), rays, overlaps and
+/// shape casts: a ramp is its wedge everywhere (issue #115), a one-way box
+/// stops casts that start above it and is its box to a (motionless)
+/// overlap.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Solid {
     pub aabb: Aabb,
@@ -64,8 +67,92 @@ impl Solid {
     }
 
     #[inline]
-    fn takes(&self, mask: u16) -> bool {
+    pub(crate) fn takes(&self, mask: u16) -> bool {
         self.layer & mask != 0
+    }
+
+    /// Does `q` overlap it? A ramp is its wedge, any other kind its box.
+    /// Touching does not overlap.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn overlaps_aabb(&self, q: &Aabb) -> bool {
+        if !self.aabb.overlaps(q) {
+            return false;
+        }
+        let SurfaceKind::Ramp(dir) = self.kind else {
+            return true;
+        };
+        // The wedge is the box under the slope's plane: `q ∩ box` (a box)
+        // meets it where its lowest point toward the low side lies below
+        // the plane.
+        let b = &self.aabb;
+        let (lo, hi) = (
+            Vec3::new(
+                q.min.x.max(b.min.x),
+                q.min.y.max(b.min.y),
+                q.min.z.max(b.min.z),
+            ),
+            Vec3::new(
+                q.max.x.min(b.max.x),
+                q.max.y.min(b.max.y),
+                q.max.z.min(b.max.z),
+            ),
+        );
+        let rise = b.max.y - b.min.y;
+        // u: how far into the run the box reaches from the low side.
+        let (u, run) = match dir {
+            RampDir::PosX => (hi.x - b.min.x, b.max.x - b.min.x),
+            RampDir::NegX => (b.max.x - lo.x, b.max.x - b.min.x),
+            RampDir::PosZ => (hi.z - b.min.z, b.max.z - b.min.z),
+            RampDir::NegZ => (b.max.z - lo.z, b.max.z - b.min.z),
+        };
+        run <= 0.0 || (lo.y - b.min.y) * run < u * rise
+    }
+
+    /// Does `shape` centered at `c` overlap it (exactly: round shapes by
+    /// distance, ramps as their wedge)?
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn overlaps_shape(&self, shape: CastShape, c: Vec3) -> bool {
+        if !shape.bounds(c).overlaps(&self.aabb) {
+            return false;
+        }
+        match self.kind {
+            SurfaceKind::Ramp(dir) => match shape {
+                CastShape::Box { half } => {
+                    Convex::wedge(&self.aabb, dir, 0.0).overlaps_box(c, half)
+                }
+                _ => {
+                    let (r, seg) = shape.round();
+                    Convex::wedge(&self.aabb, dir, seg).closest(c).1 < r * r
+                }
+            },
+            _ => shape.overlaps(c, &self.aabb),
+        }
+    }
+}
+
+/// What an overlap query tests a solid against (one compiled query for
+/// all of them: the N64's RAM).
+#[derive(Clone, Copy)]
+pub(crate) enum Probe {
+    /// The solid's bounding box against a box (a superset).
+    Bounds(Aabb),
+    /// [`Solid::overlaps_aabb`].
+    Aabb(Aabb),
+}
+
+impl Probe {
+    pub(crate) fn bounds(&self) -> Aabb {
+        match *self {
+            Probe::Bounds(q) | Probe::Aabb(q) => q,
+        }
+    }
+
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub(crate) fn hits(&self, s: &Solid) -> bool {
+        match *self {
+            Probe::Bounds(q) => s.aabb.overlaps(&q),
+            Probe::Aabb(q) => s.overlaps_aabb(&q),
+        }
     }
 }
 
@@ -113,9 +200,11 @@ fn grid_shape(solids: &[Solid], cell: f32) -> Option<(f32, f32, usize, usize)> {
         b = b.union(&s.aabb);
     }
     let inv = 1.0 / cell;
-    let nx = to_i32((b.max.x - b.min.x) * inv) as usize + 1;
-    let nz = to_i32((b.max.z - b.min.z) * inv) as usize + 1;
-    Some((b.min.x, b.min.z, nx, nz))
+    // Damaged boxes (min past max, NaN) give a negative or absurd extent:
+    // no grid rather than a wrap-around (issue #115's fuzzing).
+    let nx = to_i32((b.max.x - b.min.x) * inv).max(0) as usize + 1;
+    let nz = to_i32((b.max.z - b.min.z) * inv).max(0) as usize + 1;
+    (nx <= u16::MAX as usize && nz <= u16::MAX as usize).then_some((b.min.x, b.min.z, nx, nz))
 }
 
 impl<'a> StaticWorld<'a> {
@@ -128,7 +217,7 @@ impl<'a> StaticWorld<'a> {
         let mut refs = 0usize;
         for s in solids {
             let (x0, x1, z0, z1) = span(&s.aabb, ox, oz, inv, nx, nz);
-            refs += (x1 - x0 + 1) * (z1 - z0 + 1);
+            refs = refs.checked_add((x1 - x0 + 1).checked_mul(z1 - z0 + 1)?)?;
         }
         let cells = nx.checked_mul(nz)?;
         (cells < u16::MAX as usize && refs <= u16::MAX as usize).then_some(GridSize {
@@ -200,6 +289,61 @@ impl<'a> StaticWorld<'a> {
         self.solids
     }
 
+    /// The grid as data: (origin x, origin z, cell size, nx, nz, starts,
+    /// refs) — what a baked scene stores ([`super::write_section`]).
+    pub fn raw(&self) -> (f32, f32, f32, usize, usize, &'a [u16], &'a [u16]) {
+        (
+            self.ox,
+            self.oz,
+            self.cell,
+            self.nx,
+            self.nz,
+            self.starts,
+            self.refs,
+        )
+    }
+
+    /// A grid from [`raw`](Self::raw)'s data (a baked scene's), validated:
+    /// `None` unless the cell lists fit `starts`, ascend and name solids of
+    /// `solids` only.
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn from_raw(
+        solids: &'a [Solid],
+        ox: f32,
+        oz: f32,
+        cell: f32,
+        nx: usize,
+        nz: usize,
+        starts: &'a [u16],
+        refs: &'a [u16],
+    ) -> Option<Self> {
+        let cells = nx.checked_mul(nz)?;
+        if cell.is_nan()
+            || cell <= 0.0
+            || nx == 0
+            || nz == 0
+            || starts.len() != cells + 1
+            || starts[0] != 0
+            || starts[cells] as usize != refs.len()
+            || starts.windows(2).any(|w| w[0] > w[1])
+            || refs.iter().any(|&r| r as usize >= solids.len())
+        {
+            return None;
+        }
+        Some(StaticWorld {
+            solids,
+            ox,
+            oz,
+            cell,
+            inv: 1.0 / cell,
+            nx,
+            nz,
+            starts,
+            refs,
+        })
+    }
+
     pub fn len(&self) -> usize {
         self.solids.len()
     }
@@ -243,11 +387,41 @@ impl<'a> StaticWorld<'a> {
     /// Indices of the solids overlapping `q` on `mask`, ascending, into
     /// `out`. Returns how many overlap; when that is more than `out.len()`,
     /// `out` holds the lowest indices (what [`overlap_solids`] keeps).
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    /// A ramp counts where its wedge overlaps `q` ([`Solid::overlaps_aabb`]).
     pub fn overlap_aabb(&self, q: &Aabb, mask: u16, out: &mut [u16]) -> usize {
+        self.overlap_probe(&Probe::Aabb(*q), mask, out)
+    }
+
+    /// [`overlap_aabb`](Self::overlap_aabb) by bounding boxes only (a
+    /// superset): what the controller gathers its surfaces with.
+    pub fn overlap_bounds(&self, q: &Aabb, mask: u16, out: &mut [u16]) -> usize {
+        self.overlap_probe(&Probe::Bounds(*q), mask, out)
+    }
+
+    /// Solids on `mask` that `shape` centered at `c` overlaps, exactly
+    /// ([`Solid::overlaps_shape`]); ascending like
+    /// [`overlap_aabb`](Self::overlap_aabb).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn overlap_shape(&self, shape: CastShape, c: Vec3, mask: u16, out: &mut [u16]) -> usize {
         let (mut total, mut kept) = (0, 0);
-        self.candidates(q, |i| {
-            if self.solids[i].takes(mask) && self.solids[i].aabb.overlaps(q) {
+        self.candidates(&shape.bounds(c), |i| {
+            let s = &self.solids[i];
+            if s.takes(mask) && s.overlaps_shape(shape, c) {
+                total += 1;
+                kept = insert_lowest(out, kept, i as u16);
+            }
+        });
+        sort_small(&mut out[..kept]);
+        total
+    }
+
+    /// Every overlap query: the solids on `mask` `probe` meets, ascending.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub(crate) fn overlap_probe(&self, probe: &Probe, mask: u16, out: &mut [u16]) -> usize {
+        let (mut total, mut kept) = (0, 0);
+        self.candidates(&probe.bounds(), |i| {
+            let s = &self.solids[i];
+            if s.takes(mask) && probe.hits(s) {
                 total += 1;
                 kept = insert_lowest(out, kept, i as u16);
             }
@@ -261,7 +435,7 @@ impl<'a> StaticWorld<'a> {
     pub fn any_overlap(&self, q: &Aabb, mask: u16) -> bool {
         let mut hit = false;
         self.candidates(q, |i| {
-            hit |= self.solids[i].takes(mask) && self.solids[i].aabb.overlaps(q);
+            hit |= self.solids[i].takes(mask) && self.solids[i].overlaps_aabb(q);
         });
         hit
     }
@@ -367,14 +541,15 @@ impl<'a> StaticWorld<'a> {
         self.candidates(&swept, |i| {
             let s = &self.solids[i];
             if s.takes(mask) {
-                merge_hit(&mut best, cast_one(shape, from, to, &s.aabb, i));
+                merge_hit(&mut best, cast_solid(shape, from, to, s, i));
             }
         });
         best
     }
 }
 
-/// Inclusive cell range a box covers.
+/// Inclusive cell range a box covers (ordered: a damaged box whose min is
+/// past its max still gives a valid range, issue #115's fuzzing).
 #[inline]
 fn span(
     b: &Aabb,
@@ -384,12 +559,35 @@ fn span(
     nx: usize,
     nz: usize,
 ) -> (usize, usize, usize, usize) {
-    (
-        cell_of(b.min.x, ox, inv, nx),
-        cell_of(b.max.x, ox, inv, nx),
-        cell_of(b.min.z, oz, inv, nz),
-        cell_of(b.max.z, oz, inv, nz),
-    )
+    let (a, c) = (cell_of(b.min.x, ox, inv, nx), cell_of(b.max.x, ox, inv, nx));
+    let (d, e) = (cell_of(b.min.z, oz, inv, nz), cell_of(b.max.z, oz, inv, nz));
+    (a.min(c), a.max(c), d.min(e), d.max(e))
+}
+
+/// Where the controller's [`step_in`](super::CharacterController::step_in)
+/// finds its surfaces: a [`World`] or a streamed
+/// [`CellWorld`](super::CellWorld).
+pub trait SolidSource {
+    /// Ids of the solids on `mask` whose boxes overlap `q`, ascending
+    /// (the lowest kept); returns how many.
+    fn gather(&self, q: &Aabb, mask: u16, out: &mut [u16]) -> usize;
+    /// The solid with id `id` (one [`gather`](Self::gather) returned).
+    fn solid_at(&self, id: usize) -> Solid;
+}
+
+impl SolidSource for World<'_> {
+    fn gather(&self, q: &Aabb, mask: u16, out: &mut [u16]) -> usize {
+        self.overlap_bounds(q, mask, out)
+    }
+
+    fn solid_at(&self, id: usize) -> Solid {
+        let base = self.statics.len();
+        if id < base {
+            self.statics.solids()[id]
+        } else {
+            self.dynamics[id - base]
+        }
+    }
 }
 
 /// The level grid plus a small dynamic list (scanned linearly). Dynamic
@@ -433,7 +631,7 @@ impl World<'_> {
         let base = self.statics.len();
         for (k, s) in self.dynamics.iter().enumerate() {
             if s.takes(mask) {
-                merge_hit(&mut best, cast_one(shape, from, to, &s.aabb, base + k));
+                merge_hit(&mut best, cast_solid(shape, from, to, s, base + k));
             }
         }
         best
@@ -441,22 +639,86 @@ impl World<'_> {
 
     /// Solids overlapping `q` on `mask`, statics then dynamics, ascending
     /// (the lowest indices when `out` is short); returns how many overlap.
-    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    /// Ramps count where their wedge does.
     pub fn overlap_aabb(&self, q: &Aabb, mask: u16, out: &mut [u16]) -> usize {
-        let mut total = self.statics.overlap_aabb(q, mask, out);
-        let mut kept = total.min(out.len());
-        let base = self.statics.len();
-        for (k, s) in self.dynamics.iter().enumerate() {
-            if s.takes(mask) && s.aabb.overlaps(q) {
-                total += 1;
-                if kept < out.len() {
-                    out[kept] = (base + k) as u16;
-                    kept += 1;
-                }
+        self.overlap_probe(&Probe::Aabb(*q), mask, out)
+    }
+
+    /// [`overlap_aabb`](Self::overlap_aabb) by bounding boxes (a superset):
+    /// the controller's candidates.
+    pub fn overlap_bounds(&self, q: &Aabb, mask: u16, out: &mut [u16]) -> usize {
+        self.overlap_probe(&Probe::Bounds(*q), mask, out)
+    }
+
+    /// Solids `shape` centered at `c` overlaps, exactly; ordered like
+    /// [`overlap_aabb`](Self::overlap_aabb).
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn overlap_shape(&self, shape: CastShape, c: Vec3, mask: u16, out: &mut [u16]) -> usize {
+        let total = self.statics.overlap_shape(shape, c, mask, out);
+        shape_dynamics(
+            total,
+            self.statics.len(),
+            self.dynamics,
+            shape,
+            c,
+            mask,
+            out,
+        )
+    }
+
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    fn overlap_probe(&self, probe: &Probe, mask: u16, out: &mut [u16]) -> usize {
+        let total = self.statics.overlap_probe(probe, mask, out);
+        dynamics_into(total, self.statics.len(), self.dynamics, probe, mask, out)
+    }
+}
+
+/// [`dynamics_into`] for an exact shape overlap.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub(crate) fn shape_dynamics(
+    mut total: usize,
+    base: usize,
+    dynamics: &[Solid],
+    shape: CastShape,
+    c: Vec3,
+    mask: u16,
+    out: &mut [u16],
+) -> usize {
+    let mut kept = total.min(out.len());
+    for (k, s) in dynamics.iter().enumerate() {
+        if s.takes(mask) && s.overlaps_shape(shape, c) {
+            total += 1;
+            if kept < out.len() {
+                out[kept] = (base + k) as u16;
+                kept += 1;
             }
         }
-        total
     }
+    total
+}
+
+/// Append the dynamic solids `probe` meets (indices from `base`) to a
+/// static query's `total` results in `out`.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub(crate) fn dynamics_into(
+    mut total: usize,
+    base: usize,
+    dynamics: &[Solid],
+    probe: &Probe,
+    mask: u16,
+    out: &mut [u16],
+) -> usize {
+    let mut kept = total.min(out.len());
+    for (k, s) in dynamics.iter().enumerate() {
+        if s.takes(mask) && probe.hits(s) {
+            total += 1;
+            if kept < out.len() {
+                out[kept] = (base + k) as u16;
+                kept += 1;
+            }
+        }
+    }
+    total
 }
 
 /// The shape of a swept volume. Sphere and capsule are exact against
@@ -502,6 +764,15 @@ impl CastShape {
         }
     }
 
+    /// A round shape's radius and half segment (0 for a sphere or a box).
+    pub(crate) fn round(&self) -> (f32, f32) {
+        match *self {
+            CastShape::Sphere { radius } => (radius, 0.0),
+            CastShape::Capsule { radius, height } => (radius, (height * 0.5 - radius).max(0.0)),
+            CastShape::Box { .. } => (0.0, 0.0),
+        }
+    }
+
     /// For a round shape: its radius and `b` grown along Y by the
     /// capsule's half segment (a capsule is a sphere swept along it).
     fn round_vs(&self, b: &Aabb) -> (f32, Aabb) {
@@ -544,13 +815,13 @@ fn clamp3(p: Vec3, b: &Aabb) -> Vec3 {
     )
 }
 
-fn normalize_or_zero(v: Vec3) -> Vec3 {
+pub(crate) fn normalize_or_zero(v: Vec3) -> Vec3 {
     let l = sqrt(v.dot(v));
     if l < 1e-9 { Vec3::ZERO } else { v * (1.0 / l) }
 }
 
 #[inline]
-fn merge_hit(best: &mut Option<ShapeHit>, h: Option<ShapeHit>) {
+pub(crate) fn merge_hit(best: &mut Option<ShapeHit>, h: Option<ShapeHit>) {
     if let Some(h) = h
         && best.is_none_or(|b| h.t < b.t || (h.t == b.t && h.index < b.index))
     {
@@ -572,10 +843,103 @@ pub fn shape_cast_solids(
     let mut best = None;
     for (i, s) in solids.iter().enumerate() {
         if s.takes(mask) {
-            merge_hit(&mut best, cast_one(shape, from, to, &s.aabb, i));
+            merge_hit(&mut best, cast_solid(shape, from, to, s, i));
         }
     }
     best
+}
+
+/// One solid of any kind: a box (and a one-way box, for a shape that
+/// starts at or above its top) by [`cast_one`]'s exact box test, a ramp as
+/// its wedge.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn cast_solid(shape: CastShape, from: Vec3, to: Vec3, s: &Solid, index: usize) -> Option<ShapeHit> {
+    match s.kind {
+        SurfaceKind::Solid => cast_one(shape, from, to, &s.aabb, index),
+        SurfaceKind::OneWay => {
+            if one_way_takes(&shape, from, s.aabb.max.y) {
+                cast_one(shape, from, to, &s.aabb, index)
+            } else {
+                None
+            }
+        }
+        SurfaceKind::Ramp(dir) => cast_convex(
+            shape,
+            from,
+            to,
+            &|seg| Convex::wedge(&s.aabb, dir, seg),
+            index,
+        ),
+    }
+}
+
+/// `shape` from `from` to `to` against a convex polytope `build(seg)`
+/// returns (extruded by `seg` along Y for a capsule): the same contract as
+/// [`cast_one`] (an `inside` start, else the earliest contact).
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub(crate) fn cast_convex(
+    shape: CastShape,
+    from: Vec3,
+    to: Vec3,
+    build: &dyn Fn(f32) -> Convex,
+    index: usize,
+) -> Option<ShapeHit> {
+    let delta = to - from;
+    let len = sqrt(delta.dot(delta));
+    let dir = if len > 1e-9 {
+        delta * (1.0 / len)
+    } else {
+        Vec3::ZERO
+    };
+    let hit = |t: f32, normal: Vec3, inside: bool| ShapeHit {
+        t,
+        fraction: if len > 1e-9 { t / len } else { 0.0 },
+        index,
+        normal,
+        inside,
+    };
+    match shape {
+        CastShape::Box { half } => match build(0.0).box_cast(from, half, dir, len) {
+            Err(()) => Some(hit(0.0, Vec3::ZERO, true)),
+            Ok(_) if len <= 1e-9 => None,
+            Ok(h) => h.map(|(t, n)| hit(t, n, false)),
+        },
+        _ => {
+            let (r, seg) = shape.round();
+            let cv = build(seg);
+            let (q, d2) = cv.closest(from);
+            if d2 < r * r {
+                return Some(hit(0.0, normalize_or_zero(from - q), true));
+            }
+            if len <= 1e-9 {
+                return None;
+            }
+            cv.sphere_sweep(from, r, dir, len)
+                .map(|(t, n)| hit(t, n, false))
+        }
+    }
+}
+
+/// Reference for tests and tools: solids on `mask` that `shape` centered
+/// at `c` overlaps, ascending, into `out`; returns how many.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn overlap_shape_solids(
+    shape: CastShape,
+    c: Vec3,
+    mask: u16,
+    solids: &[Solid],
+    out: &mut [u16],
+) -> usize {
+    let mut n = 0;
+    for (i, s) in solids.iter().enumerate() {
+        if s.takes(mask) && s.overlaps_shape(shape, c) {
+            if n < out.len() {
+                out[n] = i as u16;
+            }
+            n += 1;
+        }
+    }
+    n
 }
 
 #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
@@ -828,6 +1192,38 @@ impl<const N: usize> TriggerTracker<N> {
     }
 }
 
+impl<const N: usize> TriggerTracker<N> {
+    /// [`end_frame`](Self::end_frame) across a stream: a pair whose trigger
+    /// is not `live` (its cell unloaded) and that nobody touched this frame
+    /// is held silently instead of ending (no Exit). Back in a loaded cell,
+    /// a body still inside it is a Stay; one that left meanwhile, an Exit.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn end_frame_held(
+        &mut self,
+        out: &mut [TriggerEvent],
+        live: &dyn Fn(u16) -> bool,
+    ) -> usize {
+        for i in 0..self.prev_len {
+            let key = self.prev[i];
+            if !live(key as u16) {
+                self.touch((key >> 16) as u16, key as u16);
+            }
+        }
+        // Held pairs are now in both lists: a Stay, filtered out below.
+        let n = self.end_frame(out);
+        let mut k = 0;
+        for i in 0..n {
+            let e = out[i];
+            if e.phase != TriggerPhase::Enter && !live(e.trigger) {
+                continue;
+            }
+            out[k] = e;
+            k += 1;
+        }
+        k
+    }
+}
+
 /// Reference for tests and tools: indices of `solids` on `mask`
 /// overlapping `q`, ascending, into `out`.
 /// Returns how many overlap; `out` keeps the lowest indices.
@@ -835,7 +1231,7 @@ impl<const N: usize> TriggerTracker<N> {
 pub fn overlap_solids(q: &Aabb, mask: u16, solids: &[Solid], out: &mut [u16]) -> usize {
     let mut n = 0;
     for (i, s) in solids.iter().enumerate() {
-        if s.takes(mask) && s.aabb.overlaps(q) {
+        if s.takes(mask) && s.overlaps_aabb(q) {
             if n < out.len() {
                 out[n] = i as u16;
             }

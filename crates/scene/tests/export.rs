@@ -127,10 +127,10 @@ fn corrupt_tscn_blobs_are_rejected_up_front() {
         SceneError::BadMagic
     );
     let mut bad = blob.clone();
-    bad[4] = 9;
+    bad[4] = 10;
     assert_eq!(
         BakedScene::parse(leak(bad)).unwrap_err(),
-        SceneError::UnsupportedVersion(9)
+        SceneError::UnsupportedVersion(10)
     );
     assert_eq!(
         BakedScene::parse(leak(blob[..blob.len() / 2].to_vec())).unwrap_err(),

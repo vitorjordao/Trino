@@ -308,6 +308,9 @@ pub struct App {
     /// Play here walks the hero with the engine's character controller and
     /// draws its debug overlay (issue #66; `TRINO_EDITOR_PHYSICS=sim`).
     pub simulate_controller: bool,
+    /// The cells whose physics the Scene view treats as loaded (issue #115,
+    /// bits; `TRINO_EDITOR_PHYSICS_CELLS=0b011`).
+    pub physics_cells: u64,
     /// Dev hook `TRINO_EDITOR_PLAY=here`: start Play here on the first frame.
     play_here_on_start: bool,
     /// The scene entities' animation graphs (posed in place) and the clock
@@ -748,6 +751,13 @@ impl App {
                 Ok("here" | "record")
             ) || std::env::var_os("TRINO_EDITOR_REPLAY").is_some(),
             simulate_controller: std::env::var("TRINO_EDITOR_PHYSICS").as_deref() == Ok("sim"),
+            physics_cells: std::env::var("TRINO_EDITOR_PHYSICS_CELLS")
+                .ok()
+                .and_then(|v| match v.strip_prefix("0b") {
+                    Some(b) => u64::from_str_radix(b, 2).ok(),
+                    None => v.parse().ok(),
+                })
+                .unwrap_or(u64::MAX),
             graph_play: {
                 let mut g = trino_asset_pipeline::anim_graph::GraphPlayback::new(&root);
                 g.carry = false;
@@ -854,6 +864,7 @@ impl App {
             memory: self.groups.ready_plans(),
             stereo_preview: self.game_view.stereo_view != trino_platform_pc::StereoView::Off,
             scene_path: &self.doc.path,
+            physics_cells: self.physics_cells,
             access: self.access.view(),
             captions: Some((
                 &self.access.caption,
@@ -2396,6 +2407,32 @@ impl App {
                          controller (steps, slopes, one-way, mesh colliders) and draws its \
                          debug overlay: ground normal, step probe, body (TRINO_EDITOR_PHYSICS=sim)",
                     );
+                    let cells = crate::viewport::cell_physics(&self.resolved);
+                    if cells.keys().any(|&c| c != trino_core::vis::NO_CELL) {
+                        ui.menu_button(format!("{}  Physics cells", icon::BOUNDING_BOX), |ui| {
+                            ui.label("Loaded (what queries and the Scene view take part)");
+                            for (&cell, [s, t, m]) in &cells {
+                                if cell == trino_core::vis::NO_CELL {
+                                    continue;
+                                }
+                                let mut on = crate::viewport::cell_loaded(self.physics_cells, cell);
+                                if ui
+                                    .checkbox(
+                                        &mut on,
+                                        format!(
+                                            "Cell {cell}: {s} solids, {t} triggers, {m} meshes"
+                                        ),
+                                    )
+                                    .changed()
+                                {
+                                    self.physics_cells ^= 1u64 << cell;
+                                }
+                            }
+                            if ui.button("All loaded").clicked() {
+                                self.physics_cells = u64::MAX;
+                            }
+                        });
+                    }
                     if ui
                         .button(format!("{}  Play this scene", icon::CUBE_TRANSPARENT))
                         .clicked()
@@ -4013,6 +4050,7 @@ impl egui_dock::TabViewer for TabView<'_> {
                     memory: app.groups.ready_plans(),
                     stereo_preview: app.game_view.stereo_view != trino_platform_pc::StereoView::Off,
                     scene_path: &app.doc.path,
+                    physics_cells: app.physics_cells,
                     access: app.access.view(),
                     captions: Some((
                         &app.access.caption,

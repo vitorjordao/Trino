@@ -76,7 +76,7 @@ Players, recordings and netplay.
 - **The CI gate is the self-test, not a job:**
   - The `replay` step (`castle64::selftest::replay`) loads
     `assets/shared/replays/castle64_green.trec` from its asset group, plays it through
-    `update_with` and checks all 731 hashes, on PC, ares (both tiers), Azahar (New and
+    `update_with` and checks all 761 hashes, on PC, ares (both tiers), Azahar (New and
     old) and the browsers.
   - Each target also re-records what it fed and hashed (`TRINO_REC:` lines through
     `LineSink`). `test n64|3ds|web` reassembles them (`xtask::replay::Rerecord`) and

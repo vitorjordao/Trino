@@ -78,6 +78,7 @@ TRINO_EDITOR_SCREENSHOT=target/launcher.png TRINO_EDITOR_SCREENSHOT_FRAME=10 car
 | `TRINO_EDITOR_PERF=<file>` / `TRINO_EDITOR_PERF_B=<file>` | the Reports view's report A / B (relative to the project, e.g. `target/perf/n64-hub.json`); without it A is the first file of `target/perf/` |
 | `TRINO_EDITOR_AB=<file>` | the A/B view's report (default the first of `target/perf-ab/` and `target/perf/`) |
 | `TRINO_EDITOR_PROJECT_PAGE=packaging` | the Project tab opens on Packaging (default Achievements); `=physics` on the collision layers and their matrix (issue #66) |
+| `TRINO_EDITOR_PHYSICS_CELLS=0b011` | The cells whose physics is loaded (issue #115; Play ▸ Physics cells): the Scene view grays the other cells' colliders and labels each cell with its physics |
 | `TRINO_EDITOR_PHYSICS=sim` | Play here walks the `player` on the engine's `CharacterController` (Play ▸ Simulate controller) and the Game view draws its debug overlay: body, ground normal, step probe, status line |
 | `TRINO_EDITOR_LANG=<tag>` | the editor-wide preview language (issue #59): the Localization tab's, the UI tab's (unless `TRINO_EDITOR_UI` names one) and Play's `TRINO_LANG` |
 | `TRINO_EDITOR_ACCESS=cvd=deuteranopia,text=200,contrast=on` | the Accessibility tab's simulation at start: the Scene, Game and UI views through that color vision, the UI tab at that text size and contrast (`AccessSettings::parse_text` keys) |

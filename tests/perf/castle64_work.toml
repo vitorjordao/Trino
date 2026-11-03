@@ -13,8 +13,8 @@ splits = 0
 backfaced = 8
 emitted = 5
 culled = 0
-rsp_draws = 24
-rsp_tris = 581
+rsp_draws = 26
+rsp_tris = 605
 
 [green-hills]
 verts = 0

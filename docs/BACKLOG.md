@@ -293,13 +293,12 @@ shipping a 3D game first**, then by cost:
 20. **Netplay follow-ups** (S–M each, from #67, ADR 0036; #117 did `local_seats`, the
     3DS's `uds` lockstep, spectators, NAT traversal, keys/pointer online and snapshot
     recordings: ADR 0041).
-    - Run on hardware what #117 ran in emulators and simulations: two physical 3DS
-      units over `uds`, a real two-machine session over the Internet through
-      `docker/lobby`, `replay run --device` on a flashcart and a 3DS (#117 stays open
-      for these).
-    - Spectators that join a running match (a snapshot sent over the network), and a
-      portable snapshot for Solid Eleven (its UI and kick tables hold static borrows,
-      so its crash tails stay input-only).
+    - Run on hardware what #117 ran in emulators: two physical 3DS units over `uds`,
+      and `replay run --device` on a flashcart and a 3DS (#123).
+    - A real two-machine session over the Internet through `docker/lobby`, spectators
+      that join a running match (a snapshot sent over the network), and a portable
+      snapshot for Solid Eleven (its UI and kick tables hold static borrows, so its
+      crash tails stay input-only) (#143).
     - Netplay in the standalone template's Web host (`run_game` replays and records;
       `?net` is `apps/web`'s), and PC↔Web crossplay (a WebRTC peer for the PC runner).
     - A `Join` screen in Solid Eleven's menus (the core helper exists; the quick

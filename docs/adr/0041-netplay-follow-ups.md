@@ -171,7 +171,10 @@ seed. `netpad` covers `NetInput`, and `net` covers the relay datagrams and `serv
 - **Snapshot recordings:** a castle64 cut at frame 400 and a Solid Eleven cut at frame
   300 replay to their full runs' final hashes.
 
-### Limits and what's left (#117 stays open for these)
+### Limits and what's left
+
+#117 closed with PR #142. The hardware runs below moved to #123, and the Internet
+session, mid-match spectators and Solid Eleven's portable snapshot moved to #143.
 
 - **Two physical 3DS units:** not run. The code path is the one Azahar's NWM emulation
   exercised.

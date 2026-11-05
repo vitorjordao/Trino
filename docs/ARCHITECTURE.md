@@ -185,6 +185,22 @@ start order (forced, saved, the machine, the project default) and the player's f
 High is the frame the PC always drew. Details in [ADR 0023](adr/0023-quality-presets.md)
 and [PLATFORMS.md](PLATFORMS.md#quality-presets).
 
+### Ambient occlusion and water per tier (issues #42, #49)
+
+Both follow the local lights' pattern: one API, a tier per platform from `Caps`.
+
+- **Ambient occlusion** (`Caps::ao_tier`, [ADR 0014](adr/0014-ambient-occlusion-per-tier.md)):
+  the PC and the Web run a screen-space pass over the depth buffer
+  (`Renderer::set_ambient_occlusion`); the consoles and the PC's console profiles get
+  occlusion baked into the vertex colors at bake time (`ao = { .. }` on a `[models.*]`
+  entry: rays against the model's own BVH), so it costs nothing at run time.
+- **Water** (`Caps::water_tier`, [ADR 0015](adr/0015-water-surfaces-per-tier.md)):
+  `ModelParams::water` is one material. The core displaces every target's surface (two
+  sines and up to four ripple rings); the PC shades it per pixel (normals, Fresnel, glint,
+  depth foam), the 3DS runs a PICA200 vertex program with a TexEnv layer blend, and the
+  N64 blends two scrolled layers in the RDP's two-cycle combiner, with its own RSP overlay
+  for the vertices ([ADR 0018](adr/0018-n64-rsp-coverage-and-water.md)).
+
 ### Shadows per tier (issue #57)
 
 A game describes each draw's shadow once, `ModelParams::shadow: ShadowCast`
@@ -247,6 +263,23 @@ tracks decoded in `Mesh::pose`), and a pose can carry foot IK (`AnimRef::ik`, so
 Everything is `no_std`, fixed size and deterministic: the self-test's pose hash is the same
 on the PC, in ares and in Azahar. Details in
 [ADR 0034](adr/0034-animation-graphs-and-clip-data.md).
+
+### Animation layers and crowds (issues #112, #138)
+
+Past the three clips of an `AnimRef`, `trino_core::anim::pose` describes a layered pose:
+up to four layers of override or additive clips under joint masks, 2D blend spaces and
+inertialized transitions. `Renderer::push_pose` folds it to what the target affords
+(`Caps::anim_layers`: one layer of three clips on the base N64, two on the Expansion Pak
+and the 3DS, four on the New 3DS, the PC and the Web) and hands back an `AnimRef`, so
+backends still need no animation code. `PoseCache` keeps the per-joint work of
+transitions and additive clips across frames
+([ADR 0039](adr/0039-animation-layers-2d-blend-inertialization.md)).
+
+For crowds, `GraphTables` decodes a graph once (or is exported as static Rust), and a
+`GraphInstance<L, I, E>` sized by the game plays it: a Solid Eleven player's instance is
+about 220 bytes on the N64. Blob and tables give the same poses, events and digests, and
+the `graph crowd` self-test step holds 22 players to one hash on every target
+([ADR 0040](adr/0040-graph-tables-and-crowd-instances.md)).
 
 ### 2D in the same pipeline
 
@@ -377,6 +410,25 @@ Profiler tab. The renderers mark their stages (N64, 3DS, wgpu) and the wgpu rend
 GPU pass zones from timestamp queries; the PC can also feed Tracy (`tracy` feature), the
 Web `performance.measure`. The `profiling` skill is the how-to.
 
+## Performance instrumentation (ADR 0038)
+
+The N64's hard numbers come from tools, not hand edits. An instrumented ROM (`--trace` or
+`--prof scopes|rsp|sample`) adds zones on the renderer's hot paths, backend counters (memo
+hits, RSP commands, overlay switches, texture uploads), the cost of each RSP command alone,
+or a sampled CPU profile; a plain build links none of it. Every `test n64` writes a
+report per perf scene, `cargo xtask perf ab` compares two revisions over eight code
+layouts with a no-op control arm, and `cargo xtask rsp count` pins the overlays'
+instruction counts. The editor's Profiler tab reads the same reports.
+
+## Shader precompilation and the thread budget (ADR 0031)
+
+Nothing compiles at run time on the consoles: the RSP overlays and the PICA200 shaders are
+assembled by the build. On the PC and the Web, `Renderer::precompile` builds the
+renderer's lazily created passes ahead of need (on worker threads, or one pass a frame in
+the browser) behind a loading bar, through a persistent pipeline cache. One thread budget
+(`auto` = all CPUs but one; `--threads`, `TRINO_THREADS`, `trino.toml [threads]`) drives
+the parallel bakes, bundle decoding and the console builds.
+
 ## Physics (issue #66, ADR 0035)
 
 `trino_core::physics` is core-only: no backend code, the same bits on every target.
@@ -404,6 +456,16 @@ Web `performance.measure`. The `profiling` skill is the how-to.
   - the editor's Play here draws its debug overlay.
 - **The `physics` self-test step** pins its course hashes to the PC's on every target.
 
+### Physics 2.1 (issue #115)
+
+- **Exact casts against everything static:** sphere, capsule and box casts and overlaps
+  against triangle meshes, ramps and one-way platforms, each equal to its brute-force scan.
+- **Fixed-point meshes:** `FxMesh` is a mesh in Q16.16, so a `CharacterController<Fx>`
+  walks the same level a float one does, for lockstep sims.
+- **Physics per cell:** `CellWorld` keeps each portal cell's solids and triggers apart and
+  steps only the loaded ones, so physics streams with the level's asset groups. `TSCN` v9
+  carries every cell's solids and baked grid.
+
 ## Players, recordings and netplay (issue #67, ADR 0036)
 
 - **Players.** `Platform::players()` gives every local player's `InputState` (four
@@ -429,6 +491,19 @@ Web `performance.measure`. The `profiling` skill is the how-to.
     `trino-net` is `std` and not a dependency of the platform crates.
 - **Portability.** A recording or a session runs against `replay::Neutral`: no save, the
   default settings. So nothing one machine keeps changes the sim.
+
+### Netplay follow-ups (issue #117, ADR 0041)
+
+- **Spectators and up to four peers**, and `Platform::local_seats` so each machine shows
+  only its own player's guides.
+- **NAT traversal:** peers meet by room code, punch through NATs where they can and fall
+  back to the lobby's relay otherwise; `trino_net::natsim` tests it against simulated
+  NAT behaviors.
+- **Console lockstep:** `trino_core::lockstep` (`no_std`, no I/O) runs delay-based
+  lockstep over the 3DS's local wireless (`uds`); `cargo xtask net 3ds` plays it in two
+  Azahar instances. Not yet run on two physical units.
+- **Snapshot recordings:** `TREC` v2 starts from a game's `portable_state`, so a crash
+  report's last minute replays to the crash.
 
 ## Robustness: fuzzing and saves (issue #68, ADR 0037)
 

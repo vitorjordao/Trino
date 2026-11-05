@@ -35,6 +35,15 @@ are the historical plans the engine was first built from.
   or `cargo xtask emulators setup azahar` for the pinned Linux AppImage);
   `cargo xtask test 3ds` drives it automatically.
 
+### Web
+
+- Nothing to install by hand for a build: xtask adds the `wasm32-unknown-unknown` target
+  with rustup when it is missing, installs the `wasm-bindgen` CLI at the lockfile's
+  version and serves the page itself (`cargo xtask run web`).
+- Testing: Node.js for the Playwright harness in `tools/web-test`; `cargo xtask test web`
+  runs the self-test in Chromium (WebGL2 and WebGPU), Firefox and WebKit. See the
+  `build-web` skill.
+
 ## Workflow
 
 1. Fork, branch from `main`.

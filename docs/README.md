@@ -1,7 +1,7 @@
 # Trino documentation
 
-Start with the [README](../README.md) for the pitch, the feature matrix and the
-quickstart. [AGENTS.md](../AGENTS.md) is the complete reference for contributors and AI
+Start with the [README](../README.md) for the pitch, pictures of every target, the
+quickstart and the feature tables. [AGENTS.md](../AGENTS.md) is the complete reference for contributors and AI
 agents: every command, the repository map, the rules and the pitfalls. The pages below
 explain the engine by topic and link the detailed material instead of repeating it.
 
@@ -29,14 +29,19 @@ they read just as well for people. Each one is the most detailed source for its 
 | [add-asset](../.agents/skills/add-asset/SKILL.md) | Every asset kind: manifest entries, formats, baking, live reload |
 | [blender-asset](../.agents/skills/blender-asset/SKILL.md) | Modeling, coloring, rigging and exporting within Trino's limits |
 | [scene-authoring](../.agents/skills/scene-authoring/SKILL.md) | Scenes, prefabs and materials as text; `scene check`, `scene export` |
-| [accessibility](../.agents/skills/accessibility/SKILL.md) | Semantic palettes, captions, text scale and high contrast; `access check`, `access shot`, the editor's simulation |
+| [animation](../.agents/skills/animation/SKILL.md) | Animation graphs, blend spaces, layers with joint masks, clip events, root motion, foot IK, crowds; `anim check`, `anim simulate` |
 | [ui-authoring](../.agents/skills/ui-authoring/SKILL.md) | Menus, HUDs and dialogs as `ui/*.ui.ron` screens; `ui check`, `ui shot`, driving a screen from game code |
+| [localization](../.agents/skills/localization/SKILL.md) | String tables, plurals and locale formats, fonts with each language's glyphs; `i18n check`, `i18n pseudo`, CSV for translators |
+| [accessibility](../.agents/skills/accessibility/SKILL.md) | Semantic palettes, captions, text scale and high contrast; `access check`, `access shot`, the editor's simulation |
+| [netplay](../.agents/skills/netplay/SKILL.md) | Local players, `TREC` recordings and replays, rollback and lockstep netplay, the lobby and relay |
 | [editor](../.agents/skills/editor/SKILL.md) | Running and driving the editor, its hooks, its code map |
-| [build-n64](../.agents/skills/build-n64/SKILL.md), [build-3ds](../.agents/skills/build-3ds/SKILL.md) | How the console builds work and how to fix them |
+| [build-n64](../.agents/skills/build-n64/SKILL.md), [build-3ds](../.agents/skills/build-3ds/SKILL.md), [build-web](../.agents/skills/build-web/SKILL.md) | How the console and browser builds work and how to fix them |
 | [run-emulator](../.agents/skills/run-emulator/SKILL.md) | ares and Azahar: runs, the self-test harness, goldens, watch loops |
 | [hardware](../.agents/skills/hardware/SKILL.md) | Real-console deploys and how they are wired |
 | [n64-performance](../.agents/skills/n64-performance/SKILL.md) | Measuring the N64 frame, the perf gates, the cost model |
-| [engine-feature](../.agents/skills/engine-feature/SKILL.md) | Adding an engine service end to end on all three backends |
+| [profiling](../.agents/skills/profiling/SKILL.md) | Timeline traces from every target: zones, `trace collect\|report\|diff`, Perfetto, Tracy, the editor's Profiler |
+| [robustness](../.agents/skills/robustness/SKILL.md) | The fuzz targets, adding one for a new format, triaging a crash, the A/B save slots |
+| [engine-feature](../.agents/skills/engine-feature/SKILL.md) | Adding an engine service end to end on every backend |
 | [shipping](../.agents/skills/shipping/SKILL.md) | Achievements and stats, `package pc`, Steam, crash reports, `deck check`, the `.cia` |
 | [new-project](../.agents/skills/new-project/SKILL.md) | `cargo xtask new`, standalone projects, `trino.toml` |
 | [test-all](../.agents/skills/test-all/SKILL.md), [ci](../.agents/skills/ci/SKILL.md) | The local gates and the GitHub Actions jobs |
@@ -57,19 +62,35 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0010](adr/0010-local-lights-per-tier.md) | Local lights, one API with a quality tier per platform |
 | [0011](adr/0011-texture-filter-and-detail.md) | Texture filtering per draw and a detail layer |
 | [0012](adr/0012-console-hardware-paths-and-honest-n64-timing.md) | GPU vertex T&L on the 3DS, N64 text in runs, N64 timings over code layouts, hang diagnostics |
+| [0013](adr/0013-hardware-paths-round-two-and-frame-breakdowns.md) | Fog on the PICA200, why some draws stay on the CPU, the PC's first frame breakdown, an N64 change held back |
+| [0014](adr/0014-ambient-occlusion-per-tier.md) | Ambient occlusion per tier: SSAO on the PC, baked into vertex colors on the consoles |
+| [0015](adr/0015-water-surfaces-per-tier.md) | Water surfaces: one material with a tier per platform |
+| [0016](adr/0016-pc-hardware-tnl.md) | PC hardware T&L: the GPU path, instancing on every target, the CPU oracle |
 | [0017](adr/0017-texture-formats.md) | Texture formats: 3DS hardware formats, `auto`, PC BCn, the Web's KTX2 |
-| [0018](adr/0018-n64-rsp-coverage-and-water.md) | N64: the RSP takes fog, colored light, textures, rigid skeletons and water (#69) |
+| [0018](adr/0018-n64-rsp-coverage-and-water.md) | N64: the RSP takes fog, colored light, textures, rigid skeletons, palettes and water |
 | [0019](adr/0019-web-target.md) | The Web target: one renderer for PC and browsers, WebGPU with a WebGL2 fallback |
 | [0020](adr/0020-console-hardware-tiers.md) | Console hardware tiers: the Expansion Pak and the New 3DS, one ROM per game, the 3DS's second core |
 | [0021](adr/0021-audio-pipeline.md) | Audio: a codec per platform (VADPCM, DSP-ADPCM, Vorbis), streaming, buses and ducking |
 | [0022](adr/0022-asset-groups-and-memory.md) | Asset groups, `TBND` bundles, compression per platform, loading in time slices, a RAM budget per console tier, cell streaming |
-| [0023](adr/0023-quality-presets.md) | Quality presets for the PC and the Web: Low to Ultra, render scale with upscale, dynamic resolution, frame pacing, an auto-detect bench |
-| [0024](adr/0024-ui-system.md) | A declarative UI system for every target: `ui/*.ui.ron` screens, whole-pixel layout with safe areas and the 3DS touch screen, pad/mouse/touch focus, string tables, budgets, `ui check` |
-| [0025](adr/0025-shadows-per-tier.md) | Shadows per tier: blobs on the N64, planar shadows on the 3DS, a shadow map on the PC and the Web; depth-safe placement, scene shadows and receivers, budget, editor views |
-| [0027](adr/0027-accessibility.md) | Accessibility on every target: settings and persistence, semantic palettes per color-vision mode (no shader), icons, captions, text scale and high contrast, motion and flash guards, `access check`, the simulation view |
-| [0036](adr/0036-players-replays-netplay.md) | Local players (seats, the N64's four ports, `Join`, per-player bindings), `TREC` input recordings checked by state hashes on every target, rollback netplay over ggrs (UDP, WebRTC, a lobby), the editor's record/replay/Net tab, the 3DS local-wireless evaluation |
-| [0041](adr/0041-netplay-follow-ups.md) | Netplay follow-ups (#117): `Platform::local_seats`, spectators and four peers, NAT hole punching with the lobby's relay and a settings fingerprint, keys and pointer online (`NetInput`), the consoles' delay lockstep over the 3DS's local wireless (`uds`, two Azahar instances), `TREC` v2 snapshot recordings and replayable crash tails (`Game::portable_state`), replays on real hardware |
-| [0040](adr/0040-graph-tables-and-crowd-instances.md) | Animation graphs for crowds: tables decoded once (or exported as static Rust), one playback over a blob or its tables, instances sized by the game, synced layers and one graph per rig family (`TANG` v3) |
+| [0023](adr/0023-quality-presets.md) | Quality presets for the PC and the Web: Low to Ultra, render scale, dynamic resolution, frame pacing, an auto-detect bench |
+| [0024](adr/0024-ui-system.md) | A declarative UI system for every target: `ui/*.ui.ron` screens, safe areas and the 3DS touch screen, pad/mouse/touch focus, budgets, `ui check` |
+| [0025](adr/0025-shadows-per-tier.md) | Shadows per tier: blobs on the N64, planar shadows on the 3DS, a shadow map on the PC and the Web |
+| [0026](adr/0026-localization.md) | Localization: string tables, glyph subsets per language, plurals and locale formats |
+| [0027](adr/0027-accessibility.md) | Accessibility on every target: semantic palettes per color-vision mode, icons, captions, text scale and high contrast, motion and flash guards |
+| [0028](adr/0028-gamepad-families.md) | Gamepad families and button glyphs |
+| [0029](adr/0029-shipping-services-packaging.md) | Shipping games: platform services, packages, crash reports |
+| [0030](adr/0030-unified-profiler.md) | One trace format from every target: zones, export, Perfetto, Tracy, the editor's Profiler |
+| [0031](adr/0031-shader-precompilation-and-thread-budget.md) | Shader precompilation and the CPU thread budget |
+| [0032](adr/0032-stereoscopic-3d.md) | Stereoscopic 3D on the 3DS top screen |
+| [0033](adr/0033-post-processing-stack.md) | Post-processing per tier (HDR on PC/Web, baked grading and glow halos on the consoles), and the daltonization filter |
+| [0034](adr/0034-animation-graphs-and-clip-data.md) | Animation 2.0: graphs, clip events, root motion, compressed clips, foot IK |
+| [0035](adr/0035-physics-2.md) | Physics 2.0: a broadphase, shape casts, triggers, a character controller, ramps and mesh colliders, a fixed-point mode; physics per cell (2.1) |
+| [0036](adr/0036-players-replays-netplay.md) | Local players, `TREC` input recordings checked by state hashes on every target, rollback netplay over ggrs (UDP, WebRTC, a lobby) |
+| [0037](adr/0037-robustness-fuzzing-and-save-recovery.md) | Fuzzing every parser, save slots and recovery, sanitizers in CI |
+| [0038](adr/0038-performance-instrumentation.md) | Performance instrumentation: backend counters, the RSP cost per command, a CPU sampler, A/B over code layouts |
+| [0039](adr/0039-animation-layers-2d-blend-inertialization.md) | Animation layers: joint masks, additive layers, 2D blend spaces, inertialized transitions, tiered per platform |
+| [0040](adr/0040-graph-tables-and-crowd-instances.md) | Animation graphs for crowds: tables decoded once, instances sized by the game, synced layers, one graph per rig family |
+| [0041](adr/0041-netplay-follow-ups.md) | Netplay follow-ups: local seats, spectators, NAT traversal and a relay, the consoles' lockstep over the 3DS's local wireless, snapshot recordings |
 
 ## Plans and history
 

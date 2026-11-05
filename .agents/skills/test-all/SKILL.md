@@ -37,6 +37,11 @@ cargo test --workspace
 
 GPU-dependent tests skip without an adapter unless `TRINO_REQUIRE_GPU=1`.
 
+**The README's comparison images** (`docs/media/readme/*.png`) are composed from goldens
+(`showcase_river` on PC, N64 and 3DS; `lights_*`, `water_*`, `shadows_*`) and Solid Eleven
+shots. After re-blessing one of them, run `python3 tools/media/readme_composites.py`
+(Pillow) and commit the new PNGs with the goldens.
+
 **The Web (issue #47)** builds for another target, which the workspace commands never
 compile: `cargo clippy -p trino-render-wgpu -p trino-platform-web -p trino-app-web --target
 wasm32-unknown-unknown -- -D warnings`, then `cargo xtask test web` (`build-web` skill). A

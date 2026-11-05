@@ -4,6 +4,19 @@ Every command goes through `cargo xtask` (an alias in `.cargo/config.toml`), so 
 are the same on Linux, Windows and macOS. Setup notes are also in
 [CONTRIBUTING.md](../CONTRIBUTING.md); [HARDWARE.md](HARDWARE.md) covers real consoles.
 
+## At a glance
+
+| | PC | Web | Nintendo 64 | Nintendo 3DS |
+|---|---|---|---|---|
+| Output | a native binary (`cargo xtask run pc`), packages per OS (`package pc`) | wasm + a page (`build web --release --out dist/web`) | `target/n64/trino.z64` | `target/3ds/trino.3dsx`, `.cia` (`package 3ds --cia`) |
+| Toolchain | stable Rust | stable Rust + `wasm32-unknown-unknown` | nightly + `-Zbuild-std`, the libdragon Docker image | nightly + `-Zbuild-std`, a local devkitPro |
+| Renderer | `trino-render-wgpu` (Vulkan, Metal, DX12) | `trino-render-wgpu` (WebGPU, else WebGL2) | the RDP, most draws transformed by Trino's RSP overlays | citro3d, static meshes on the PICA200's vertex shader |
+| Run it | a window, or the N64/3DS look (`TRINO_SIM`) | `run web` (a local server with COOP/COEP) | ares (`run n64`, or `TRINO_ARES=docker`) | Azahar (`run 3ds`) |
+| Self-test | `cargo xtask test` | `test web` (Chromium, Firefox, WebKit) | `test n64` (steps, goldens, perf gates) | `test 3ds` (steps, goldens) |
+| Hardware tiers | quality presets Low…Ultra | quality presets (phones start Low) | base / Expansion Pak | old / New 3DS |
+| Live reload | game dylib + assets (`watch pc`) | none: rebuild with `run web` and reload the page | rebuild and relaunch (`watch n64`) | rebuild and relaunch (`watch 3ds`) |
+| Real device | — | any browser | SummerCart64, EverDrive 64 (`--device`) | 3dslink (`--device network`) |
+
 ## PC
 
 Needs only Rust (stable, picked by `rust-toolchain.toml`). On Linux, install `pkg-config`
@@ -94,6 +107,15 @@ for the PC, the Web and the 3DS and off for the N64: `FootIk::pose` gives the N6
 unless a game forces it for one character (~0.5 ms of CPU per draw in ares,
 `N64_COST.us_per_ik_draw`). The PC's N64 profile and the editor's N64 look follow the
 console.
+
+### Animation layers
+
+A layered pose (`Renderer::push_pose`, issue #112,
+[ADR 0039](adr/0039-animation-layers-2d-blend-inertialization.md)) folds to each target's
+`Caps::anim_layers`: one layer of three clips on the base N64, two layers of six clips with
+the Expansion Pak and on the 3DS, four of twelve on the New 3DS, the PC and the Web. `cargo
+xtask anim check --platform <p>` prints the fold, and the editor's Graph mode previews it
+in each console's look.
 
 ### Post-processing
 

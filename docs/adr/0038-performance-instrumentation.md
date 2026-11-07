@@ -180,3 +180,21 @@ they change. Play started while the tab shows builds the game with `trino-core/t
 - Counting RSP cycles by emulating the overlay on the host: exact, but a second RSP model to
   keep in step with ares; static counts plus measured per-command times are enough to rank
   changes.
+
+## Addendum (2026-11-07, GitHub #139): a project's scenes
+
+`--prof rsp|sample` measured only the engine's `TRINO_PERF_SCENE` scenes: an external
+project's host (`N64Host::measure`) opened a profile window per frame, so the sampler
+restarted every frame and nothing was reported. Now `prof::begin_scene`/`end_scene` keep
+one measurement across all of a `measure` call's frames, `N64Host::report_frames` prints
+`window_report` after the frame line, and `trino_trace::perf::Collector` builds a report
+for a profiled `TRINO_FRAME` scene (its `avg_us` as the frame, its counters). `cargo
+trino test n64 --prof sample` on a project prints the per-function table like an engine
+scene. A memo hit that re-places a moved draw counts as `memo_moved`.
+
+`--trace` likewise: `N64Host::measure` starts the ring (`runtime::trace_start`, a fresh
+session each scene with `trace::restart`) and `report_frames` flushes it as
+`TRINO_TRACE:<scene>`, so `cargo trino test n64 --trace` writes one session per project
+scene to `target/traces/n64-trace.json` (`trace report --session <scene>`). An
+instrumented project ROM's frames are reported, not gated against `n64_max_frame_us`.
+

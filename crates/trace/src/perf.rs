@@ -28,7 +28,7 @@ pub const AB_FORMAT: &str = "trino-perf-ab";
 
 /// The backend counters an instrumented N64 build appends to its scene
 /// line (`trino_platform_n64::prof::NAMES`; kept in pairs).
-pub const COUNTERS: [&str; 16] = [
+pub const COUNTERS: [&str; 17] = [
     "memo_hit",
     "memo_miss",
     "memo_culled",
@@ -38,6 +38,7 @@ pub const COUNTERS: [&str; 16] = [
     "water_miss",
     "water_evict",
     "rsp_reject",
+    "memo_moved",
     "rspq_words",
     "rsp_cmds",
     "ovl_switch",
@@ -310,6 +311,10 @@ pub struct Collector {
     scenes: BTreeMap<String, PerfReport>,
     rsp: BTreeMap<String, RspReport>,
     pcs: BTreeMap<String, SampleLines>,
+    /// A project's `TRINO_FRAME:` scenes (no `TRINO_PERF_SCENE` line): the
+    /// run they came from and their fields, so `--prof`'s lines of such a
+    /// scene still make a report (GitHub #139).
+    frames: BTreeMap<String, (String, String, u32, BTreeMap<String, u64>)>,
 }
 
 impl Collector {
@@ -358,6 +363,16 @@ impl Collector {
             }
             return true;
         }
+        if let Some((scene, f)) = parse_fields(line, "TRINO_FRAME:") {
+            // Kept, never taken: the host echoes and gates it.
+            let fields = f
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.parse::<u64>().ok()?)))
+                .collect();
+            self.frames
+                .insert(scene, (target.into(), build.into(), pad, fields));
+            return false;
+        }
         if let Some(i) = line.find("TRINO_PROF_SAMPLE:") {
             let rest = &line[i + "TRINO_PROF_SAMPLE:".len()..];
             let mut parts = rest.split_whitespace();
@@ -391,6 +406,25 @@ impl Collector {
         syms: Option<&Symbols>,
         zones: impl Fn(&str) -> Option<Value>,
     ) -> Vec<PerfReport> {
+        // A project's scene measured by `--prof` (a `TRINO_FRAME:` line and
+        // no `TRINO_PERF_SCENE:` one): a report of its frame line's fields.
+        for (scene, (target, build, pad, fields)) in std::mem::take(&mut self.frames) {
+            let profiled = self.rsp.contains_key(&scene) || self.pcs.contains_key(&scene);
+            if profiled && !self.scenes.contains_key(&scene) {
+                let mut r = PerfReport::new(&target, &scene, &build, pad);
+                // `frame_us` is update + render: the frame line's average.
+                let g = |k: &str| fields.get(k).copied().unwrap_or(0);
+                let render = g("avg_us").saturating_sub(g("update"));
+                r.fields.insert("render".into(), render);
+                for (k, v) in fields {
+                    if COUNTERS.contains(&k.as_str()) {
+                        r.counters.insert(k.clone(), v);
+                    }
+                    r.fields.insert(k, v);
+                }
+                self.scenes.insert(scene, r);
+            }
+        }
         for (scene, mut r) in std::mem::take(&mut self.rsp) {
             r.fits = fit_overlays(&r.entries);
             if let Some(rep) = self.scenes.get_mut(&scene) {
@@ -803,6 +837,30 @@ impl AbReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_projects_frame_scene_with_samples_becomes_a_report() {
+        let mut c = Collector::default();
+        let lines = [
+            "[ares] TRINO_FRAME:busy avg_us=30000 max_us=32000 frames=120 update=1600 tnl=6000 \
+             memo_hit=67 memo_miss=29",
+            "TRINO_PROF_SAMPLE:busy samples=2 lost=0 period_us=100 frames=120 pcs=1 handler_us=5.6 overhead_pct=5.6",
+            "TRINO_PROF_SAMPLE:busy 80001004=2",
+            "[ares] TRINO_FRAME:plain avg_us=1000 frames=60 update=10",
+        ];
+        let taken: usize = lines
+            .iter()
+            .map(|l| c.feed("n64", "prof-sample", 0, l) as usize)
+            .sum();
+        assert_eq!(taken, 2, "TRINO_FRAME lines stay the host's");
+        let reps = c.finish(None, |_| None);
+        assert_eq!(reps.len(), 1, "only the profiled scene: {reps:?}");
+        let r = &reps[0];
+        assert_eq!(r.scene, "busy");
+        assert_eq!(r.frame_us(), 30_000);
+        assert_eq!(r.counters["memo_miss"], 29);
+        assert_eq!(r.samples.as_ref().unwrap().samples, 2);
+    }
 
     #[test]
     fn a_run_becomes_reports_with_counters_fits_and_symbols() {

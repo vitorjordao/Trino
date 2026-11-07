@@ -67,23 +67,58 @@ impl MemoKey {
         Some(MemoKey(k))
     }
 
-    /// FNV-1a over the words: the slot.
+    /// [`MemoKey::new`] for a backend that re-places a remembered command
+    /// itself (GitHub #139): the matrix's translation enters the key only
+    /// coarsely — each coordinate's float with its 16 low mantissa bits
+    /// cleared, a cell 1/128 of the coordinate's magnitude wide — so a
+    /// draw that moved a little (someone walking) finds its last command
+    /// and the backend moves it, instead of building a new one. The
+    /// backend must compare the exact translation it stored with the
+    /// draw's: two draws in one cell share an entry.
+    #[inline]
+    pub fn placed(
+        model: u32,
+        generation: u32,
+        matrix: &Mat34,
+        params: &ModelParams,
+    ) -> Option<Self> {
+        let mut k = Self::new(model, generation, matrix, params)?;
+        for i in [7, 11, 15] {
+            k.0[i] &= 0xFFFF_0000;
+        }
+        Some(k)
+    }
+
+    /// FNV-1a over the words: the slot (a multiply-shift into `n`, no
+    /// division: GitHub #139 measured the `%` among the draw path's costs).
+    #[inline]
     fn slot(&self, n: usize) -> usize {
         let mut h = 0x811c_9dc5u32;
         for w in self.0 {
             h = (h ^ w).wrapping_mul(0x0100_0193);
         }
-        (h ^ (h >> 16)) as usize % n.max(1)
+        let h = h ^ (h >> 16);
+        ((h as u64 * n as u64) >> 32) as usize
     }
 }
 
-/// One memo entry: the key, the command (`W` words) and one extra word
-/// for the backend (e.g. the triangle count for its statistics).
+/// Slots a key may live in: a set of this many, next to each other
+/// (GitHub #139). Direct-mapped, ~100 draws over 1024 slots left about five
+/// pairs of draws sharing a slot (the birthday bound), each pair rebuilding
+/// the other's command every frame; with four ways and the least recently
+/// used one replaced, a frame's draws keep their entries.
+pub const WAYS: usize = 4;
+
+/// One memo entry: the key, the command (`W` words), one extra word for
+/// the backend (e.g. the triangle count for its statistics) and when it was
+/// last used ([`touch`], a backend's frame counter: the least recent way of
+/// a set is the one [`store_at`] replaces).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MemoSlot<const W: usize> {
     key: MemoKey,
     pub words: [u32; W],
     pub extra: u32,
+    pub used: u32,
 }
 
 impl<const W: usize> MemoSlot<W> {
@@ -94,7 +129,12 @@ impl<const W: usize> MemoSlot<W> {
         key: MemoKey([0, u32::MAX, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         words: [0; W],
         extra: 0,
+        used: 0,
     };
+
+    fn is_empty(&self) -> bool {
+        words_eq(&self.key.0, &MemoSlot::<W>::EMPTY.key.0)
+    }
 }
 
 /// Whether `a` and `b` hold the same words. Not `==`: on the N64 that is a
@@ -104,49 +144,84 @@ pub fn words_eq(a: &[u32], b: &[u32]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0, |d, (x, y)| d | (x ^ y)) == 0
 }
 
+/// `key`'s set: its first slot (`slots.len()` a multiple of [`WAYS`]; a
+/// shorter tail is never used).
+#[inline]
+fn set_of<const W: usize>(slots: &[MemoSlot<W>], key: &MemoKey) -> Option<usize> {
+    let sets = slots.len() / WAYS;
+    (sets > 0).then(|| key.slot(sets) * WAYS)
+}
+
+/// The way of `key`'s set that holds it.
+#[inline]
+fn way_of<const W: usize>(slots: &[MemoSlot<W>], key: &MemoKey) -> Option<usize> {
+    let first = set_of(slots, key)?;
+    // The model handle first: most ways differ there.
+    (first..first + WAYS)
+        .find(|&i| slots[i].key.0[0] == key.0[0] && words_eq(&slots[i].key.0, &key.0))
+}
+
 /// The memoized command for `key`, if `slots` holds it.
 pub fn find<'a, const W: usize>(
     slots: &'a [MemoSlot<W>],
     key: &MemoKey,
 ) -> Option<&'a MemoSlot<W>> {
-    if slots.is_empty() {
-        return None;
-    }
-    let s = &slots[key.slot(slots.len())];
-    words_eq(&s.key.0, &key.0).then_some(s)
+    way_of(slots, key).map(|i| &slots[i])
 }
 
 /// [`find`], to update the command in place (a backend that patches a
-/// remembered command keeps the patched one).
+/// remembered command keeps the patched one; it marks the use with
+/// [`touch`]).
 pub fn find_mut<'a, const W: usize>(
     slots: &'a mut [MemoSlot<W>],
     key: &MemoKey,
 ) -> Option<&'a mut MemoSlot<W>> {
-    if slots.is_empty() {
-        return None;
-    }
-    let i = key.slot(slots.len());
-    let s = &mut slots[i];
-    words_eq(&s.key.0, &key.0).then_some(s)
+    way_of(slots, key).map(|i| &mut slots[i])
 }
 
-/// Whether storing `key` would replace another draw's entry (its slot
-/// holds a different, real key). Instrumentation (issue #79) asks before
-/// [`store`].
+/// Mark `slot` used at `now` (a backend's frame counter).
+#[inline]
+pub fn touch<const W: usize>(slot: &mut MemoSlot<W>, now: u32) {
+    slot.used = now;
+}
+
+/// The way [`store_at`] writes `key` to: its own, an empty one, else the
+/// least recently used.
+fn victim<const W: usize>(slots: &[MemoSlot<W>], key: &MemoKey) -> Option<usize> {
+    let first = set_of(slots, key)?;
+    let set = first..first + WAYS;
+    way_of(slots, key)
+        .or_else(|| set.clone().find(|&i| slots[i].is_empty()))
+        .or_else(|| set.min_by_key(|&i| slots[i].used))
+}
+
+/// Whether storing `key` would replace another draw's entry (every way of
+/// its set holds a different, real key). Instrumentation (issue #79) asks
+/// before [`store`].
 pub fn evicts<const W: usize>(slots: &[MemoSlot<W>], key: &MemoKey) -> bool {
-    if slots.is_empty() {
-        return false;
-    }
-    let s = &slots[key.slot(slots.len())];
-    !words_eq(&s.key.0, &key.0) && !words_eq(&s.key.0, &MemoSlot::<W>::EMPTY.key.0)
+    victim(slots, key).is_some_and(|i| !slots[i].is_empty() && !words_eq(&slots[i].key.0, &key.0))
 }
 
-/// Remember `words` (and `extra`) for `key`, replacing whatever shared its
-/// slot.
-pub fn store<const W: usize>(slots: &mut [MemoSlot<W>], key: MemoKey, words: [u32; W], extra: u32) {
-    if slots.is_empty() {
-        return;
+/// Remember `words` (and `extra`) for `key`, used at `now`: in its own way,
+/// an empty one, or over the least recently used of its set.
+pub fn store_at<const W: usize>(
+    slots: &mut [MemoSlot<W>],
+    key: MemoKey,
+    words: [u32; W],
+    extra: u32,
+    now: u32,
+) {
+    if let Some(i) = victim(slots, &key) {
+        slots[i] = MemoSlot {
+            key,
+            words,
+            extra,
+            used: now,
+        };
     }
-    let i = key.slot(slots.len());
-    slots[i] = MemoSlot { key, words, extra };
+}
+
+/// [`store_at`] with no clock (every entry equally old).
+pub fn store<const W: usize>(slots: &mut [MemoSlot<W>], key: MemoKey, words: [u32; W], extra: u32) {
+    store_at(slots, key, words, extra, 0);
 }

@@ -234,14 +234,18 @@ impl Grave {
 /// Frames a freed asset waits ([`Grave`]), like replaced water commands.
 const GRAVE_FRAMES: u32 = 4;
 
-/// Memo slots (308 bytes each): a few hundred draws per frame rarely share one.
+/// Memo slots (312 bytes each), in sets of `memo::WAYS`: a direct-mapped
+/// memo of 1024 slots left ~5 pairs of a 100-draw frame sharing a slot,
+/// rebuilding each other every frame (GitHub #139).
 const MEMO_SLOTS: usize = 1024;
-/// The memo on the base N64 (4 MB): 768 slots (~228 KB instead of ~304 KB).
-/// Direct-mapped, so fewer slots mean more collisions, but the gated
-/// scenes draw at most ~70 draws a frame (Solid Eleven's match; castle64
-/// ~27), ten times fewer than the slots; the 78 KB went to the self-test's
-/// top free block, which new code had eaten (#110, #67).
-const MEMO_SLOTS_BASE: usize = 768;
+/// The memo on the base N64 (4 MB): 640 slots (~195 KB instead of ~312 KB),
+/// 160 sets of [`memo::WAYS`]. The gated scenes draw at most ~70–100 draws
+/// a frame (Solid Eleven's match; castle64 ~27), and a set's LRU keeps a
+/// frame's draws (GitHub #139). 768 direct-mapped slots of 308 bytes had
+/// fit; the 4-byte LRU stamp left the self-test's top free block 40 KB on
+/// CI's layout, under the palette meshes' 16 KB plus fragmentation, so the
+/// slots went down rather than the margin (#110, #67).
+const MEMO_SLOTS_BASE: usize = 640;
 /// A memo entry: the command, then `RspPan` (s, q, r2) and the view
 /// translation the command was made for, as float bits, then a colored
 /// command's color words (`rsp::color_words`) or a textured command's
@@ -1381,6 +1385,33 @@ pub fn take_drain_us() -> u32 {
 /// A memoized draw whose sphere left the band: are its vertices still
 /// inside ([`rsp_hull_inside`])? Out of line: it's off the hot path.
 #[inline(never)]
+/// A draw's model translation under the view's rotation, as float bits:
+/// what [`RspPan::new`] stores as `s`, by the same arithmetic, so a memo
+/// hit tells an unmoved draw bit for bit (the placed key holds only the
+/// translation's cell, GitHub #139).
+#[inline(always)]
+fn placed_bits(v: &[[f32; 4]; 3], matrix: &Mat34) -> [u32; 3] {
+    let m = &matrix.m;
+    core::array::from_fn(|i| (v[i][0] * m[0][3] + v[i][1] * m[1][3] + v[i][2] * m[2][3]).to_bits())
+}
+
+/// Queue a command copied from `words` (a memo entry's): one copy, where
+/// a `push` of an array built from the slice first zeroes the array and
+/// copies twice (newlib `memset` + `memcpy` per memo hit, GitHub #139).
+#[inline(always)]
+fn push_words(pending: &mut Vec<[u32; rsp::DRAW_WORDS]>, words: &[u32]) {
+    debug_assert_eq!(words.len(), rsp::DRAW_WORDS);
+    pending.reserve(1);
+    let n = pending.len();
+    // SAFETY: room for one more reserved above; `words` holds exactly
+    // DRAW_WORDS initialized words, written whole before the length moves.
+    unsafe {
+        let dst = pending.as_mut_ptr().add(n) as *mut u32;
+        core::ptr::copy_nonoverlapping(words.as_ptr(), dst, rsp::DRAW_WORDS);
+        pending.set_len(n + 1);
+    }
+}
+
 fn hull_inside(
     ctx: &TnlContext,
     meshes: &BTreeMap<u32, (Vec<u8>, MeshLayout)>,
@@ -1452,9 +1483,256 @@ impl N64Renderer {
         }
     }
 
+    /// The part of [`Renderer::draw_model_matrix`] before the memo for the
+    /// draws that need it: water, an animation pose, a shadow, a rigid
+    /// skeleton. `true` when the draw is done.
+    #[inline(never)]
+    fn draw_model_special(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) -> bool {
+        if params.water.is_some() {
+            self.draw_water(model, matrix, params);
+            return true;
+        }
+        if params.anim.is_some_and(|a| a.pose != 0) {
+            self.prepare_pose(model, params);
+        }
+        if params.shadow.casts() {
+            self.cast_shadow(model, matrix, params);
+        }
+        // A rigid skinned mesh: a command per joint on screen, when every
+        // part qualifies.
+        if self.rsp_on
+            && let Some(rc) = self.rsp_rigid.get(&model.0).cloned()
+        {
+            return self.draw_rigid(model, matrix, params, &rc);
+        }
+        false
+    }
+
+    /// A draw the memo didn't answer: the eligibility test and a new RSP
+    /// command (remembered), or the CPU T&L.
+    #[inline(never)]
+    fn draw_model_miss(
+        &mut self,
+        model: ModelId,
+        matrix: &Mat34,
+        params: &ModelParams,
+        key: Option<MemoKey>,
+    ) {
+        if trino_core::trace::ENABLED && key.is_some() {
+            prof::bump(prof::Counter::MemoMiss);
+        }
+        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
+            // Unknown or unloaded (its group is not ready): counted.
+            self.frame_stats.not_loaded += 1;
+            return;
+        };
+        let mesh = Mesh::from_layout(tmdl, layout)
+            .with_poses(&self.poses)
+            .with_pose_cache(self.pose_cache.entries());
+        self.frame_stats.models += 1;
+        // `view · model` once: the eligibility test and the command share it.
+        let eligible_zone = trino_core::trace::Zone::begin("eligible");
+        let rsp = match self.rsp_meshes.get(&model.0) {
+            Some(rm) if self.rsp_on => {
+                let mv = self.tnl_ctx.projection().0.mul(matrix);
+                let d = rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params);
+                if trino_core::trace::ENABLED && d.is_none() {
+                    prof::bump(prof::Counter::RspReject);
+                }
+                d.map(|d| (rm, d, mv))
+            }
+            _ => None,
+        };
+        eligible_zone.end();
+        // A flat draw goes out with the mesh's flat copy (face normals).
+        let rsp = match rsp {
+            Some((_, d, mv)) if params.shading == Shading::Flat => {
+                let key = (model.0, WHOLE, flat_ratios(matrix));
+                bake_flat(&mut self.rsp_flat, key, &mesh);
+                let rm = self.rsp_flat.get(&key).and_then(Option::as_ref);
+                rm.map(|rm| (rm, d, mv))
+            }
+            r => r,
+        };
+        // A textured copy needs its texture loaded: without it the CPU path
+        // draws the mesh untextured.
+        let tex = match &rsp {
+            Some((rm, ..)) if rm.textured => mesh
+                .texture_for(params)
+                .and_then(|t| self.sprites.get(&t.0).map(|e| (t.0, e.size))),
+            _ => None,
+        };
+        let rsp = rsp.filter(|(rm, ..)| !rm.textured || tex.is_some());
+        if let Some((rm, d, mv)) = rsp {
+            // The overlay transforms, lights and rasterizes the whole draw;
+            // the command goes out with the batch (flush_model_batch).
+            trino_core::zone!("rsp cmd");
+            let t0 = self.tick();
+            let cull = if d.cull_back { self.rsp_cull } else { 2 };
+            let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
+            let tris = (mesh.index_count / 3) as u32;
+            // Textured (44 words, never remembered): the texture's binding,
+            // color and texture words ride in the next entry.
+            if let Some((id, size)) = tex {
+                let b = TexBind::model(id, params, self.tex_filter);
+                let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
+                let flags = b.clamp as u32
+                    | ((b.filter == TexFilter::Point) as u32) << 1
+                    | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
+                let bind = [id, detail.map_or(0, |d| d.sprite.0), flags];
+                let c = rsp_color_terms(&self.tnl_ctx, params);
+                let entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], bind);
+                let mut words = words;
+                words[0] |= rsp::TEXTURED;
+                // Recolored slots (never remembered: `MemoKey` refuses a
+                // palette): the table rides in a third entry.
+                if let Some(p) = rsp_palette(&mesh, params) {
+                    rsp::mark_palette(&mut words);
+                    self.pending_rsp.push(words);
+                    self.pending_rsp.push(entry);
+                    self.queue_rsp(rsp::palette_entry(&p));
+                    self.count_rsp(model, t0, tris);
+                    return;
+                }
+                if let Some(k) = key {
+                    let mut e = [0u32; MEMO_ENTRY];
+                    e.copy_from_slice(&entry[..MEMO_ENTRY]);
+                    remember(
+                        &mut self.memo,
+                        &self.tnl_ctx,
+                        k,
+                        &words,
+                        &e,
+                        &mv,
+                        &mesh,
+                        matrix,
+                        tris,
+                        self.water_frame_no,
+                    );
+                }
+                self.pending_rsp.push(words);
+                self.queue_rsp(entry);
+                self.count_rsp(model, t0, tris);
+                return;
+            }
+            // A palette (GitHub #122): the colored overlay's palette
+            // command, whatever the light, its color words and then its
+            // table in the next two entries (never remembered).
+            if let Some(p) = rsp_palette(&mesh, params) {
+                let c = rsp_color_terms(&self.tnl_ctx, params);
+                let mut words = words;
+                words[0] |= rsp::COLORED;
+                rsp::mark_palette(&mut words);
+                self.pending_rsp.push(words);
+                self.pending_rsp.push(rsp::color_entry(&c, &mv));
+                self.queue_rsp(rsp::palette_entry(&p));
+                self.count_rsp(model, t0, tris);
+                return;
+            }
+            // The colored command (40 words): its color words ride in the
+            // next queue entry, queued together, never split by a streamed
+            // chunk.
+            let color = rsp_color(&self.tnl_ctx, params).map(|c| rsp::color_entry(&c, &mv));
+            let mut words = words;
+            if color.is_some() {
+                words[0] |= rsp::COLORED;
+            }
+            if let Some(k) = key {
+                let mut e = [0u32; MEMO_ENTRY];
+                if let Some(c) = &color {
+                    e[..rsp::COLOR_WORDS].copy_from_slice(&c[..rsp::COLOR_WORDS]);
+                }
+                remember(
+                    &mut self.memo,
+                    &self.tnl_ctx,
+                    k,
+                    &words,
+                    &e,
+                    &mv,
+                    &mesh,
+                    matrix,
+                    tris,
+                    self.water_frame_no,
+                );
+            }
+            match color {
+                Some(c) => {
+                    self.pending_rsp.push(words);
+                    self.queue_rsp(c);
+                }
+                None => self.queue_rsp(words),
+            }
+            self.count_rsp(model, t0, tris);
+            return;
+        }
+        let texture = mesh
+            .texture_for(params)
+            .filter(|t| self.sprites.contains_key(&t.0));
+        let before = self.pending_tris.len();
+        let t0 = self.tick();
+        let pending = &mut self.pending_tris;
+        let tnl_zone = trino_core::trace::Zone::begin("cpu tnl");
+        let tnl = trino_core::render3d::tessellate_with(
+            &self.tnl_ctx,
+            &mut self.tnl_scratch,
+            &mesh,
+            matrix,
+            params,
+            &mut |tri| pending.push(tri),
+        );
+        tnl_zone.end();
+        self.frame_stats.tnl.add(&tnl);
+        if let Some(p) = &mut self.profile {
+            p.record_model(model, now_us().wrapping_sub(t0), &tnl);
+        }
+        // Culled whole (a tile behind the camera): the memo answers while the
+        // camera stays put.
+        if let Some(k) = key
+            && tnl
+                == (TnlStats {
+                    culled: 1,
+                    ..TnlStats::default()
+                })
+        {
+            let v = &self.tnl_ctx.projection().0.m;
+            let mut entry = [0u32; MEMO_WORDS];
+            entry[0] = MEMO_CULLED;
+            // Where it was culled (the hit compares it: a moved draw
+            // takes the full path again).
+            entry[rsp::DRAW_WORDS..rsp::DRAW_WORDS + 3].copy_from_slice(&placed_bits(v, matrix));
+            entry[MEMO_T] = v[0][3].to_bits();
+            entry[MEMO_T + 1] = v[1][3].to_bits();
+            entry[MEMO_T + 2] = v[2][3].to_bits();
+            prof::note_store(&self.memo, &k);
+            memo::store_at(&mut self.memo, k, entry, 0, self.water_frame_no);
+        }
+        let added = self.pending_tris.len() - before;
+        let filter = self.tex_filter;
+        self.tag_pending(
+            before,
+            added,
+            texture.map(|t| TexBind::model(t.0, params, filter)),
+        );
+    }
+
     /// Statistics and profile of one RSP draw of `tris` triangles.
+    #[inline]
     fn count_rsp(&mut self, model: ModelId, t0: u32, tris: u32) {
-        self.count_rsp_with(model, t0, tris, &TnlStats::default());
+        // Two counters, not a `TnlStats` sum (GitHub #139: every RSP draw
+        // added two 14-field structs).
+        self.frame_stats.tnl.rsp_draws += 1;
+        self.frame_stats.tnl.rsp_tris += tris;
+        if self.profile.is_some() {
+            self.profile_rsp(model, t0, tris);
+        }
+    }
+
+    /// [`Self::count_rsp`]'s profile (measured frames only).
+    #[inline(never)]
+    fn profile_rsp(&mut self, model: ModelId, t0: u32, tris: u32) {
+        if let Some(p) = &mut self.profile {
+            p.record_rsp(model, now_us().wrapping_sub(t0), tris);
+        }
     }
 
     /// [`Self::count_rsp`] plus the CPU work `cpu` the draw also did (a
@@ -1659,302 +1937,121 @@ impl Renderer for N64Renderer {
         params: &ModelParams,
     ) {
         trino_core::zone!("draw");
-        if params.water.is_some() {
-            self.draw_water(model, matrix, params);
-            return;
-        }
-        if params.anim.is_some_and(|a| a.pose != 0) {
-            self.prepare_pose(model, params);
-        }
-        if params.shadow.casts() {
-            self.cast_shadow(model, matrix, params);
-        }
-        // A rigid skinned mesh: a command per joint on screen, when every
-        // part qualifies.
-        if self.rsp_on
-            && let Some(rc) = self.rsp_rigid.get(&model.0).cloned()
-            && self.draw_rigid(model, matrix, params, &rc)
+        // Water, poses, shadows and skeletons: out of the common draw's
+        // way (GitHub #139: this function is every RSP draw's hot path,
+        // and its size is I-cache the game's own loop needs).
+        if params.water.is_some()
+            || params.anim.is_some()
+            || params.shadow.casts()
+            || (self.rsp_on && !self.rsp_rigid.is_empty())
         {
-            return;
+            if self.draw_model_special(model, matrix, params) {
+                return;
+            }
         }
         // A draw that repeats under the same camera and light: last
         // frame's command.
         let key = if self.rsp_on {
-            MemoKey::new(model.0, self.memo_gen, matrix, params)
+            MemoKey::placed(model.0, self.memo_gen, matrix, params)
         } else {
             None
         };
         let memo_zone = trino_core::trace::Zone::begin("memo");
+        let now = self.water_frame_no;
         if let Some(k) = &key
             && let Some(hit) = memo::find_mut(&mut self.memo, k)
         {
+            memo::touch(hit, now);
             let v = &self.tnl_ctx.projection().0.m;
             let t = [v[0][3].to_bits(), v[1][3].to_bits(), v[2][3].to_bits()];
+            // The draw's translation under the view's rotation (the key
+            // holds only its cell; the generation, the rotation): the
+            // very arithmetic `RspPan::new` stored, so an unmoved draw
+            // compares equal bit for bit.
+            let sb = placed_bits(v, matrix);
+            let s = sb.map(f32::from_bits);
             let w = &mut hit.words;
-            let still = w[MEMO_T..MEMO_T + 3] == t;
-            // Culled whole under this very camera last time: culled again.
-            if w[0] == MEMO_CULLED && still {
-                let culled = TnlStats {
-                    culled: 1,
-                    ..TnlStats::default()
+            let placed = w[rsp::DRAW_WORDS..rsp::DRAW_WORDS + 3] == sb;
+            let still = placed && w[MEMO_T..MEMO_T + 3] == t;
+            if w[0] == MEMO_CULLED {
+                // Culled whole under this very camera last time: culled
+                // again. Moved: the full path decides.
+                if still {
+                    let culled = TnlStats {
+                        culled: 1,
+                        ..TnlStats::default()
+                    };
+                    self.frame_stats.models += 1;
+                    self.frame_stats.tnl.add(&culled);
+                    if let Some(p) = &mut self.profile {
+                        p.record_model(model, 0, &culled);
+                    }
+                    prof::bump(prof::Counter::MemoCulled);
+                    return;
+                }
+            } else {
+                let f = |w: &[u32; MEMO_WORDS], i: usize| f32::from_bits(w[rsp::DRAW_WORDS + i]);
+                let pan = RspPan {
+                    s,
+                    q: [f(w, 3), f(w, 4), f(w, 5)],
+                    r2: f(w, 6),
                 };
-                self.frame_stats.models += 1;
-                self.frame_stats.tnl.add(&culled);
-                if let Some(p) = &mut self.profile {
-                    p.record_model(model, 0, &culled);
+                let mt = pan.translation([v[0][3], v[1][3], v[2][3]]);
+                // A local light reaching it now: the CPU T&L lights it.
+                let lit = !self.locals.is_empty()
+                    && params.shading != Shading::Unlit
+                    && self.tnl_ctx.lights_touch(pan.center(mt), pan.r2);
+                // Moved (a pan, or the draw itself): still inside the band
+                // where it is now (its sphere, or else its vertices: a
+                // ground tile whose sphere crosses the band)? Else the draw
+                // takes the full path (maybe the CPU's). A colored command
+                // (fog, a colored light) is reused only unmoved: its fog
+                // row follows the view, and a move may take it into the fog
+                // band where its edges need splits.
+                let colored = w[0] & (rsp::COLORED | rsp::TEXTURED) != 0;
+                if !lit
+                    && (still
+                        || (!colored
+                            && (rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)
+                                || hull_inside(&self.tnl_ctx, &self.meshes, model, matrix))))
+                {
+                    let t0 = if self.profile.is_some() { now_us() } else { 0 };
+                    if !still {
+                        let mut c = [0u32; rsp::DRAW_WORDS];
+                        c.copy_from_slice(&w[..rsp::DRAW_WORDS]);
+                        rsp::patch_translation(&self.tnl_ctx, &mut c, mt);
+                        w[..rsp::DRAW_WORDS].copy_from_slice(&c);
+                        w[rsp::DRAW_WORDS..rsp::DRAW_WORDS + 3].copy_from_slice(&sb);
+                        w[MEMO_T..MEMO_T + 3].copy_from_slice(&t);
+                        prof::bump(prof::Counter::MemoMoved);
+                    }
+                    // Straight from the memo into the queue (no copies on
+                    // the way: each costs a hit as much as the rest of it).
+                    let entry = if w[0] & rsp::TEXTURED != 0 {
+                        MEMO_ENTRY
+                    } else if colored {
+                        rsp::COLOR_WORDS
+                    } else {
+                        0
+                    };
+                    let pending = &mut self.pending_rsp;
+                    push_words(pending, &w[..rsp::DRAW_WORDS]);
+                    if entry > 0 {
+                        let mut e = [0u32; rsp::DRAW_WORDS];
+                        e[..entry].copy_from_slice(&w[MEMO_COLOR..MEMO_COLOR + entry]);
+                        pending.push(e);
+                    }
+                    let tris = hit.extra;
+                    self.frame_stats.models += 1;
+                    self.stream_rsp();
+                    self.count_rsp(model, t0, tris);
+                    prof::bump(prof::Counter::MemoHit);
+                    return;
                 }
-                prof::bump(prof::Counter::MemoCulled);
-                return;
-            }
-            let f = |w: &[u32; MEMO_WORDS], i: usize| f32::from_bits(w[rsp::DRAW_WORDS + i]);
-            let pan = RspPan {
-                s: [f(w, 0), f(w, 1), f(w, 2)],
-                q: [f(w, 3), f(w, 4), f(w, 5)],
-                r2: f(w, 6),
-            };
-            let mt = pan.translation([v[0][3], v[1][3], v[2][3]]);
-            // A local light reaching it now: the CPU T&L lights it.
-            let lit = !self.locals.is_empty()
-                && params.shading != Shading::Unlit
-                && self.tnl_ctx.lights_touch(pan.center(mt), pan.r2);
-            // Moved: still inside the band where the camera is now (its
-            // sphere, or else its vertices: a ground tile whose sphere
-            // crosses the band)? Else the draw takes the full path (maybe
-            // the CPU's).
-            // A colored command (fog, a colored light) is reused only under
-            // the same camera: its fog row follows the view, and a pan may
-            // move it into the fog band where its edges need splits.
-            let colored = w[0] & (rsp::COLORED | rsp::TEXTURED) != 0;
-            if !lit
-                && (still
-                    || (!colored
-                        && (rsp_band(&self.tnl_ctx, pan.center(mt), pan.r2)
-                            || hull_inside(&self.tnl_ctx, &self.meshes, model, matrix))))
-            {
-                let t0 = if self.profile.is_some() { now_us() } else { 0 };
-                if !still {
-                    let mut c = [0u32; rsp::DRAW_WORDS];
-                    c.copy_from_slice(&w[..rsp::DRAW_WORDS]);
-                    rsp::patch_translation(&self.tnl_ctx, &mut c, mt);
-                    w[..rsp::DRAW_WORDS].copy_from_slice(&c);
-                    w[MEMO_T..MEMO_T + 3].copy_from_slice(&t);
-                }
-                // Straight from the memo into the queue (no copies on the
-                // way: each costs a hit as much as the rest of it).
-                let entry = if w[0] & rsp::TEXTURED != 0 {
-                    MEMO_ENTRY
-                } else if colored {
-                    rsp::COLOR_WORDS
-                } else {
-                    0
-                };
-                let pending = &mut self.pending_rsp;
-                pending.push([0; rsp::DRAW_WORDS]);
-                let n = pending.len();
-                pending[n - 1].copy_from_slice(&w[..rsp::DRAW_WORDS]);
-                if entry > 0 {
-                    pending.push([0; rsp::DRAW_WORDS]);
-                    pending[n][..entry].copy_from_slice(&w[MEMO_COLOR..MEMO_COLOR + entry]);
-                }
-                let tris = hit.extra;
-                self.frame_stats.models += 1;
-                self.stream_rsp();
-                self.count_rsp(model, t0, tris);
-                prof::bump(prof::Counter::MemoHit);
-                return;
             }
         }
         memo_zone.end();
-        if trino_core::trace::ENABLED && key.is_some() {
-            prof::bump(prof::Counter::MemoMiss);
-        }
-        let Some((tmdl, layout)) = self.meshes.get(&model.0) else {
-            // Unknown or unloaded (its group is not ready): counted.
-            self.frame_stats.not_loaded += 1;
-            return;
-        };
-        let mesh = Mesh::from_layout(tmdl, layout)
-            .with_poses(&self.poses)
-            .with_pose_cache(self.pose_cache.entries());
-        self.frame_stats.models += 1;
-        // `view · model` once: the eligibility test and the command share it.
-        let eligible_zone = trino_core::trace::Zone::begin("eligible");
-        let rsp = match self.rsp_meshes.get(&model.0) {
-            Some(rm) if self.rsp_on => {
-                let mv = self.tnl_ctx.projection().0.mul(matrix);
-                let d = rsp_eligible_mv(&self.tnl_ctx, &mesh, matrix, &mv, params);
-                if trino_core::trace::ENABLED && d.is_none() {
-                    prof::bump(prof::Counter::RspReject);
-                }
-                d.map(|d| (rm, d, mv))
-            }
-            _ => None,
-        };
-        eligible_zone.end();
-        // A flat draw goes out with the mesh's flat copy (face normals).
-        let rsp = match rsp {
-            Some((_, d, mv)) if params.shading == Shading::Flat => {
-                let key = (model.0, WHOLE, flat_ratios(matrix));
-                bake_flat(&mut self.rsp_flat, key, &mesh);
-                let rm = self.rsp_flat.get(&key).and_then(Option::as_ref);
-                rm.map(|rm| (rm, d, mv))
-            }
-            r => r,
-        };
-        // A textured copy needs its texture loaded: without it the CPU path
-        // draws the mesh untextured.
-        let tex = match &rsp {
-            Some((rm, ..)) if rm.textured => mesh
-                .texture_for(params)
-                .and_then(|t| self.sprites.get(&t.0).map(|e| (t.0, e.size))),
-            _ => None,
-        };
-        let rsp = rsp.filter(|(rm, ..)| !rm.textured || tex.is_some());
-        if let Some((rm, d, mv)) = rsp {
-            // The overlay transforms, lights and rasterizes the whole draw;
-            // the command goes out with the batch (flush_model_batch).
-            trino_core::zone!("rsp cmd");
-            let t0 = self.tick();
-            let cull = if d.cull_back { self.rsp_cull } else { 2 };
-            let words = rsp::draw_words(&self.tnl_ctx, &mv, &d, params.tint, rm, cull, 0);
-            let tris = (mesh.index_count / 3) as u32;
-            // Textured (44 words, never remembered): the texture's binding,
-            // color and texture words ride in the next entry.
-            if let Some((id, size)) = tex {
-                let b = TexBind::model(id, params, self.tex_filter);
-                let detail = b.detail.filter(|d| self.sprites.contains_key(&d.sprite.0));
-                let flags = b.clamp as u32
-                    | ((b.filter == TexFilter::Point) as u32) << 1
-                    | detail.map_or(0, |d| (d.scale_log2 as u32) << 4);
-                let bind = [id, detail.map_or(0, |d| d.sprite.0), flags];
-                let c = rsp_color_terms(&self.tnl_ctx, params);
-                let entry = rsp::tex_entry(&c, &mv, size, [0.0, 0.0], bind);
-                let mut words = words;
-                words[0] |= rsp::TEXTURED;
-                // Recolored slots (never remembered: `MemoKey` refuses a
-                // palette): the table rides in a third entry.
-                if let Some(p) = rsp_palette(&mesh, params) {
-                    rsp::mark_palette(&mut words);
-                    self.pending_rsp.push(words);
-                    self.pending_rsp.push(entry);
-                    self.queue_rsp(rsp::palette_entry(&p));
-                    self.count_rsp(model, t0, tris);
-                    return;
-                }
-                if let Some(k) = key {
-                    let mut e = [0u32; MEMO_ENTRY];
-                    e.copy_from_slice(&entry[..MEMO_ENTRY]);
-                    remember(
-                        &mut self.memo,
-                        &self.tnl_ctx,
-                        k,
-                        &words,
-                        &e,
-                        &mv,
-                        &mesh,
-                        matrix,
-                        tris,
-                    );
-                }
-                self.pending_rsp.push(words);
-                self.queue_rsp(entry);
-                self.count_rsp(model, t0, tris);
-                return;
-            }
-            // A palette (GitHub #122): the colored overlay's palette
-            // command, whatever the light, its color words and then its
-            // table in the next two entries (never remembered).
-            if let Some(p) = rsp_palette(&mesh, params) {
-                let c = rsp_color_terms(&self.tnl_ctx, params);
-                let mut words = words;
-                words[0] |= rsp::COLORED;
-                rsp::mark_palette(&mut words);
-                self.pending_rsp.push(words);
-                self.pending_rsp.push(rsp::color_entry(&c, &mv));
-                self.queue_rsp(rsp::palette_entry(&p));
-                self.count_rsp(model, t0, tris);
-                return;
-            }
-            // The colored command (40 words): its color words ride in the
-            // next queue entry, queued together, never split by a streamed
-            // chunk.
-            let color = rsp_color(&self.tnl_ctx, params).map(|c| rsp::color_entry(&c, &mv));
-            let mut words = words;
-            if color.is_some() {
-                words[0] |= rsp::COLORED;
-            }
-            if let Some(k) = key {
-                let mut e = [0u32; MEMO_ENTRY];
-                if let Some(c) = &color {
-                    e[..rsp::COLOR_WORDS].copy_from_slice(&c[..rsp::COLOR_WORDS]);
-                }
-                remember(
-                    &mut self.memo,
-                    &self.tnl_ctx,
-                    k,
-                    &words,
-                    &e,
-                    &mv,
-                    &mesh,
-                    matrix,
-                    tris,
-                );
-            }
-            match color {
-                Some(c) => {
-                    self.pending_rsp.push(words);
-                    self.queue_rsp(c);
-                }
-                None => self.queue_rsp(words),
-            }
-            self.count_rsp(model, t0, tris);
-            return;
-        }
-        let texture = mesh
-            .texture_for(params)
-            .filter(|t| self.sprites.contains_key(&t.0));
-        let before = self.pending_tris.len();
-        let t0 = self.tick();
-        let pending = &mut self.pending_tris;
-        let tnl_zone = trino_core::trace::Zone::begin("cpu tnl");
-        let tnl = trino_core::render3d::tessellate_with(
-            &self.tnl_ctx,
-            &mut self.tnl_scratch,
-            &mesh,
-            matrix,
-            params,
-            &mut |tri| pending.push(tri),
-        );
-        tnl_zone.end();
-        self.frame_stats.tnl.add(&tnl);
-        if let Some(p) = &mut self.profile {
-            p.record_model(model, now_us().wrapping_sub(t0), &tnl);
-        }
-        // Culled whole (a tile behind the camera): the memo answers while the
-        // camera stays put.
-        if let Some(k) = key
-            && tnl
-                == (TnlStats {
-                    culled: 1,
-                    ..TnlStats::default()
-                })
-        {
-            let v = &self.tnl_ctx.projection().0.m;
-            let mut entry = [0u32; MEMO_WORDS];
-            entry[0] = MEMO_CULLED;
-            entry[MEMO_T] = v[0][3].to_bits();
-            entry[MEMO_T + 1] = v[1][3].to_bits();
-            entry[MEMO_T + 2] = v[2][3].to_bits();
-            prof::note_store(&self.memo, &k);
-            memo::store(&mut self.memo, k, entry, 0);
-        }
-        let added = self.pending_tris.len() - before;
-        let filter = self.tex_filter;
-        self.tag_pending(
-            before,
-            added,
-            texture.map(|t| TexBind::model(t.0, params, filter)),
-        );
+        self.draw_model_miss(model, matrix, params, key);
     }
     fn draw_billboard(&mut self, sprite: SpriteId, pos: Vec3, params: &BillboardParams) {
         let Some(entry) = self.sprites.get(&sprite.0) else {
@@ -3077,6 +3174,7 @@ fn remember(
     mesh: &Mesh,
     matrix: &Mat34,
     tris: u32,
+    now: u32,
 ) {
     let Some(pan) = RspPan::new(&ctx.projection().0, mv, mesh, matrix) else {
         return;
@@ -3093,7 +3191,7 @@ fn remember(
         entry[rsp::DRAW_WORDS + i] = a.to_bits();
     }
     prof::note_store(memo, &k);
-    memo::store(memo, k, entry, tris);
+    memo::store_at(memo, k, entry, tris, now);
 }
 
 /// A blank triangle (scratch arrays).

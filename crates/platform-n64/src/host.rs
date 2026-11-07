@@ -154,6 +154,12 @@ impl N64Host {
         let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
         let mut n_models = 0usize;
         let mut counters = [0u32; crate::prof::COUNTERS];
+        // `--trace`: the engine's zones over this scene's frames (the ring
+        // starts on the first measured scene; what it held before is
+        // dropped), printed by `report_frames` as the scene's session.
+        if runtime::trace_start() {
+            trino_core::trace::restart();
+        }
         crate::prof::begin_scene();
         for i in 0..frames {
             let state = input(i);
@@ -271,6 +277,12 @@ impl N64Host {
             runtime::log(&format!(
                 "TRINO_FRAME_MODEL:{scene} {id:08x} calls={calls} tnl_us={us} rsp={rsp}\n"
             ));
+        }
+        // `--trace`: the scene's zones as `TRINO_TRACE:<scene>` lines
+        // (`cargo xtask test n64 --trace` collects them into
+        // `target/traces/n64-trace.json`, one session a scene).
+        if trino_core::trace::ENABLED && trino_core::trace::is_on() {
+            runtime::trace_flush(scene, &mut 0);
         }
         // `--prof rsp|sample`: the whole scene's measurement (empty in a
         // plain build).

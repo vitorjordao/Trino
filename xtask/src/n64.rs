@@ -1314,7 +1314,19 @@ fn boot_test(p: &Project, bless: bool, pak: bool) -> ExitCode {
     } else {
         verdict.and_then(|()| {
             project_gates(p, "n64", &p.test.n64_goldens, &frames, bless, None)?;
-            frame_gate(&frame_lines, p.test.n64_max_frame_us)
+            // An instrumented ROM (`--trace`, `--prof`) is another binary
+            // whose zones and drains cost time: its frames are reported,
+            // never gated (the engine's perf scenes follow the same rule).
+            let instrumented = p.trace || p.prof.is_some();
+            let limit = if instrumented {
+                None
+            } else {
+                p.test.n64_max_frame_us
+            };
+            if instrumented && p.test.n64_max_frame_us.is_some() {
+                println!("[n64] instrumented build: the frame budget is reported, not gated");
+            }
+            frame_gate(&frame_lines, limit)
         })
     };
 

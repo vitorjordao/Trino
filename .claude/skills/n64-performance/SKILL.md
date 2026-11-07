@@ -378,6 +378,7 @@ the LOD panel and the impostor section print it next to the mesh's CPU-path cost
 | Local lights in castle64's throne room (4 torches, cap 2 per vertex, `ground_pool` decals) | throne 9.3 → 16.0 ms: the star lit on the CPU (0.14 → 1.3 ms), the castle blocks' lit vertices (+0.6 ms), pools/posts/flames on the RSP (~1.2 ms) and the RSP drain. Torch posts lit by their own light cost ~1.7 ms each on the CPU: drawn Unlit on per-vertex tiers |
 | Impostors (props as textured billboards at a far zoom, an external project) | **worse on the N64**: far view 29.8 → 35 ms, the busiest scene 58 → 66 ms. Textured triangles are CPU-submitted (~22 µs each, 52 rspq words), costing more than the RSP time they save. On the 3DS the same impostors doubled the far view's rate (Azahar). An N64 impostor would need an RDP rectangle with depth |
 
+| **Memo sets + placed keys + plain RSP counters** (GitHub #139, 2026-11-07): the memo is 4-way set associative with LRU replacement (`memo::WAYS`, `store_at`/`touch`); `MemoKey::placed` keys a draw by its translation's cell (16 low mantissa bits cleared) and the hit compares the exact view-rotated translation, re-placing the command like a pan; `count_rsp` bumps two counters (no `TnlStats` sums), `RenderProfile::record_rsp`; one copy per hit (`push_words`). Found with the PC sampler on both pins of an external project | that project's scenes, mean over 8 paddings, e02ca22 → `main` e467862 → this: busiest 24.29 → 29.92 → **23.77 ms**, UI-heavy 28.79 → 33.67 → **28.01**, 3D only 21.87 → 25.10 → **18.98**, every scene within its pre-regression spread or under; memo misses 29 → 10 a frame (27 evictions → 8). Its goldens and castle64's byte-identical. The regression was not one commit: ~5 pairs of draws sharing a direct-mapped slot (birthday bound at ~100 draws in 1024 slots) rebuilt each other every frame, walking figures missed every frame, and `count_rsp`/`MemoKey`/`memo::slot`'s `%` added up per draw |
 | **Draw memo** (`trino_core::memo`, N64 renderer): a draw repeated under the same camera and light reuses last frame's 27-word RSP command (key: model, matrix bits, tint, shading, generation) | an external project's 93-draw scene 25.9 → 23.5 ms. The CPU then issues draws faster than the RSP draws them: waits show up in `tnl` (streamed) |
 | **Pan patch** (`RspPan`, `rsp::patch_translation`): the memo survives a camera that only translates (pan, zoom along the view axis); a hit re-tests `rsp_band` and rewrites the command's translation column, bit-identical to a rebuild | panning over a 105-draw scene 36.4 → 28.3 ms. Needs the game's camera to keep the view rotation exact under a pan (eye − target exactly representable) |
 | `to_i32` instead of `as i32`; one `view·model` per draw (`rsp_eligible_mv`); tint quotients from a const table | a 207-draw scene 47.2 → 46.6 ms (layout noise). Measured hot: 16 saturating casts 22 µs, unchecked 6.5 µs |
@@ -648,6 +649,29 @@ Measured with the zones on (ares, castle64 hub, 4 frames, 2026-10-24): `render`
 4.8 ms (vsync wait), `end` 1.6 ms, `submit` 1.1 ms, `rsp queue` 0.43 ms, `2d` 0.94 ms over
 10 calls, `audio` 1.3 ms. The play loop (`run n64 --trace`, 60 s of ares): 18.6 ms mean
 frame, p95 19.0 ms, one 132 ms spike on the first frame.
+
+## Comparing two engine pins on a project (2026-11-07, GitHub #139)
+
+A project measured +18–20 % on every N64 scene after a 270-commit engine bump; the
+engine's own scenes didn't move. What found it, in order of value:
+
+1. **Over 8 paddings on both pins** before anything else (`TRINO_N64_TEXT_PAD`, the
+   layout trap): it was real (+5.6 ms), not layout.
+2. **A same-ROM split of the project's own code** (its draw loop against a null
+   `Renderer`): unchanged, so the whole cost sat inside the renderer calls.
+3. **Swap one suspect for the old one** (the old `rsp_trino.S` for the white overlay):
+   identical to the µs, so not the RSP.
+4. **Sample both pins with the same sampler** (`--prof sample` now works on a project's
+   `TRINO_FRAME` scenes; for an old pin, port its 20 lines: a libdragon timer storing
+   `C0_EPC`, symbolized with `mips64-elf-nm`), then diff µs per function scaled by each
+   run's frame time. The rows that moved: the memo lookup, the per-draw counters,
+   `memcpy`/`memset`, and the game's own draw loop (I-cache/D-cache side effects).
+5. **Read the memo counters** (`memo_miss`, `memo_evict`, `memo_moved` in a `--trace`
+   build): evictions with a still camera mean slots shared by live draws.
+
+A bisection's per-commit "jumps" over this range were partly which draws happened to
+collide in the direct-mapped memo (any change to the key or the slot hash reshuffles
+them): judge the steps of a bisection over paddings and with the memo counters.
 
 ## Workflow for a perf change
 

@@ -234,7 +234,9 @@ impl Grave {
 /// Frames a freed asset waits ([`Grave`]), like replaced water commands.
 const GRAVE_FRAMES: u32 = 4;
 
-/// Memo slots (308 bytes each): a few hundred draws per frame rarely share one.
+/// Memo slots (312 bytes each), in sets of `memo::WAYS`: a direct-mapped
+/// memo of 1024 slots left ~5 pairs of a 100-draw frame sharing a slot,
+/// rebuilding each other every frame (GitHub #139).
 const MEMO_SLOTS: usize = 1024;
 /// The memo on the base N64 (4 MB): 768 slots (~228 KB instead of ~304 KB).
 /// Direct-mapped, so fewer slots mean more collisions, but the gated
@@ -1381,6 +1383,16 @@ pub fn take_drain_us() -> u32 {
 /// A memoized draw whose sphere left the band: are its vertices still
 /// inside ([`rsp_hull_inside`])? Out of line: it's off the hot path.
 #[inline(never)]
+/// A draw's model translation under the view's rotation, as float bits:
+/// what [`RspPan::new`] stores as `s`, by the same arithmetic, so a memo
+/// hit tells an unmoved draw bit for bit (the placed key holds only the
+/// translation's cell, GitHub #139).
+#[inline(always)]
+fn placed_bits(v: &[[f32; 4]; 3], matrix: &Mat34) -> [u32; 3] {
+    let m = &matrix.m;
+    core::array::from_fn(|i| (v[i][0] * m[0][3] + v[i][1] * m[1][3] + v[i][2] * m[2][3]).to_bits())
+}
+
 /// Queue a command copied from `words` (a memo entry's): one copy, where
 /// a `push` of an array built from the slice first zeroes the array and
 /// copies twice (newlib `memset` + `memcpy` per memo hit, GitHub #139).
@@ -1683,6 +1695,9 @@ impl N64Renderer {
             let v = &self.tnl_ctx.projection().0.m;
             let mut entry = [0u32; MEMO_WORDS];
             entry[0] = MEMO_CULLED;
+            // Where it was culled (the hit compares it: a moved draw
+            // takes the full path again).
+            entry[rsp::DRAW_WORDS..rsp::DRAW_WORDS + 3].copy_from_slice(&placed_bits(v, matrix));
             entry[MEMO_T] = v[0][3].to_bits();
             entry[MEMO_T + 1] = v[1][3].to_bits();
             entry[MEMO_T + 2] = v[2][3].to_bits();
@@ -1951,10 +1966,8 @@ impl Renderer for N64Renderer {
             // holds only its cell; the generation, the rotation): the
             // very arithmetic `RspPan::new` stored, so an unmoved draw
             // compares equal bit for bit.
-            let m = &matrix.m;
-            let s: [f32; 3] =
-                core::array::from_fn(|i| v[i][0] * m[0][3] + v[i][1] * m[1][3] + v[i][2] * m[2][3]);
-            let sb = [s[0].to_bits(), s[1].to_bits(), s[2].to_bits()];
+            let sb = placed_bits(v, matrix);
+            let s = sb.map(f32::from_bits);
             let w = &mut hit.words;
             let placed = w[rsp::DRAW_WORDS..rsp::DRAW_WORDS + 3] == sb;
             let still = placed && w[MEMO_T..MEMO_T + 3] == t;

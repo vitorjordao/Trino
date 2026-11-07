@@ -451,7 +451,7 @@ impl RenderProfile {
                 .iter()
                 .position(|m| m.model == model)
         };
-        let slot = match found {
+        match found {
             Some(i) => {
                 self.index[h] = (i + 1) as u8;
                 &mut self.models[i]
@@ -467,8 +467,7 @@ impl RenderProfile {
                 self.pooled[h] = model.0;
                 &mut self.other
             }
-        };
-        slot
+        }
     }
 
     /// `draw_model*` calls over the profiled frames.

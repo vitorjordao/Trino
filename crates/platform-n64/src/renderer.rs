@@ -1593,6 +1593,7 @@ impl N64Renderer {
                         &mesh,
                         matrix,
                         tris,
+                        self.water_frame_no,
                     );
                 }
                 self.pending_rsp.push(words);
@@ -1637,6 +1638,7 @@ impl N64Renderer {
                     &mesh,
                     matrix,
                     tris,
+                    self.water_frame_no,
                 );
             }
             match color {
@@ -1685,7 +1687,7 @@ impl N64Renderer {
             entry[MEMO_T + 1] = v[1][3].to_bits();
             entry[MEMO_T + 2] = v[2][3].to_bits();
             prof::note_store(&self.memo, &k);
-            memo::store(&mut self.memo, k, entry, 0);
+            memo::store_at(&mut self.memo, k, entry, 0, self.water_frame_no);
         }
         let added = self.pending_tris.len() - before;
         let filter = self.tex_filter;
@@ -1938,9 +1940,11 @@ impl Renderer for N64Renderer {
             None
         };
         let memo_zone = trino_core::trace::Zone::begin("memo");
+        let now = self.water_frame_no;
         if let Some(k) = &key
             && let Some(hit) = memo::find_mut(&mut self.memo, k)
         {
+            memo::touch(hit, now);
             let v = &self.tnl_ctx.projection().0.m;
             let t = [v[0][3].to_bits(), v[1][3].to_bits(), v[2][3].to_bits()];
             // The draw's translation under the view's rotation (the key
@@ -3155,6 +3159,7 @@ fn remember(
     mesh: &Mesh,
     matrix: &Mat34,
     tris: u32,
+    now: u32,
 ) {
     let Some(pan) = RspPan::new(&ctx.projection().0, mv, mesh, matrix) else {
         return;
@@ -3171,7 +3176,7 @@ fn remember(
         entry[rsp::DRAW_WORDS + i] = a.to_bits();
     }
     prof::note_store(memo, &k);
-    memo::store(memo, k, entry, tris);
+    memo::store_at(memo, k, entry, tris, now);
 }
 
 /// A blank triangle (scratch arrays).

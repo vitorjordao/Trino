@@ -418,6 +418,28 @@ impl RenderProfile {
     pub fn record_model(&mut self, model: ModelId, us: u32, tnl: &TnlStats) {
         self.tnl.add(tnl);
         self.stages.tnl += us;
+        let slot = self.slot_of(model);
+        slot.calls += 1;
+        slot.us += us;
+        slot.tnl.add(tnl);
+    }
+
+    /// [`Self::record_model`] for one RSP draw of `tris` triangles: its two
+    /// counters, not a [`TnlStats`] sum (GitHub #139: the N64 profiles every
+    /// draw of a measured frame).
+    pub fn record_rsp(&mut self, model: ModelId, us: u32, tris: u32) {
+        self.tnl.rsp_draws += 1;
+        self.tnl.rsp_tris += tris;
+        self.stages.tnl += us;
+        let slot = self.slot_of(model);
+        slot.calls += 1;
+        slot.us += us;
+        slot.tnl.rsp_draws += 1;
+        slot.tnl.rsp_tris += tris;
+    }
+
+    /// `model`'s entry (a new one, or `other` past the table).
+    fn slot_of(&mut self, model: ModelId) -> &mut ModelCost {
         let h = ((model.0 ^ model.0 >> 16) & 63) as usize;
         let hint = self.index[h] as usize;
         let found = if hint > 0 && self.models[hint - 1].model == model {
@@ -446,9 +468,7 @@ impl RenderProfile {
                 &mut self.other
             }
         };
-        slot.calls += 1;
-        slot.us += us;
-        slot.tnl.add(tnl);
+        slot
     }
 
     /// `draw_model*` calls over the profiled frames.

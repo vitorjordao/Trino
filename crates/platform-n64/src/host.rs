@@ -154,6 +154,7 @@ impl N64Host {
         let mut models: [ModelCost; 48] = [ModelCost::default(); 48];
         let mut n_models = 0usize;
         let mut counters = [0u32; crate::prof::COUNTERS];
+        crate::prof::begin_scene();
         for i in 0..frames {
             let state = input(i);
             self.renderer.start_profile();
@@ -210,6 +211,7 @@ impl N64Host {
                 }
             }
         }
+        crate::prof::end_scene();
         let vblanks = runtime::vblanks().wrapping_sub(v0);
         let n = (frames as u64).max(1);
         trino_core::perf::sort_models(&mut models[..n_models]);
@@ -269,6 +271,12 @@ impl N64Host {
             runtime::log(&format!(
                 "TRINO_FRAME_MODEL:{scene} {id:08x} calls={calls} tnl_us={us} rsp={rsp}\n"
             ));
+        }
+        // `--prof rsp|sample`: the whole scene's measurement (empty in a
+        // plain build).
+        let prof = crate::prof::window_report(scene, r.frames);
+        if !prof.is_empty() {
+            runtime::log(&prof);
         }
     }
 

@@ -67,13 +67,38 @@ impl MemoKey {
         Some(MemoKey(k))
     }
 
-    /// FNV-1a over the words: the slot.
+    /// [`MemoKey::new`] for a backend that re-places a remembered command
+    /// itself (GitHub #139): the matrix's translation enters the key only
+    /// coarsely — each coordinate's float with its 16 low mantissa bits
+    /// cleared, a cell 1/128 of the coordinate's magnitude wide — so a
+    /// draw that moved a little (someone walking) finds its last command
+    /// and the backend moves it, instead of building a new one. The
+    /// backend must compare the exact translation it stored with the
+    /// draw's: two draws in one cell share an entry.
+    #[inline]
+    pub fn placed(
+        model: u32,
+        generation: u32,
+        matrix: &Mat34,
+        params: &ModelParams,
+    ) -> Option<Self> {
+        let mut k = Self::new(model, generation, matrix, params)?;
+        for i in [7, 11, 15] {
+            k.0[i] &= 0xFFFF_0000;
+        }
+        Some(k)
+    }
+
+    /// FNV-1a over the words: the slot (a multiply-shift into `n`, no
+    /// division: GitHub #139 measured the `%` among the draw path's costs).
+    #[inline]
     fn slot(&self, n: usize) -> usize {
         let mut h = 0x811c_9dc5u32;
         for w in self.0 {
             h = (h ^ w).wrapping_mul(0x0100_0193);
         }
-        (h ^ (h >> 16)) as usize % n.max(1)
+        let h = h ^ (h >> 16);
+        ((h as u64 * n as u64) >> 32) as usize
     }
 }
 

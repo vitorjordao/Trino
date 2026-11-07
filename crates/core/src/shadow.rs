@@ -558,17 +558,22 @@ impl ShadowFrame {
     /// (along each plane's normal) whose rectangle it is over, with the
     /// height above it.
     pub fn receiver_under(&self, c: Vec3) -> Option<(usize, f32)> {
-        let mut best: Option<(usize, f32)> = None;
+        // Plain fields, not an `Option<(usize, f32)>`: LLVM may compare the
+        // height of an empty `Option`'s uninitialized payload ahead of the
+        // `is_none` test, and on the N64 a garbage NaN there traps
+        // (`c.lt.s` signals: "Floating point invalid operation", GitHub
+        // #139; AGENTS.md › Pitfalls).
+        let (mut best_i, mut best_h) = (usize::MAX, f32::INFINITY);
         for (i, p) in self.receivers().iter().enumerate() {
             let h = p.height(c);
             if h < -SINK || !p.covers(c) {
                 continue;
             }
-            if best.is_none_or(|(_, b)| h < b) {
-                best = Some((i, h));
+            if best_i == usize::MAX || h < best_h {
+                (best_i, best_h) = (i, h);
             }
         }
-        best
+        (best_i != usize::MAX).then_some((best_i, best_h))
     }
 
     /// The blob of a caster whose bounding sphere is `center`, `radius`

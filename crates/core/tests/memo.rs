@@ -172,16 +172,95 @@ fn a_full_memo_replaces_and_an_empty_one_never_hits() {
 
 #[test]
 fn evicts_says_whether_a_store_replaces_another_draw() {
-    let mut slots = vec![MemoSlot::<4>::EMPTY; 1];
+    // One set: WAYS slots.
+    let mut slots = vec![MemoSlot::<4>::EMPTY; memo::WAYS];
     let plain = ModelParams::DEFAULT;
-    let a = MemoKey::new(7, 0, &at(1.0), &plain).unwrap();
-    let b = MemoKey::new(8, 0, &at(1.0), &plain).unwrap();
+    let keys: Vec<MemoKey> = (0..=memo::WAYS as u32)
+        .map(|m| MemoKey::new(7 + m, 0, &at(1.0), &plain).unwrap())
+        .collect();
+    let a = keys[0];
     assert!(!memo::evicts(&slots, &a), "an empty slot evicts nothing");
     memo::store(&mut slots, a, [1; 4], 0);
     assert!(
         !memo::evicts(&slots, &a),
         "the same draw again replaces itself"
     );
-    assert!(memo::evicts(&slots, &b), "one slot: another draw evicts it");
+    for k in &keys[1..memo::WAYS] {
+        assert!(!memo::evicts(&slots, k), "a free way takes it");
+        memo::store(&mut slots, *k, [2; 4], 0);
+    }
+    assert!(
+        memo::evicts(&slots, &keys[memo::WAYS]),
+        "a full set: another draw evicts one"
+    );
     assert!(!memo::evicts(&Vec::<MemoSlot<4>>::new(), &a), "no memo");
+}
+
+/// GitHub #139: draws that share a set keep their entries (a direct-mapped
+/// memo made two such draws rebuild each other every frame), and a full
+/// set replaces the way used least recently.
+#[test]
+fn a_set_keeps_its_draws_and_replaces_the_least_recently_used() {
+    let mut slots = vec![MemoSlot::<1>::EMPTY; memo::WAYS];
+    let plain = ModelParams::DEFAULT;
+    let keys: Vec<MemoKey> = (0..=memo::WAYS as u32)
+        .map(|m| MemoKey::new(100 + m, 0, &at(2.0), &plain).unwrap())
+        .collect();
+    // Frame 1: every way of the set, alternating draws all hit after.
+    for (i, k) in keys[..memo::WAYS].iter().enumerate() {
+        memo::store_at(&mut slots, *k, [i as u32], 0, 1);
+    }
+    for (i, k) in keys[..memo::WAYS].iter().enumerate() {
+        assert_eq!(memo::find(&slots, k).unwrap().words, [i as u32]);
+    }
+    // Frame 2 uses all but the second: a new draw takes the second's way.
+    for (i, k) in keys[..memo::WAYS].iter().enumerate() {
+        if i != 1 {
+            memo::touch(memo::find_mut(&mut slots, k).unwrap(), 2);
+        }
+    }
+    memo::store_at(&mut slots, keys[memo::WAYS], [99], 0, 2);
+    assert!(
+        memo::find(&slots, &keys[1]).is_none(),
+        "the least recent went"
+    );
+    for k in keys
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 1)
+        .map(|(_, k)| k)
+    {
+        assert!(memo::find(&slots, k).is_some());
+    }
+}
+
+/// GitHub #139: `MemoKey::placed` keeps a draw's key while it moves a
+/// little (the backend re-places the command), and parts it from a draw
+/// elsewhere or shaped otherwise.
+#[test]
+fn a_placed_key_follows_a_small_move() {
+    let plain = ModelParams::DEFAULT;
+    let k = MemoKey::placed(7, 0, &at(1.0), &plain).unwrap();
+    assert_eq!(
+        MemoKey::placed(7, 0, &at(1.001), &plain).unwrap(),
+        k,
+        "1 mm"
+    );
+    assert_ne!(MemoKey::placed(7, 0, &at(1.5), &plain).unwrap(), k);
+    assert_ne!(MemoKey::placed(8, 0, &at(1.0), &plain).unwrap(), k);
+    assert_ne!(
+        MemoKey::placed(7, 0, &at(1.0), &ModelParams::tinted(Color::rgb(9, 9, 9))).unwrap(),
+        k
+    );
+    let turned = Mat34::from_rotation_scale_translation(
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::ONE,
+        Vec3::new(1.0, 0.0, 2.0),
+    );
+    assert_ne!(MemoKey::placed(7, 0, &turned, &plain).unwrap(), k);
+    // The exact key still tells them apart.
+    assert_ne!(
+        MemoKey::new(7, 0, &at(1.001), &plain),
+        MemoKey::new(7, 0, &at(1.0), &plain)
+    );
 }

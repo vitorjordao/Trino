@@ -2087,6 +2087,19 @@ cargo test --workspace
 - **A textured RSP triangle needs `minW · INVW ≤ 1`** or the RDP samples texel (0, 0)
   everywhere: `vrcp`'s reciprocal runs up to 0.2 % high, so the overlay stores W 2^-7
   smaller (ADR 0018 §4).
+- **A direct-mapped cache of ~100 draws thrashes** (GitHub #139): in 1024 slots about
+  five pairs of a frame's draws share a slot (the birthday bound) and rebuild each
+  other's command every frame. The N64 draw memo is 4-way with LRU replacement
+  (`memo::WAYS`); a new per-draw cache gets ways too. A per-commit "jump" in an N64
+  bisection can be which draws collide, not the commit's code.
+- **The N64 memo keys a draw by its translation's cell** (`MemoKey::placed`, #139): a
+  hit compares the exact view-rotated translation (`placed_bits`) and re-places the
+  command; anything stored in an entry (a whole-mesh cull too) must record it, or that
+  entry never answers again.
+- **Every float-carrying `Option` compared in a loop is a trap on the N64**, not only in
+  hot paths (#139): `receiver_under`'s `best.is_none_or(|(_, b)| h < b)` compared a
+  garbage NaN once an unrelated change moved code, and `c.lt.s` signals ("Floating
+  point invalid operation") — plain fields with a sentinel instead.
 - **On the N64, never let a hot path read a float out of an `Option` payload.** LLVM
   hoists the math above the `is_some` test, and an uninitialized payload can be a
   denormal, which traps on the VR4300 (`RspFog { on, .. }` instead).

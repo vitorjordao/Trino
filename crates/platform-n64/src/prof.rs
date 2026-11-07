@@ -36,9 +36,12 @@ pub enum Counter {
     WaterEvict,
     /// An RSP-path draw refused by the eligibility test (CPU T&L instead).
     RspReject,
+    /// A memo hit that moved its remembered command (a pan or a moved
+    /// draw, GitHub #139).
+    MemoMoved,
 }
 
-const RUST: usize = 9;
+const RUST: usize = 10;
 /// The C shim's counters, in its `TP_*` order.
 const C: usize = 7;
 /// Every counter.
@@ -56,6 +59,7 @@ pub const NAMES: [&str; COUNTERS] = [
     "water_miss",
     "water_evict",
     "rsp_reject",
+    "memo_moved",
     "rspq_words",
     "rsp_cmds",
     "ovl_switch",
@@ -167,10 +171,60 @@ pub fn start_window() {
 #[inline(never)]
 fn start_window_out() {
     take();
+    // A scene measured by a project's host ([`begin_scene`]) keeps one
+    // measurement over all of its frames.
+    if scene_on() {
+        return;
+    }
     #[cfg(feature = "prof-rsp")]
     rsp::calibrate();
     #[cfg(feature = "prof-sample")]
     sample::start();
+}
+
+/// A project's measured scene is running ([`begin_scene`] .. [`end_scene`]).
+static mut SCENE: bool = false;
+
+fn scene_on() -> bool {
+    // SAFETY: one thread (see FRAME).
+    unsafe { *core::ptr::addr_of!(SCENE) }
+}
+
+/// A project's host starts measuring a scene of many frames
+/// (`N64Host::measure`): the `--prof` mode measures across all of them,
+/// not one frame at a time (each frame is its own window), so
+/// [`window_report`] after [`end_scene`] covers the whole scene.
+#[inline(always)]
+pub fn begin_scene() {
+    if trace::ENABLED {
+        begin_scene_out();
+    }
+}
+
+#[inline(never)]
+fn begin_scene_out() {
+    #[cfg(feature = "prof-rsp")]
+    rsp::calibrate();
+    #[cfg(feature = "prof-sample")]
+    sample::start();
+    // SAFETY: one thread (see FRAME).
+    unsafe { *core::ptr::addr_of_mut!(SCENE) = true };
+}
+
+/// The scene of [`begin_scene`] ends.
+#[inline(always)]
+pub fn end_scene() {
+    if trace::ENABLED {
+        end_scene_out();
+    }
+}
+
+#[inline(never)]
+fn end_scene_out() {
+    // SAFETY: one thread (see FRAME).
+    unsafe { *core::ptr::addr_of_mut!(SCENE) = false };
+    #[cfg(feature = "prof-sample")]
+    sample::stop();
 }
 
 /// The window ends: its counters are kept for [`window`].
@@ -184,7 +238,9 @@ pub fn end_window() {
 #[inline(never)]
 fn end_window_out() {
     #[cfg(feature = "prof-sample")]
-    sample::stop();
+    if !scene_on() {
+        sample::stop();
+    }
     // SAFETY: one thread (see FRAME).
     unsafe { *core::ptr::addr_of_mut!(WINDOW) = take() };
 }

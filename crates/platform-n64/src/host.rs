@@ -278,17 +278,23 @@ impl N64Host {
                 "TRINO_FRAME_MODEL:{scene} {id:08x} calls={calls} tnl_us={us} rsp={rsp}\n"
             ));
         }
-        // `--trace`: the scene's zones as `TRINO_TRACE:<scene>` lines
-        // (`cargo xtask test n64 --trace` collects them into
-        // `target/traces/n64-trace.json`, one session a scene).
-        if trino_core::trace::ENABLED && trino_core::trace::is_on() {
-            runtime::trace_flush(scene, &mut 0);
-        }
+        self.report_trace(scene);
         // `--prof rsp|sample`: the whole scene's measurement (empty in a
         // plain build).
         let prof = crate::prof::window_report(scene, r.frames);
         if !prof.is_empty() {
             runtime::log(&prof);
+        }
+    }
+
+    /// `--trace`: the last [`N64Host::measure`]'s zones as
+    /// `TRINO_TRACE:<scene>` lines (`cargo xtask test n64 --trace` collects
+    /// them into `target/traces/n64-trace.json`, one session a scene).
+    /// [`N64Host::report_frames`] calls it; a scene reported another way (a
+    /// logged, ungated one) calls it itself. No code without the feature.
+    pub fn report_trace(&self, scene: &str) {
+        if trino_core::trace::ENABLED && trino_core::trace::is_on() {
+            runtime::trace_flush(scene, &mut 0);
         }
     }
 

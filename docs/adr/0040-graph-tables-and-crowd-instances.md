@@ -101,9 +101,13 @@ or events is `GraphInstance<3, 0, 0>`: 224 B (220 on the N64).
 - **`models: ["models/x_with_tray"]`**: the bake resolves each layer mask by joint name
   against each listed model (which must have every clip the graph plays, as long, and every
   joint a mask names) and writes them after the layer records. `AnimGraph::for_model(id)` is
-  the graph with that model's masks (its tables decode with them).
+  the graph with that model's masks (its tables decode with them). **A graph without
+  layers serves its models too** (a fix after the first cut, which baked such a graph to v1
+  and dropped the list, so `for_model` found only the graph's own model): its binds are the
+  model ids alone, written at the layers offset.
 - **v3 only when used:** the layer record's reserved byte becomes flags (bit 0 sync), and the
-  binds follow the layer records (`u16 count, u16 0`, per model `u32 id` + a mask per layer).
+  binds follow the layer records (`u16 count, u16 0`, per model `u32 id` + a mask per layer;
+  with no layers, at the layers offset and the ids alone).
   A graph that uses neither bakes the v2 (or v1) bytes it always did; v1 and v2 blobs parse
   and play as before.
 

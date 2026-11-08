@@ -222,6 +222,10 @@ let t = GraphTables::decode_in(&g, &arena).unwrap(); // ~2 KB for the player gra
   differ by joints; each layer mask is resolved by joint name per model at
   the bake (a missing clip, another duration or a missing joint fails it);
   the game asks `g.for_model(model_id)` (and decodes that view's tables).
+  A graph with no layers keeps its `models` too (the binds are the ids alone):
+  a crowd of rigs that share every clip shares one graph. Before the fix such a
+  graph baked to v1 and `for_model` found only its own model
+  (`anim_tables::a_graph_without_layers_serves_its_models`).
 - The bake writes v2 (bytes unchanged) unless a graph uses `sync` or
   `models`.
 

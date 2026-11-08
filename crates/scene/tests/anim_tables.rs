@@ -361,3 +361,72 @@ fn dump_a_v3_fuzz_seed_on_request() {
     let name = format!("{:08x}", trino_core::save::checksum(&tang));
     std::fs::write(std::path::Path::new(&dir).join(name), tang).unwrap();
 }
+
+/// One graph for a family of rigs with the same clips and no layers: the
+/// `models` list still bakes (TANG v3, a bind per model and no masks), so
+/// every rig finds the graph through `for_model`. Before, a graph without
+/// layers dropped `models` and baked v1, serving its own model alone.
+const SERVED_NO_LAYERS: &str = r#"
+AnimGraph(
+    model: "models/rig",
+    models: ["models/rig_tray", "models/rig_b"],
+    params: { "act": Float(0.0) },
+    states: { "walk": Clip(clip: "walk"), "carry": Clip(clip: "carry") },
+    transitions: [(from: Any, to: "carry", when: Greater("act", 0.5), blend: 0.25)],
+)
+"#;
+
+#[test]
+fn a_graph_without_layers_serves_its_models() {
+    let def = AnimGraphDef::from_ron(SERVED_NO_LAYERS).unwrap();
+    assert!(def.uses_v3() && !def.uses_v2());
+    let (rig, tray) = (joints(&RIG), joints(&RIG_TRAY));
+    let c = clips();
+    let bound = [
+        BoundModel {
+            path: "models/rig_tray".into(),
+            clips: &c,
+            joints: Some(&tray),
+        },
+        BoundModel {
+            path: "models/rig_b".into(),
+            clips: &c,
+            joints: Some(&rig),
+        },
+    ];
+    let tang = anim::to_tang_bound(&def, &clips(), Some(&rig), &bound, &|_| true).unwrap();
+    let g = AnimGraph::parse(&tang).unwrap();
+    assert_eq!(g.version(), 3);
+    assert_eq!((g.layer_count(), g.bind_count()), (0, 2));
+    for name in ["models/rig", "models/rig_tray", "models/rig_b"] {
+        let id = trino_core::asset_id(name);
+        let t = g.for_model(id).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(t.model(), id);
+    }
+    assert!(g.for_model(trino_core::asset_id("models/other")).is_none());
+    // The served views play the graph exactly as its own model's does.
+    let t = g.for_model(trino_core::asset_id("models/rig_b")).unwrap();
+    let (mut a, mut b) = (AnimGraphInstance::new(&g), AnimGraphInstance::new(&t));
+    for k in 0..90 {
+        if k == 30 {
+            a.set(&g, "act", 1.0);
+            b.set(&t, "act", 1.0);
+        }
+        a.update(&g, 1.0 / 60.0);
+        b.update(&t, 1.0 / 60.0);
+    }
+    assert_eq!(a.digest(), b.digest());
+    // Tables decode the binds too.
+    let mut memory = vec![std::mem::MaybeUninit::uninit(); GraphTables::bytes_for(&t)];
+    let arena = Arena::new(&mut memory);
+    let tt = GraphTables::decode_in(&t, &arena).unwrap();
+    assert_eq!(tt.model, trino_core::asset_id("models/rig_b"));
+    // A graph without `models` still bakes the same v1 bytes.
+    let plain = AnimGraphDef::from_ron(
+        &SERVED_NO_LAYERS.replace(r#"models: ["models/rig_tray", "models/rig_b"],"#, ""),
+    )
+    .unwrap();
+    assert!(!plain.uses_v3());
+    let v1 = anim::to_tang_bound(&plain, &clips(), Some(&rig), &[], &|_| true).unwrap();
+    assert_eq!(AnimGraph::parse(&v1).unwrap().version(), 1);
+}

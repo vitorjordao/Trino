@@ -14,7 +14,7 @@ use trino_core::{
     StateHasher, Vec2,
 };
 use trino_net::natsim::{Internet, NatKind, SimDatagrams};
-use trino_net::udp::{LinkReport, MeetAt, Route, RoutePolicy, UdpSocket, meet};
+use trino_net::udp::{Datagrams, LinkReport, MeetAt, Route, RoutePolicy, UdpSocket, meet};
 use trino_net::{NetConfig, NetSession, NetState};
 
 #[derive(Clone, Copy)]
@@ -100,9 +100,38 @@ struct Outcome {
     links: Vec<LinkReport>,
 }
 
+/// Signals once the socket delivers its first datagram (a lobby `JOIN` or
+/// `WATCH`), so `session` spawns peers in deterministic seat order.
+struct JoinOrder {
+    io: SimDatagrams,
+    joined: Option<mpsc::Sender<()>>,
+}
+
+impl Datagrams for JoinOrder {
+    fn send_to(&mut self, datagram: &[u8], to: std::net::SocketAddr) -> std::io::Result<()> {
+        let r = self.io.send_to(datagram, to);
+        if let Some(tx) = self.joined.take() {
+            let _ = tx.send(());
+        }
+        r
+    }
+
+    fn recv_from(&mut self, buf: &mut [u8]) -> Option<(usize, std::net::SocketAddr)> {
+        self.io.recv_from(buf)
+    }
+
+    fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.io.local_addr()
+    }
+
+    fn lan_addr(&self, toward: std::net::SocketAddr) -> Option<std::net::SocketAddr> {
+        self.io.lan_addr(toward)
+    }
+}
+
 /// Meet at the lobby and play `FRAMES` frames (a spectator watches them).
 fn play(
-    io: SimDatagrams,
+    io: impl Datagrams + 'static,
     lobby: std::net::SocketAddr,
     cfg: NetConfig,
     watch: bool,
@@ -171,17 +200,23 @@ fn session(
     machines: Vec<(SimDatagrams, bool)>,
     policy: RoutePolicy,
 ) -> Vec<Outcome> {
+    // Spectators first (a room takes them until it fills), then the players in
+    // order (seats follow it); wait for each machine's first lobby datagram
+    // before spawning the next so scheduler jitter cannot swap seats.
+    let (watchers, players): (Vec<_>, Vec<_>) = machines.into_iter().partition(|(_, watch)| *watch);
     let (tx, rx) = mpsc::channel();
     let mut threads = Vec::new();
-    for (i, (io, watch)) in machines.into_iter().enumerate() {
+    for (io, watch) in watchers.into_iter().chain(players) {
         let tx = tx.clone();
+        let (jtx, jrx) = mpsc::channel();
+        let io = JoinOrder {
+            io,
+            joined: Some(jtx),
+        };
         threads.push(std::thread::spawn(move || {
-            // Spectators first (a room takes them until it fills), then the
-            // players in order (seats follow it).
-            let wait = if watch { 0 } else { 60 + 30 * i as u64 };
-            std::thread::sleep(Duration::from_millis(wait));
             tx.send(play(io, lobby, cfg, watch, policy)).unwrap();
         }));
+        let _ = jrx.recv();
     }
     for t in threads {
         t.join().unwrap();

@@ -202,6 +202,10 @@ impl Controls {
         pad.sprint = now.is_down(sprint) || analog;
         pad.switch = now.just_pressed(prev, bind.of(Action::Switch));
         pad.keeper = now.just_pressed(prev, bind.of(Action::Keeper));
+        if !can_kick {
+            self.armed = [false; 3];
+            self.held = [0.0; 3];
+        }
         for (k, act) in KICKS.into_iter().enumerate() {
             let b = bind.of(act);
             if now.just_pressed(prev, b) {
@@ -396,5 +400,21 @@ mod tests {
             !c.pad(&st(&[Button::R], (0.0, 0.0)), &none, 0.016, false)
                 .sprint
         );
+    }
+
+    #[test]
+    fn losing_the_ball_disarms_a_held_kick_charge() {
+        let mut c = Controls::default();
+        let none = InputState::default();
+        let down = st(&[Button::B], (0.0, 0.0));
+        c.pad(&down, &none, 0.2, true);
+        assert!(c.charge() > 0.0, "holding B with the ball charges the kick");
+        // Tackled while still holding B: charge disappears immediately and
+        // releasing B afterwards never fires a kick.
+        let pad = c.pad(&down, &down, 0.2, false);
+        assert_eq!(c.charge(), 0.0);
+        assert!(pad.shoot.is_none());
+        let pad = c.pad(&none, &down, 0.016, true);
+        assert!(pad.shoot.is_none());
     }
 }

@@ -443,3 +443,73 @@ fn throw_in_walk_in() {
     tick(&mut g, 10);
     sh.shot(&mut g, &format!("throw_{k:02}_thrown"), view, 14.0, 26.0);
 }
+
+#[test]
+#[ignore = "local tool: evidence frames (needs a GPU)"]
+fn corner_kick_camera_framing() {
+    let dir = out_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let specs: [(&str, i32, i32, u8); 4] = [
+        ("nw", -52, -18, 0),
+        ("ne", 52, -18, SIDE as u8),
+        ("sw", -52, 18, 0),
+        ("se", 52, 18, SIDE as u8),
+    ];
+    for (profile, tag, size) in [
+        (SimProfile::N64, "n64", None),
+        (SimProfile::Native, "pc", Some((640u32, 360u32))),
+    ] {
+        let mut r = renderer(profile, size);
+        r.set_msaa(profile == SimProfile::Native);
+        if profile == SimProfile::N64 {
+            r.set_n64_look(true);
+        }
+        let (w, h) = r.internal_size();
+        let mut tiles: Vec<Vec<u8>> = Vec::new();
+        for (cname, x, z, last_touch) in specs {
+            let mut g = SolidElevenGame::exhibition(
+                Vec2::new(w as f32, h as f32),
+                0,
+                1,
+                7,
+                [false, false],
+                Sky::Day,
+            );
+            until(&mut g, 60 * 30, |m| m.phase == Phase::Play);
+            let m = &mut g.session.as_mut().unwrap().m;
+            m.last_touch = last_touch;
+            let mut b = Ball::at_rest(V2::new(Fx::int(x), Fx::int(z)));
+            b.vel = V3::new(Fx::int(x.signum() * 8), Fx::ZERO, Fx::int(z.signum()));
+            m.ball = b;
+            m.owner = None;
+            until(&mut g, 120, |m| {
+                matches!(m.phase, Phase::Setup { .. })
+                    && m.restart.kind == solid_eleven::sim::rules::RestartKind::Corner
+            });
+            until(&mut g, 60 * 15, |m| matches!(m.phase, Phase::Ready { .. }));
+            // Let the camera track through the Ready beat so taker and ball settle cleanly.
+            tick(&mut g, 20);
+            g.render(&mut r);
+            let rgba = r.read_offscreen();
+            let path = dir.join(format!("corner_{cname}_{tag}.png"));
+            write_png(&path, w, h, &rgba);
+            eprintln!("evidence: {}", path.display());
+            tiles.push(rgba);
+        }
+        // Stitch NW | NE on top, SW | SE on bottom.
+        let (gw, gh) = (w * 2, h * 2);
+        let mut grid = vec![0u8; (gw * gh * 4) as usize];
+        for (idx, tile) in tiles.iter().enumerate() {
+            let (ox, oy) = ((idx as u32 % 2) * w, (idx as u32 / 2) * h);
+            for row in 0..h {
+                let src = (row * w * 4) as usize;
+                let dst = (((oy + row) * gw + ox) * 4) as usize;
+                grid[dst..dst + (w * 4) as usize]
+                    .copy_from_slice(&tile[src..src + (w * 4) as usize]);
+            }
+        }
+        let sheet = dir.join(format!("corner_kicks_sheet_{tag}.png"));
+        write_png(&sheet, gw, gh, &grid);
+        eprintln!("evidence: {}", sheet.display());
+    }
+}

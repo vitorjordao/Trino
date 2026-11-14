@@ -956,3 +956,43 @@ fn print_press_duel() {
         100.0 * o[10] as f32 / o[11] as f32
     );
 }
+
+#[test]
+fn defender_heads_opponent_aerial_ball_clear_in_own_half() {
+    use super::ball::Ball;
+    let mut m = Match::new(&setup(0, 1, 7, 1800));
+    m.phase = Phase::Play;
+    m.owner = None;
+    for i in 0..N {
+        m.players[i].pos = V2::new(Fx::int(25), Fx::int(20));
+        m.players[i].vel = V2::ZERO;
+        m.players[i].act = Act::Free;
+        m.players[i].cool = 0;
+    }
+    // Defender on side 0 (defending West) heads an opponent's aerial ball
+    // in his own half, even with a teammate nearby: must clear it long,
+    // never short-pass into midfield.
+    let def = 3;
+    let mate = 5;
+    m.players[def].pos = V2::new(Fx::int(-25), Fx::ZERO);
+    m.players[mate].pos = V2::new(Fx::int(-19), Fx::ZERO);
+    m.last_touch = SIDE as u8;
+    let mut b = Ball::at_rest(V2::new(Fx::int(-25), Fx::ZERO));
+    b.pos.y = Fx::milli(1_850);
+    m.ball = b;
+    m.step([Pad::default(); 2]);
+    assert_eq!(
+        m.stats[0].passes, 0,
+        "defensive header must clear, not pass"
+    );
+    assert!(
+        m.ball.vel.x > Fx::int(9),
+        "clearance vel.x = {}",
+        m.ball.vel.x.to_f32()
+    );
+    assert!(
+        m.ball.vel.y > Fx::int(5),
+        "clearance loft vel.y = {}",
+        m.ball.vel.y.to_f32()
+    );
+}

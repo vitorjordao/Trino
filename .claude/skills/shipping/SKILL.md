@@ -97,3 +97,6 @@ cargo xtask package 3ds --cia [--selftest] --project <dir>
 - Adding strings to `assets/i18n/*.ron` grows `fonts/i18n@<lang>` atlases
   (`chars = "auto"`): castle64's achievement texts took pt-BR and es-ES from 2 KB to
   4 KB of I4 (the whole TMEM). Check `cargo xtask i18n fonts --platform n64`.
+- Cargo 1.100+ stores build-script outputs under `build/<pkg>/<hash>/out/` instead of
+  `build/<pkg>-<hash>/out/`; `find_steam_lib` checks both layouts when copying
+  `libsteam_api` / `steam_api64.dll`.

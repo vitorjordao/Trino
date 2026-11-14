@@ -264,9 +264,9 @@ fn referee_shows_the_card_up_close() {
         let tackler = SIDE + 4;
         let at = v2(-5, 6);
         let fwd = m.attacks(0).sign();
-        for i in 0..2 * SIDE {
-            if i != carrier && i != tackler && (m.players[i].pos - at).len() < Fx::int(16) {
-                m.players[i].pos = V2::new(m.players[i].pos.x, -Fx::int(25));
+        for (i, p) in m.players.iter_mut().enumerate() {
+            if i != carrier && i != tackler && (p.pos - at).len() < Fx::int(16) {
+                p.pos = V2::new(p.pos.x, -Fx::int(25));
             }
         }
         m.players[carrier].pos = at;
@@ -336,11 +336,11 @@ fn one_on_one(size: Vec2, seed: u32) -> (SolidElevenGame, V2) {
     m.players[keeper].pos = V2::new(end.goal_x() - end.sign().mul(Fx::milli(1_500)), Fx::ZERO);
     let carrier = 9;
     let at = V2::new(end.goal_x() - end.sign().mul(Fx::int(25)), Fx::int(3));
-    for j in SIDE..2 * SIDE {
+    for (j, p) in m.players.iter_mut().enumerate().skip(SIDE) {
         if j != keeper {
             let y = Fx::int((j % SIDE) as i32 * 4 - 22);
-            m.players[j].pos = at - V2::new(end.sign().mul(Fx::int(9)), y);
-            m.players[j].vel = V2::ZERO;
+            p.pos = at - V2::new(end.sign().mul(Fx::int(9)), y);
+            p.vel = V2::ZERO;
         }
     }
     m.players[carrier].pos = at;

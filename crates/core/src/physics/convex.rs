@@ -102,8 +102,8 @@ impl Convex {
             }
         }
         let mut c = Vec3::ZERO;
-        for i in 0..self.nv as usize {
-            c += self.v[i];
+        for &v in &self.v[..self.nv as usize] {
+            c += v;
         }
         let c = c * (1.0 / self.nv.max(1) as f32);
         let tol = 1e-5 * sqrt(scale);
@@ -177,7 +177,7 @@ impl Convex {
         let seg = seg.max(0.0);
         let mut c = Convex::EMPTY;
         // Vertex index: side * 4 + other * 2 + top.
-        for k in 0..8 {
+        for (k, v) in c.v.iter_mut().enumerate() {
             let (side, other, top) = (k >> 2, (k >> 1) & 1, k & 1);
             let a = if side == 0 { lo_side } else { hi_side };
             let o = if other == 0 { o0 } else { o1 };
@@ -186,7 +186,7 @@ impl Convex {
                 (0, _) => b.min.y + seg,
                 _ => b.max.y + seg,
             };
-            c.v[k] = if along_x {
+            *v = if along_x {
                 Vec3::new(a, y, o)
             } else {
                 Vec3::new(o, y, a)
@@ -426,8 +426,8 @@ impl Convex {
         for ax in &axes[..na] {
             let ax = *ax;
             let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
-            for i in 0..self.nv as usize {
-                let p = self.v[i].dot(ax);
+            for &v in &self.v[..self.nv as usize] {
+                let p = v.dot(ax);
                 lo = lo.min(p);
                 hi = hi.max(p);
             }

@@ -663,9 +663,9 @@ fn node_collider(d: &[u8], at: usize) -> Option<Collider> {
 
 fn node_matrix(d: &[u8], at: usize) -> Mat34 {
     let mut matrix = Mat34::IDENTITY;
-    for r in 0..3 {
-        for c in 0..4 {
-            matrix.m[r][c] = rd_f32(d, at + 16 + (r * 4 + c) * 4);
+    for (r, row) in matrix.m.iter_mut().enumerate() {
+        for (c, cell) in row.iter_mut().enumerate() {
+            *cell = rd_f32(d, at + 16 + (r * 4 + c) * 4);
         }
     }
     matrix

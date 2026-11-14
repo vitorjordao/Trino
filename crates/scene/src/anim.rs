@@ -757,8 +757,8 @@ pub fn clip_facts(tmdl: &[u8]) -> Result<Vec<ClipFacts>, String> {
             mesh.pose_world(Some(trino_core::AnimRef::new(c.id, t)), &mut world);
             for leg in 0..2 {
                 let j = ch.chain[leg.min(ch.legs as usize - 1)][2] as usize;
-                for r in 0..3 {
-                    b.extend_from_slice(&world[j].m[r][3].to_le_bytes());
+                for row in &world[j].m {
+                    b.extend_from_slice(&row[3].to_le_bytes());
                 }
             }
         }

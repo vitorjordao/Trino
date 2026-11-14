@@ -634,9 +634,12 @@ impl AnimGraphDef {
 
     /// Whether it needs `TANG` v2: layers, a 2D blend space or an
     /// inertialized transition (else it bakes to v1, byte for byte).
-    /// Whether it needs `TANG` v3: a synced layer, or other models' masks.
+    /// Whether it needs `TANG` v3: a synced layer, or other models it
+    /// serves (their masks per layer; with no layers, only which models: a
+    /// graph without layers used to drop `models` and serve its own model
+    /// alone, so `AnimGraph::for_model` failed for the rest).
     pub fn uses_v3(&self) -> bool {
-        !self.layers.is_empty() && (!self.models.is_empty() || self.layers.iter().any(|l| l.sync))
+        !self.models.is_empty() || self.layers.iter().any(|l| l.sync)
     }
 
     /// Other models' paths (`models/x`).
@@ -1773,7 +1776,7 @@ pub fn to_tang_bound(
             table.extend_from_slice(&u32le(cond_at));
         }
     }
-    if v2 && !def.layers.is_empty() {
+    if v3 || (v2 && !def.layers.is_empty()) {
         let mut rec = Vec::new();
         for (i, l) in def.layers.iter().enumerate() {
             let mi = i + 1;

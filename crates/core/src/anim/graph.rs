@@ -48,8 +48,9 @@
 //!                          param (NONE = none), f32 weight, u16 first state,
 //!                          u16 states, u16 first transition, u16 transitions,
 //!                          u16 start state, u16 0
-//! binds       (v3, right after the layer records): u16 count, u16 0, then
-//!                          per model u32 model id and a u32 mask per layer
+//! binds       (v3, right after the layer records, at the layers offset when
+//!                          there are none): u16 count, u16 0, then per model
+//!                          u32 model id and a u32 mask per layer
 //! data: points (8 B: f32 value, u16 clip, u16 0; 2D: 12 B, f32 x, f32 y,
 //!       u16 clip, u16 0), triangles (3 × u8 point), event tracks
 //!       ([`EventTrack`]: u32 n + records), root tracks ([`RootTrack`]),
@@ -406,7 +407,7 @@ impl<'a> AnimGraph<'a> {
         // v3: the binds after the layer records (`u16 count, u16 0`, then
         // per model `u32 id` and a mask per layer).
         let mut g = g;
-        if version >= 3 && g.layers > 0 {
+        if version >= 3 {
             let at = g.layers_at + g.layers * LAYER_BYTES;
             if bytes.len() < at + 4 {
                 return Err(GraphError::Truncated);

@@ -91,9 +91,10 @@ pub fn bake(
     } else {
         None
     };
-    // The other models it serves (v3, issue #138), on this platform.
+    // The other models it serves (v3, issue #138), on this platform; with
+    // or without layers (without, a bind says only which models).
     let mut bound = Vec::new();
-    if !def.layers.is_empty() {
+    {
         for path in def.model_paths() {
             let Some(c) = model_clips(root, manifest, platform, &path)? else {
                 if manifest

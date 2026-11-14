@@ -927,9 +927,9 @@ impl<'a> Mesh<'a> {
         for (j, m) in out.iter_mut().enumerate().take(j_count) {
             let jat = j * JOINT_BYTES + 4;
             let mut inv = Mat34::IDENTITY;
-            for r in 0..3 {
-                for c in 0..4 {
-                    inv.m[r][c] = rd_f32(skel.joints, jat + (r * 4 + c) * 4);
+            for (r, row) in inv.m.iter_mut().enumerate() {
+                for (c, cell) in row.iter_mut().enumerate() {
+                    *cell = rd_f32(skel.joints, jat + (r * 4 + c) * 4);
                 }
             }
             *m = m.mul(&inv);

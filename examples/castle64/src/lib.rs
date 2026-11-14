@@ -1676,9 +1676,9 @@ impl Castle64Game {
         {
             renderer.fill_rect(dot(star, 3.0), Color::rgb(255, 250, 170));
         }
-        for i in 0..l.enemies.len().min(MAX_ENEMIES) {
-            if self.enemies[i].alive {
-                renderer.fill_rect(dot(self.enemies[i].pos, 2.5), Color::rgb(200, 40, 40));
+        for e in &self.enemies[..l.enemies.len().min(MAX_ENEMIES)] {
+            if e.alive {
+                renderer.fill_rect(dot(e.pos, 2.5), Color::rgb(200, 40, 40));
             }
         }
         // The player, and a tick where it faces.

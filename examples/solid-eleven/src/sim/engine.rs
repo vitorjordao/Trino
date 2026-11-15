@@ -1813,7 +1813,9 @@ impl Match {
         }
         if h > CHEST_H {
             // A header: attackers in the box go for goal, defenders clear,
-            // midfield headers find a teammate.
+            // midfield headers find a teammate. Capture who last played
+            // the ball before `touch` overwrites `self.last_touch`.
+            let opp_ball = side_of(self.last_touch as usize) != s;
             if !self.touch(i) {
                 return;
             }
@@ -1828,7 +1830,7 @@ impl Match {
                 self.stats[s].shots += 1;
                 self.log(EventKind::Shot, s, i as u8);
                 ball::launch((aim - p).norm(), Fx::int(13), Fx::milli(80))
-            } else if own_half && side_of(self.last_touch as usize) != s {
+            } else if own_half && opp_ball {
                 let away =
                     V2::new(-self.ends[s].sign(), self.rng.signed().mul(Fx::milli(500))).norm();
                 ball::launch(away, Fx::int(14), Fx::milli(450))
@@ -2157,6 +2159,7 @@ impl Match {
             p.attrs[k] = (attrs[k] as i32 + morale).clamp(1, 99) as u8;
         }
         p.stamina = Fx::ONE;
+        p.cool = 0;
         p.yellow = 0;
         p.goals = 0;
         p.act = Act::Free;
@@ -2190,6 +2193,7 @@ impl Match {
             p.attrs[k] = (attrs[k] as i32 + morale).clamp(1, 99) as u8;
         }
         p.stamina = Fx::ONE;
+        p.cool = 0;
         p.yellow = 0;
         p.goals = 0;
         p.act = Act::Free;

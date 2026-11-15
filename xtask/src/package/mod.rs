@@ -746,14 +746,18 @@ fn copy_steam_lib(krate: &Crate, plan: &Plan, exe_dir: &Path) -> Result<(), Stri
         build = build.join(t);
     }
     let build = build.join("dist/build");
+    let lib = find_steam_lib(&build, name)?;
+    std::fs::copy(&lib, exe_dir.join(name)).map_err(|e| format!("{}: {e}", lib.display()))?;
+    Ok(())
+}
+
+/// Locate `<name>` under Cargo's `build/` directory: supports both Cargo <= 1.99
+/// (`steamworks-sys-<hash>/out/<name>`) and Cargo >= 1.100 (`steamworks-sys/<hash>/out/<name>`).
+fn find_steam_lib(build: &Path, name: &str) -> Result<PathBuf, String> {
     let mut found: Option<(std::time::SystemTime, PathBuf)> = None;
-    for e in std::fs::read_dir(&build).map_err(|e| format!("{}: {e}", build.display()))? {
-        let p = e.map_err(|e| e.to_string())?.path();
-        let lib = p.join("out").join(name);
-        if p.file_name()
-            .is_some_and(|n| n.to_string_lossy().starts_with("steamworks-sys-"))
-            && lib.is_file()
-        {
+    let mut consider = |out_parent: &Path| {
+        let lib = out_parent.join("out").join(name);
+        if lib.is_file() {
             let t = std::fs::metadata(&lib)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
@@ -761,11 +765,25 @@ fn copy_steam_lib(krate: &Crate, plan: &Plan, exe_dir: &Path) -> Result<(), Stri
                 found = Some((t, lib));
             }
         }
+    };
+    for e in std::fs::read_dir(build).map_err(|e| format!("{}: {e}", build.display()))? {
+        let p = e.map_err(|e| e.to_string())?.path();
+        let Some(fname) = p.file_name().map(|n| n.to_string_lossy()) else {
+            continue;
+        };
+        if fname.starts_with("steamworks-sys-") {
+            consider(&p);
+        } else if fname == "steamworks-sys"
+            && let Ok(hashes) = std::fs::read_dir(&p)
+        {
+            for h in hashes.flatten() {
+                consider(&h.path());
+            }
+        }
     }
-    let (_, lib) =
-        found.ok_or_else(|| format!("{name}: not in {} (steamworks-sys)", build.display()))?;
-    std::fs::copy(&lib, exe_dir.join(name)).map_err(|e| format!("{}: {e}", lib.display()))?;
-    Ok(())
+    found
+        .map(|(_, lib)| lib)
+        .ok_or_else(|| format!("{name}: not in {} (steamworks-sys)", build.display()))
 }
 
 fn xml(s: &str) -> String {
@@ -1418,5 +1436,29 @@ mod tests {
         assert_eq!(Os::parse("win"), Some(Os::Windows));
         assert_eq!(Os::Windows.exe("g"), "g.exe");
         assert_eq!(trino_package_dir("Orbit: Cat?"), "Orbit_ Cat_");
+    }
+
+    #[test]
+    fn finds_steam_lib_in_legacy_and_cargo_1100_build_layouts() {
+        let base = std::env::temp_dir().join(format!("trino-steam-lib-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let legacy = base.join("legacy/steamworks-sys-0123456789abcdef/out/libsteam_api.so");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, b"legacy").unwrap();
+        assert_eq!(
+            find_steam_lib(&base.join("legacy"), "libsteam_api.so").unwrap(),
+            legacy
+        );
+
+        let modern = base.join("modern/steamworks-sys/0123456789abcdef/out/libsteam_api.so");
+        std::fs::create_dir_all(modern.parent().unwrap()).unwrap();
+        std::fs::write(&modern, b"modern").unwrap();
+        assert_eq!(
+            find_steam_lib(&base.join("modern"), "libsteam_api.so").unwrap(),
+            modern
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

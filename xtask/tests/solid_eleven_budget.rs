@@ -372,3 +372,105 @@ fn the_referees_card_stays_on_the_rsp_near_and_far() {
         }
     }
 }
+
+/// Every corner kick (NW, NE, SW, SE), under both N64 4:3 and widescreen
+/// tracking, keeps 100% of stadium and player 3D draws on the N64's RSP.
+#[test]
+fn every_corner_kick_keeps_all_draws_on_the_rsp() {
+    use solid_eleven::render::Sky;
+    use solid_eleven::sim::ball::Ball;
+    use solid_eleven::sim::engine::{Act, Phase, SIDE};
+    use solid_eleven::sim::fx::{Fx, V2};
+    use solid_eleven::sim::pitch::{HALF_LEN, HALF_WID};
+    use solid_eleven::sim::rules::{Restart, RestartKind};
+
+    let meshes = meshes();
+    let corners = [
+        (
+            "NW",
+            -(HALF_LEN - Fx::milli(500)),
+            -(HALF_WID - Fx::milli(500)),
+        ),
+        (
+            "NE",
+            HALF_LEN - Fx::milli(500),
+            -(HALF_WID - Fx::milli(500)),
+        ),
+        (
+            "SW",
+            -(HALF_LEN - Fx::milli(500)),
+            HALF_WID - Fx::milli(500),
+        ),
+        ("SE", HALF_LEN - Fx::milli(500), HALF_WID - Fx::milli(500)),
+    ];
+    for wide in [false, true] {
+        for (label, cx, cz) in corners {
+            let mut g = SolidElevenGame::exhibition(
+                Vec2::new(320.0, 240.0),
+                0,
+                1,
+                7,
+                [false, false],
+                Sky::Day,
+            );
+            {
+                let s = g.session.as_mut().unwrap();
+                let spot = V2::new(cx, cz);
+                s.m.restart = Restart {
+                    kind: RestartKind::Corner,
+                    team: 0,
+                    spot,
+                };
+                s.m.phase = Phase::Ready { t: 0 };
+                s.m.taker = 7;
+                s.m.owner = Some(7);
+                s.m.ball = Ball::at_rest(spot);
+                let (pos, face) = s.m.taker_stance(s.m.restart);
+                s.m.players[7].pos = pos;
+                s.m.players[7].face = face;
+                s.m.players[7].act = Act::Free;
+                s.m.players[SIDE].pos = V2::new(cx - cx.signum().mul(Fx::int(2)), Fx::ZERO);
+                s.view.cam.wide = wide;
+            }
+            let focus = trino_core::Vec3::new(cx.to_f32(), 0.0, cz.to_f32());
+            for step in 1..=90 {
+                g.session.as_mut().unwrap().view.cam.follow_rate(
+                    focus,
+                    trino_core::Vec3::ZERO,
+                    1.0 / 60.0,
+                    6.0,
+                );
+                if step % 15 != 0 {
+                    continue;
+                }
+                let mut r = Rec::default();
+                g.render(&mut r);
+                let light = r.light.unwrap_or(DEFAULT_LIGHT);
+                let mut tris = 0u32;
+                for (id, mat, params, cam) in &r.draws {
+                    let mesh = Mesh::from_tmdl(&meshes[&id.0]).unwrap();
+                    tris += (mesh.index_count / 3) as u32;
+                    rsp_mesh_check(&mesh).unwrap();
+                    let ctx = TnlContext::new(cam, &light, Vec2::new(320.0, 240.0));
+                    if let Err(e) = rsp_check(&ctx, &mesh, mat, params) {
+                        assert_eq!(
+                            e,
+                            trino_core::RspReject::Offscreen,
+                            "{label} wide={wide} step={step}: model {:08x} left the RSP: {e:?}",
+                            id.0
+                        );
+                    }
+                }
+                assert!(
+                    r.draws.len() <= 110,
+                    "{label} wide={wide} step={step}: {} draws",
+                    r.draws.len()
+                );
+                assert!(
+                    tris <= 2_400,
+                    "{label} wide={wide} step={step}: {tris} triangles"
+                );
+            }
+        }
+    }
+}

@@ -290,7 +290,7 @@ pub(crate) fn align_feet(
     chains: &Chains,
     slope: crate::anim::FootSlope,
 ) {
-    for l in 0..chains.legs as usize {
+    for (l, ch) in chains.chain[..chains.legs as usize].iter().enumerate() {
         let mut n = slope.normal(l);
         let side = sqrt(n.x * n.x + n.z * n.z);
         if side < 1e-4 {
@@ -300,7 +300,7 @@ pub(crate) fn align_feet(
             let k = MAX_FOOT_TILT / side;
             n = Vec3::new(n.x * k, sqrt(1.0 - MAX_FOOT_TILT * MAX_FOOT_TILT), n.z * k);
         }
-        let f = chains.chain[l][2] as usize;
+        let f = ch[2] as usize;
         let r = from_to(Vec3::new(0.0, 1.0, 0.0), n);
         let at = pos(&world[f]);
         turn_subtree(world, count, parent, f, at, &r);

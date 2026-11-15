@@ -179,6 +179,10 @@ Players, recordings and netplay.
   same reason a hang guard is wall-clock time without progress (20 s), never a loop
   count: lockstep under loss passed locally and timed out on CI's Linux and Windows
   runners with a tick budget.
+- **Deterministic lobby join ordering:** `crates/net/tests/nat.rs` gates each thread
+  spawn on the previous machine's first `send_to` (`JoinOrder`) rather than using
+  `thread::sleep` stagger, because macOS CI timer slack reordered `JOIN`s and swapped
+  seats (breaking `four_players_and_a_spectator_across_mixed_nats`).
 - **Re-simulated frames are silent.** `session::run_requests` follows ggrs's frame
   numbers (`SaveGameState`/`LoadGameState` carry them; `FrameClock`) and plays audio
   only for a frame past the newest one already played. A game that triggers effects

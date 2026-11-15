@@ -149,9 +149,9 @@ impl AchievementState {
         if na % 8 != 0 {
             out[2 + bytes] &= (1u8 << (na % 8)) - 1;
         }
-        for i in 0..ns {
+        for (i, &st) in self.stats[..ns].iter().enumerate() {
             let at = 3 + bytes + 4 * i;
-            out[at..at + 4].copy_from_slice(&self.stats[i].to_le_bytes());
+            out[at..at + 4].copy_from_slice(&st.to_le_bytes());
         }
         len
     }
@@ -186,10 +186,9 @@ impl AchievementState {
         for i in 0..nbytes {
             s.bits[i / 4] |= (bytes[3 + i] as u32) << (8 * (i % 4));
         }
-        for i in 0..ns {
+        for (i, st) in s.stats[..ns].iter_mut().enumerate() {
             let at = 3 + nbytes + 4 * i;
-            s.stats[i] =
-                i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+            *st = i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
         }
         Ok((s, len))
     }

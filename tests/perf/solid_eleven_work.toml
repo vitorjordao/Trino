@@ -48,41 +48,41 @@ rects = 71
 glyphs = 27
 
 [frame-179]
-draws = 57
-tris = 974
-gpu_draws_3ds = 57
+draws = 56
+tris = 890
+gpu_draws_3ds = 56
 blobs = 2
 rects = 71
 glyphs = 27
 
 [frame-209]
-draws = 53
-tris = 1000
-gpu_draws_3ds = 53
+draws = 51
+tris = 832
+gpu_draws_3ds = 51
 blobs = 2
 rects = 71
 glyphs = 27
 
 [frame-239]
-draws = 42
-tris = 934
-gpu_draws_3ds = 42
+draws = 40
+tris = 766
+gpu_draws_3ds = 40
 blobs = 2
 rects = 73
 glyphs = 27
 
 [frame-269]
-draws = 49
-tris = 1126
-gpu_draws_3ds = 49
+draws = 47
+tris = 958
+gpu_draws_3ds = 47
 blobs = 1
 rects = 71
 glyphs = 27
 
 [frame-299]
-draws = 44
-tris = 1018
-gpu_draws_3ds = 44
+draws = 42
+tris = 850
+gpu_draws_3ds = 42
 blobs = 1
 rects = 71
 glyphs = 27

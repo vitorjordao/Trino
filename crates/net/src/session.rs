@@ -615,10 +615,8 @@ impl SyncTest {
         audio: &mut dyn Audio,
         inputs: &PlayersInput,
     ) -> Result<(), String> {
-        for i in 0..self.players {
-            let w = Wire(
-                NetInput::from_input(&inputs.players[i], NetExtras::PAD, (320, 240)).to_bytes(),
-            );
+        for (i, p) in inputs.players[..self.players].iter().enumerate() {
+            let w = Wire(NetInput::from_input(p, NetExtras::PAD, (320, 240)).to_bytes());
             self.s.add_local_input(i, w).map_err(|e| e.to_string())?;
         }
         let requests = self.s.advance_frame().map_err(|e| e.to_string())?;

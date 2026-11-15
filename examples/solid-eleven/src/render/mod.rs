@@ -526,18 +526,39 @@ impl CamState {
 
     /// Ease the focus toward the ball (and a little ahead of its run).
     pub fn follow(&mut self, ball: Vec3, vel: Vec3, dt: f32) {
+        self.follow_rate(ball, vel, dt, 3.2);
+    }
+
+    /// Like [`Self::follow`], with an explicit pan rate (faster when the
+    /// ball resets to a distant corner or throw-in spot).
+    pub fn follow_rate(&mut self, ball: Vec3, vel: Vec3, dt: f32, rate: f32) {
         let ahead = Vec3::new(vel.x * 0.35, 0.0, vel.z * 0.25);
-        let (z_scale, min_z, max_z) = if self.wide {
-            (0.92, -HALF_WID.to_f32() + 4.0, HALF_WID.to_f32() - 4.0)
+        // Keep central open play identical to the console/PC goldens, then
+        // widen `max_x` smoothly from ±38.5 m toward ±47.5 m past |z| = 18 m so
+        // corner takers standing behind the arc (±52.6 m) stay well inside
+        // 4:3, 5:3 and 16:9 screens and visible end stands fit the RSP band.
+        let z = ball.z + ahead.z;
+        let wing = ((z.abs() - 22.0) / 11.5).clamp(0.0, 1.0);
+        let max_x = HALF_LEN.to_f32() - 14.0 + wing * 9.0;
+        // The broadcast camera sits south-above (`eye = focus + (0, 18, 17)`),
+        // so the ground frustum reaches ~17.2 m north (-z) of `focus.z` and
+        // only ~8.8 m south (+z). Keep midfield tracking identical to the
+        // existing console/PC goldens, then pan deeper outside the central
+        // corridor (`|z| > 10 m`) so touchlines and all four corners stay
+        // framed on 4:3 as well as widescreen.
+        let want_z = if self.wide {
+            (z * 0.92).clamp(-24.5, 28.0)
+        } else if z > 10.0 {
+            let t = ((z - 10.0) / 23.5).clamp(0.0, 1.0);
+            5.5 + t * (28.0 - 5.5)
+        } else if z < -10.0 {
+            let t = ((-z - 10.0) / 23.5).clamp(0.0, 1.0);
+            -5.5 - t * (24.5 - 5.5)
         } else {
-            (0.55, -HALF_WID.to_f32() + 12.0, HALF_WID.to_f32() - 8.0)
+            z * 0.55
         };
-        let want = Vec3::new(
-            (ball.x + ahead.x).clamp(-HALF_LEN.to_f32() + 14.0, HALF_LEN.to_f32() - 14.0),
-            0.0,
-            ((ball.z + ahead.z) * z_scale).clamp(min_z, max_z),
-        );
-        let k = (dt * 3.2).min(1.0);
+        let want = Vec3::new((ball.x + ahead.x).clamp(-max_x, max_x), 0.0, want_z);
+        let k = (dt * rate).min(1.0);
         self.focus = self.focus + (want - self.focus) * k;
     }
 }
@@ -650,6 +671,29 @@ impl Frustum {
             (d.dot(self.right), d.dot(self.up), d.dot(self.fwd))
         });
         // Outside one plane with all four corners: culled.
+        let all = |f: &dyn Fn(&(f32, f32, f32)) -> bool| rel.iter().all(f);
+        !(all(&|v| v.2 < 0.0)
+            || all(&|v| v.0 > v.2 * self.tan_x)
+            || all(&|v| -v.0 > v.2 * self.tan_x)
+            || all(&|v| v.1 > v.2 * self.tan_y)
+            || all(&|v| -v.1 > v.2 * self.tan_y))
+    }
+
+    /// An axis-aligned world box `[min, max]` (meters) may be on screen: exact
+    /// separating-plane check against the five frustum planes where a loose
+    /// bounding sphere keeps off-screen south stands or floodlights whose back
+    /// corners fall behind the N64 guard band.
+    fn sees_box(&self, min: Vec3, max: Vec3) -> bool {
+        let mut rel = [(0.0f32, 0.0f32, 0.0f32); 8];
+        for (k, slot) in rel.iter_mut().enumerate() {
+            let p = Vec3::new(
+                if k & 1 == 0 { min.x } else { max.x },
+                if k & 2 == 0 { min.y } else { max.y },
+                if k & 4 == 0 { min.z } else { max.z },
+            );
+            let d = p - self.eye;
+            *slot = (d.dot(self.right), d.dot(self.up), d.dot(self.fwd));
+        }
         let all = |f: &dyn Fn(&(f32, f32, f32)) -> bool| rel.iter().all(f);
         !(all(&|v| v.2 < 0.0)
             || all(&|v| v.0 > v.2 * self.tan_x)
@@ -834,12 +878,27 @@ pub(crate) fn draw_stadium(
         }
     }
     // Stands: six sections a side, four an end; two crowd variants
-    // alternate.
+    // alternate. Each section is tested as the union of its low pitch-side
+    // advertising board and its tiered stand/roof body so the sloped step
+    // profile doesn't create a false phantom corner above the boards.
+    let (long_depth, long_top) = if hifi { (10.3, 11.1) } else { (6.0, 8.6) };
     for i in stadium.side_sections() {
         let x = -48.75 + 19.5 * i as f32;
         for (z, (fx, fz)) in [(-41.5f32, NORTH), (41.5, SOUTH)] {
             let p = Vec3::new(x, 0.0, z);
-            if fr.sees(p + Vec3::new(0.0, 5.0, 0.0), 14.0) {
+            let (body_z0, body_z1, board_z0, board_z1) = if fz > 0.0 {
+                (z - long_depth, z + 0.1, z + 1.8, z + 2.05)
+            } else {
+                (z - 0.1, z + long_depth, z - 2.05, z - 1.8)
+            };
+            let visible = fr.sees_box(
+                Vec3::new(x - 9.75, 0.0, body_z0),
+                Vec3::new(x + 9.75, long_top, body_z1),
+            ) || fr.sees_box(
+                Vec3::new(x - 9.75, 0.0, board_z0),
+                Vec3::new(x + 9.75, 0.95, board_z1),
+            );
+            if visible {
                 let mdl = if hifi {
                     M_STAND_LONG_HD[i % 2]
                 } else {
@@ -854,13 +913,29 @@ pub(crate) fn draw_stadium(
             }
         }
     }
+    let (end_depth, end_top) = if hifi { (8.6, 10.1) } else { (5.2, 8.1) };
     for i in 0..if stadium.end_stands() { 4 } else { 0 } {
         let z = -30.0 + 20.0 * i as f32;
         for (x, (fx, fz)) in [(-60.5f32, WEST), (60.5, EAST)] {
             let p = Vec3::new(x, 0.0, z);
-            let c = p + Vec3::new(fx * -1.55, 4.0, fz * -1.55);
-            let rad = if hifi { 12.5 } else { 11.4 };
-            if fr.sees(c, rad) {
+            // On consoles, gate end stands by their tiered body box so an
+            // ad-board corner grazing the edge of the screen never drags an
+            // off-screen back roof corner outside the RSP's 4x clip band; PC
+            // (which has hardware clipping) also keeps distant ad boards.
+            let (body_x0, body_x1, board_x0, board_x1) = if fx > 0.0 {
+                (x - end_depth, x, x + 1.8, x + 2.05)
+            } else {
+                (x, x + end_depth, x - 2.05, x - 1.8)
+            };
+            let visible = fr.sees_box(
+                Vec3::new(body_x0, 0.0, z - 10.0),
+                Vec3::new(body_x1, end_top, z + 10.0),
+            ) || (hifi
+                && fr.sees_box(
+                    Vec3::new(board_x0, 0.0, z - 10.0),
+                    Vec3::new(board_x1, 0.95, z + 10.0),
+                ));
+            if visible {
                 let mdl = if hifi {
                     M_STAND_END_HD[i % 2]
                 } else {
@@ -882,7 +957,10 @@ pub(crate) fn draw_stadium(
         (61.0, 44.0),
     ] {
         let p = Vec3::new(x, 0.0, z);
-        if fr.sees(p + Vec3::new(0.0, 14.0, 0.0), 16.0) {
+        if fr.sees_box(
+            Vec3::new(x - 2.2, 0.0, z - 2.2),
+            Vec3::new(x + 2.2, 30.0, z + 2.2),
+        ) {
             let f = (-x.signum() * 0.6, -z.signum() * 0.8);
             r.draw_model_matrix(
                 M_FLOOD,
@@ -1590,6 +1668,101 @@ mod tests {
                 (d.x.to_bits(), d.y.to_bits(), d.z.to_bits()),
                 (d0.x.to_bits(), d0.y.to_bits(), d0.z.to_bits())
             );
+        }
+    }
+
+    fn project_ndc(cam: &CamState, aspect: f32, p: Vec3) -> (f32, f32) {
+        let fr = Frustum::new(cam, aspect);
+        let d = p - fr.eye;
+        let z = d.dot(fr.fwd);
+        assert!(z > 0.0, "behind camera: {p:?}");
+        let ndc_x = d.dot(fr.right) / (z * fr.tan_x);
+        let ndc_y = d.dot(fr.up) / (z * fr.tan_y);
+        (ndc_x, ndc_y)
+    }
+
+    /// All four corner kicks (NW, NE, SW, SE), across all corner-taker orbit
+    /// angles, plus both touchlines stay inside the broadcast frame on 4:3 N64,
+    /// 5:3 3DS and 16:9 PC, and pan there within the restart window.
+    #[test]
+    fn corner_kicks_and_touchlines_stay_framed_on_every_aspect_ratio() {
+        let corners = [
+            ("NW", -HALF_LEN.to_f32() + 0.5, -HALF_WID.to_f32() + 0.5),
+            ("NE", HALF_LEN.to_f32() - 0.5, -HALF_WID.to_f32() + 0.5),
+            ("SW", -HALF_LEN.to_f32() + 0.5, HALF_WID.to_f32() - 0.5),
+            ("SE", HALF_LEN.to_f32() - 0.5, HALF_WID.to_f32() - 0.5),
+        ];
+        let profiles = [
+            ("n64-4:3", 320.0f32 / 240.0, false),
+            ("3ds-5:3", 400.0 / 240.0, true),
+            ("pc-16:9", 1280.0 / 720.0, true),
+        ];
+        for (pname, aspect, wide) in profiles {
+            for (cname, bx, bz) in corners {
+                let mut cam = CamState {
+                    wide,
+                    ..CamState::BROADCAST
+                };
+                let spot = Vec3::new(bx, 0.0, bz);
+                for _ in 0..90 {
+                    cam.follow_rate(spot, Vec3::ZERO, 1.0 / 60.0, 6.0);
+                }
+                let flag = Vec3::new(
+                    bx.signum() * HALF_LEN.to_f32(),
+                    0.0,
+                    bz.signum() * HALF_WID.to_f32(),
+                );
+                for &(label, pt) in &[
+                    ("ball", spot),
+                    ("flag_base", flag),
+                    ("flag_top", flag + Vec3::new(0.0, 1.5, 0.0)),
+                ] {
+                    let (nx, ny) = project_ndc(&cam, aspect, pt);
+                    assert!(
+                        nx.abs() < 0.85 && ny.abs() < 0.82,
+                        "{pname} {cname} {label}: ndc=({nx:.3}, {ny:.3}) focus={:?}",
+                        cam.focus
+                    );
+                }
+                for step in 0..8 {
+                    let ang = step as f32 * core::f32::consts::TAU / 8.0;
+                    let taker = Vec3::new(
+                        bx + 0.6 * trino_core::math3d::cos(ang),
+                        0.0,
+                        bz + 0.6 * trino_core::math3d::sin(ang),
+                    );
+                    for (tlabel, pt) in [
+                        ("taker_feet", taker),
+                        ("taker_head", taker + Vec3::new(0.0, 1.75, 0.0)),
+                    ] {
+                        let (nx, ny) = project_ndc(&cam, aspect, pt);
+                        assert!(
+                            nx.abs() < 0.85 && ny.abs() < 0.82,
+                            "{pname} {cname} {tlabel} ang={ang:.2}: ndc=({nx:.3}, {ny:.3}) focus={:?}",
+                            cam.focus
+                        );
+                    }
+                }
+            }
+            for (tname, tz) in [
+                ("north-touchline", -HALF_WID.to_f32()),
+                ("south-touchline", HALF_WID.to_f32()),
+            ] {
+                let mut cam = CamState {
+                    wide,
+                    ..CamState::BROADCAST
+                };
+                let ball = Vec3::new(0.0, 0.0, tz);
+                for _ in 0..90 {
+                    cam.follow_rate(ball, Vec3::ZERO, 1.0 / 60.0, 6.0);
+                }
+                let (nx, ny) = project_ndc(&cam, aspect, ball);
+                assert!(
+                    nx.abs() < 0.25 && ny.abs() < 0.82,
+                    "{pname} {tname}: ndc=({nx:.3}, {ny:.3}) focus={:?}",
+                    cam.focus
+                );
+            }
         }
     }
 }

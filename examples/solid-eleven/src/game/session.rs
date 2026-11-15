@@ -448,7 +448,26 @@ impl Session {
             let q = Quat::new(axis.x * s, 0.0, axis.z * s, c);
             v.ball_rot = mul_q(q, v.ball_rot).normalized();
         }
-        v.cam.follow(pos, vel, dt);
+        let (target, rate) = match self.m.phase {
+            Phase::Setup { .. } | Phase::Ready { .. }
+                if matches!(
+                    self.m.restart.kind,
+                    crate::sim::rules::RestartKind::Corner
+                        | crate::sim::rules::RestartKind::ThrowIn
+                ) =>
+            {
+                let tp = to3(self.m.players[self.m.taker as usize].pos);
+                let delta = tp - Vec3::new(pos.x, 0.0, pos.z);
+                let focus = if delta.dot(delta) <= 9.0 {
+                    Vec3::new((pos.x + tp.x) * 0.5, pos.y, (pos.z + tp.z) * 0.5)
+                } else {
+                    pos
+                };
+                (focus, 6.0)
+            }
+            _ => (pos, 3.2),
+        };
+        v.cam.follow_rate(target, vel, dt, rate);
         self.prev_ball = pos;
         // Guides for this machine's human: player 1's side, or player 2's
         // on the machine that plays seat 2 online.

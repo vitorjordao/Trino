@@ -664,8 +664,7 @@ fn strider(dir: &Path) {
         tracks.push(rot(3, &|p| quat(x, p.3.to_degrees())));
         tracks.push(rot(4, &|p| quat(x, p.4.to_degrees())));
         for (side, base) in [(0usize, 5usize), (1, 8)] {
-            for seg in 0..3 {
-                let a = stand.legs[side][seg];
+            for (seg, &a) in stand.legs[side].iter().enumerate() {
                 tracks.push(rot(base + seg, &move |_| quat(x, a.to_degrees())));
             }
         }

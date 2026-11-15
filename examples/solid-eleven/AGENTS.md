@@ -89,3 +89,12 @@ cargo xtask test n64 --project <that dir>                     # its ares self-te
   only the worst frame: an offscreen draw counts as an N64 CPU draw
   (`RspReject::Offscreen`). Cull the guides like the players (`draw_guides` takes
   the frustum) or a moved match fails it.
+- The broadcast camera (`CamState`, eye `(0, +18, +17)` above `focus`) sees
+  `-17.2 m` north (`-z`) and only `+8.8 m` south (`+z`) of `focus.z`. Keep
+  midfield tracking (`|z| <= 10 m`, and `|z| <= 22 m` for `max_x = 38.5 m`)
+  unchanged so console CI goldens hold, then ramp `max_x` to `47.5 m` on the
+  wings and pan `want_z` to `-24.5 .. +28.0 m` so touchlines and all four
+  corners (`NW`/`NE`/`SW`/`SE`) stay framed on 4:3, 5:3 and 16:9. Cull
+  `M_STAND_LONG`, `M_STAND_END` and `M_FLOOD` with `Frustum::sees_box` (gating
+  console `M_STAND_END` by its body box rather than its front ad board) so no
+  off-screen roof corner breaks the N64 RSP's 4x clip band during corner pans.

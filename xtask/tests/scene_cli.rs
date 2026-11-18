@@ -86,6 +86,63 @@ fn scene_check_accepts_every_repo_scene() {
     assert!(text(&one.stdout).contains(", 1 scene(s)"));
 }
 
+/// A project outside the repository: its `trino.toml`, an empty manifest
+/// and one scene of its own.
+fn project(dir: &Path) {
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::create_dir_all(dir.join("scenes")).unwrap();
+    std::fs::write(dir.join("assets/manifest.toml"), "version = 1\n").unwrap();
+    std::fs::write(
+        dir.join("trino.toml"),
+        "[project]\nname = \"p\"\ntitle = \"P\"\n\n[n64]\npackage = \"p\"\n\n[3ds]\npackage = \"p\"\nbin = \"p\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scenes/yard.scene.ron"),
+        "(version: 2, name: \"yard\", entities: [(name: \"marker\")])",
+    )
+    .unwrap();
+}
+
+/// `scene check|export` follow the selected project (`--project`, as every
+/// other command does): they used to read the engine's own `scenes/` and
+/// `assets/` whatever project was selected, so a relative scene path of an
+/// external project failed with `cannot read <engine>/xtask/../<path>`.
+#[test]
+fn scene_commands_follow_the_selected_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    project(tmp.path());
+    let p = tmp.path().to_str().unwrap();
+
+    // Without a file: the project's scenes, not the engine's.
+    let o = xtask(&["scene", "check", "--project", p]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("yard.scene.ron"), "{out}");
+    assert!(out.contains(", 1 scene(s)"), "{out}");
+    assert!(
+        !out.contains("showcase.scene.ron"),
+        "the engine's scenes: {out}"
+    );
+
+    // A path relative to the project root.
+    let o = xtask(&["scene", "check", "scenes/yard.scene.ron", "--project", p]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert!(text(&o.stdout).contains(", 1 scene(s)"));
+
+    // `export` reads and writes inside the project too.
+    let o = xtask(&[
+        "scene",
+        "export",
+        "scenes/yard.scene.ron",
+        "yard_gen.rs",
+        "--project",
+        p,
+    ]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert!(tmp.path().join("yard_gen.rs").is_file());
+}
+
 #[test]
 fn scene_check_reports_dangling_references_and_parse_errors() {
     let tmp = tempfile::tempdir().unwrap();

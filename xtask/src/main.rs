@@ -613,7 +613,9 @@ fn main() -> ExitCode {
                 rest.extend(["--out".to_string(), out.display().to_string()]);
             }
             let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
-            scene::run(&repo_root(), &rest)
+            // The selected project's scenes, prefabs, materials and manifest
+            // (the engine's own when no project is selected).
+            scene::run(&project.root, &rest)
         }
         (Some("lut"), _) => {
             let mut rest: Vec<String> = args.iter().skip(1).cloned().collect();

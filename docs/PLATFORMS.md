@@ -45,6 +45,8 @@ Run modes and switches for `trino-app-pc`:
 | `TRINO_SCENE=scenes/x.scene.ron` | Play an editor scene instead of the game; it reloads when the scene, its prefabs or materials change |
 | `TRINO_GAME=showcase` | Run `examples/showcase`, the demo scene exported to code |
 | `TRINO_SMOKE_FRAMES=N` | Exit after N frames (CI smoke runs) |
+| `TRINO_FIXED_DT=<s>` | Feed the game this frame time (0 < s ≤ 0.1, e.g. `0.0333333`) instead of the measured one: a recording runs at the same pace however slow the capture makes each frame |
+| `TRINO_CAPTURE=<dir>` | Save every presented frame as `<dir>/frame_000000.png`… (internal resolution, fast PNG on a writer thread with a short bounded queue); `TRINO_CAPTURE_FROM=N` skips the first N frames, `TRINO_CAPTURE_EVERY=K` keeps one in K. The run prints `TRINO_CAPTURE: <n> frame(s) in <dir>`. With `TRINO_FIXED_DT` the frames make a video (`ffmpeg -framerate 30 -i <dir>/frame_%06d.png`) |
 | `TRINO_BC=0` | Upload BC1/BC3/BC7 textures decoded instead of as blocks (the path of a GPU without BC); a smoke run prints `TRINO_TEXTURES:` with the VRAM either way |
 | `TRINO_QUALITY=low\|medium\|high\|ultra\|auto` | The quality preset for this run (`cargo xtask run pc --quality low`), never saved; `auto` runs the calibration. Native profile only (below) |
 | `TRINO_QUALITY_BENCH=1` | Run the calibration, print its `TRINO_QUALITY: bench` line and exit (`cargo xtask quality bench`) |

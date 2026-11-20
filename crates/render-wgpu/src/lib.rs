@@ -21,7 +21,7 @@ pub mod trace_host;
 #[cfg(all(feature = "tracy", not(target_arch = "wasm32")))]
 pub mod tracy;
 
-pub use frame_report::{FrameMeter, QualityNote};
+pub use frame_report::{FrameLog, FrameMeter, FrameSample, QualityNote};
 pub use renderer::{
     AoView, Bench, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes,
     PcRenderer, PendingRead, PostView, RendererError, ShadowView, SpriteMemory, StereoView,

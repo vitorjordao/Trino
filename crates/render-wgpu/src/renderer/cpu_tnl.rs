@@ -82,6 +82,9 @@ pub struct ChunkOut {
     pub tris: Vec<ScreenTri>,
     pub surf: Vec<Option<SurfTri>>,
     pub per_job: Vec<(u32, TnlStats)>,
+    /// Each job's T&L time, ns (the draw report's `cpu_us`; a clock read
+    /// per job, tens of nanoseconds).
+    pub ns: Vec<u64>,
 }
 
 /// Tessellate `jobs` with up to `threads` workers; the chunks come back in
@@ -162,7 +165,10 @@ fn run_chunk(
     let mut out = ChunkOut::default();
     for job in jobs {
         let before = out.tris.len();
+        let t0 = std::time::Instant::now();
         let stats = run_job(meshes, ctxs, poses, cache, job, scratch, &mut out);
+        out.ns
+            .push(t0.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         out.per_job.push(((out.tris.len() - before) as u32, stats));
     }
     out

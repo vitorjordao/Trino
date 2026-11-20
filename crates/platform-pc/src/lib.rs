@@ -27,7 +27,7 @@ pub use trino_render_wgpu::tracy;
 pub use trino_render_wgpu::{dynres, frame_report, pacing, quality, renderer, sim, trace_host};
 
 pub use audio::PcAudio;
-pub use frame_report::FrameMeter;
+pub use frame_report::{FrameLog, FrameMeter, FrameSample};
 pub use input::PcInput;
 pub use renderer::{
     AoView, Calibration, CompressedFormat, MSAA_SAMPLES, N64Estimate, PcFrameTimes, PcRenderer,

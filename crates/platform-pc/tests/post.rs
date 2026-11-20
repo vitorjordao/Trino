@@ -576,7 +576,13 @@ fn post_runs_with_msaa_render_scale_ao_shadows_and_both_tnl_paths() {
     let plain = frame(&mut r, None, all);
     r.set_hw_tnl(true);
     let plain_gpu = frame(&mut r, None, all);
-    assert!(max_diff(&plain, &plain_gpu) <= 8);
+    // The GPU path shades the lit draws too (the glossy floor's tight
+    // highlight under an intensity-4 lamp): held to the T&L oracle's
+    // tolerance, not to one pixel, since a lobe of exponent 256 turns the
+    // last bit of a normal into a few levels (Metal's fast math).
+    let (w, h) = r.internal_size();
+    let d = trino_platform_pc::tnl_oracle::diff(w, h, plain_gpu, plain, 0);
+    assert!(d.passes(), "plain frame, GPU vs CPU T&L: {d}");
 }
 
 #[test]

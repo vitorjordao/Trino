@@ -32,11 +32,10 @@ evidence; this ADR records the first one and the shape the rest must keep.
   yet. Phase 1 had `Skinned` and `Blended`; Phases 2–3 ported both and replaced
   them (§7): the reasons are now `Empty`, `Water` (the core displaces it, ADR 0015), `Translucent` (tint or
   vertex alpha < 255: the CPU path's per-triangle painter order is the blending
-  order), `Offscreen` (exactly the CPU path's sphere cull, tested against it) and
-  `PerPixelLit` (a local light, gloss or wetness: the lit pipeline's surface
-  varyings come from `tessellate_surface`; reported by the renderer, which knows
-  the lights, and by the budget for glossy draws), `FlatSkinned`, `TextureAlpha`
-  and `Disabled` (§7).
+  order), `Offscreen` (exactly the CPU path's sphere cull, tested against it;
+  since §12 such a draw is dropped before either path), `FlatSkinned`,
+  `TextureAlpha` and `Disabled` (§7). `PerPixelLit` was one until §12 gave the
+  GPU path lit pipelines.
 - The rule is a separate function from `rsp_check`/`gpu_check` and is never
   called on the consoles, so the N64's hot path and I-cache don't see it.
 
@@ -157,7 +156,8 @@ evidence; this ADR records the first one and the shape the rest must keep.
   which a vertex can't compute from its own data; rare, and only on PC),
   `TextureAlpha` (a texture with transparent texels needs the CPU path's
   triangle order to blend; found at upload, exactly for RGBA and BC1/BC3 and
-  conservatively for BC7) and `Disabled` (`set_hw_tnl(false)`).
+  conservatively for BC7; since §12 only textures that really blend, masks are
+  cut on the GPU) and `Disabled` (`set_hw_tnl(false)`).
 - **Instancing is automatic:** at each batch flush the GPU draws are sorted by
   (sidedness, texture, mesh, context, joints) and runs sharing all of them
   become one instanced call. `draw_model_instances` fills the instances
@@ -254,9 +254,41 @@ Adapter: AMD Radeon(TM) Graphics (Vulkan), 4x MSAA, 240 measured frames per row 
 
 - Scene v4 `instancing = false` per entity (optional in the issue): automatic
   instancing has no visible effect to opt out of.
-- Translucent draws, water and per-pixel lit draws stay on the CPU path; a
-  per-pixel lit GPU path would reuse the lit pipeline's fragment stage with
-  GPU-computed surface varyings.
+- Translucent draws, water and textures that really blend stay on the CPU
+  path (per-pixel lit draws and masked textures moved in §12).
+
+### 12. Per-pixel light, masked textures and off-screen draws (Bongo Kart)
+
+A kart game on a laptop iGPU (Ryzen 5 Renoir) spent 24 ms of CPU per frame at
+47 fps, and the new draw report (`TRINO_DRAW_REPORT`) said where: a chain-link
+fence with an alpha texture (59 copies, 17 ms of CPU T&L), the karts and
+characters every street lamp reached or that had gloss (`PerPixelLit`, 10 ms),
+and track chunks wholly off screen that the CPU path transformed only to cull.
+
+- **Off screen first:** `pc_offscreen` (the core, the CPU path's sphere test)
+  runs before any other reason, so an off-screen draw that is also lit,
+  translucent or alpha-textured costs nothing: counted as `Offscreen`, no job.
+- **Lit pipelines on the GPU path:** `vs_mesh_lit` / `fs_mesh_lit` add the
+  CPU path's surface (world position, normal, unlit color) to the vertex
+  stage and shade it with `shade_lit`'s arithmetic: local lights, specular and
+  wetness, from the same light sets (group 3) and per-draw mask, packed in the
+  instance flags with the gloss. The oracle holds within 1/255 (`per_pixel_lit_
+  draws_match_the_cpu_path`, dry and wet). Instanced calls split into a plain
+  and a lit call. `PerPixelLit` is no longer a reason.
+- **Masked textures:** a texture's alpha is classified at upload
+  (`SpriteAlpha`: opaque, a *cutout* mask with every alpha within 16 of 0 or
+  255, or *blend*): exact for RGBA and BC3, BC1 is always a mask, BC7 is read
+  conservatively unless the host passes the class from the master (the PC
+  runner does). A cutout draw takes the GPU path's cutout pipelines (`discard`
+  below half alpha, opaque, depth-written; separate pipelines so the plain
+  ones keep their early depth test). The CPU path still blends them, and the
+  two differ only along filtered edges (`a_masked_texture_is_cut_on_the_gpu_
+  path`). `TextureAlpha` now means a texture that really blends.
+- **Blended triangles write no depth:** the CPU batch drew triangles grouped
+  by texture before depth, and blended ones wrote depth, so glass drawn first
+  hid what was behind it. Blended triangles now take depth-test-only
+  pipelines and sort after the opaque ones, back to front across textures
+  (`what_is_behind_a_translucent_draw_still_shows`).
 
 ## Consequences
 

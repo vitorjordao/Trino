@@ -217,7 +217,7 @@ pub(crate) fn upload_ktx2(
     let alpha = out.get(2).as_bool().unwrap_or(true);
     let data = js_sys::Uint8Array::new(&out.get(3)).to_vec();
     if let Some(format) = format
-        && renderer.upload_sprite_compressed(id, w, h, format, &data, Some(alpha))
+        && renderer.upload_sprite_compressed(id, w, h, format, &data, Some(alpha.into()))
     {
         return Ok(true);
     }

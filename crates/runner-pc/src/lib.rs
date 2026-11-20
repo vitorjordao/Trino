@@ -470,7 +470,17 @@ pub fn upload_sprite(
             trino_asset_pipeline::BcFormat::Bc3 => trino_platform_pc::CompressedFormat::Bc3,
             trino_asset_pipeline::BcFormat::Bc7 => trino_platform_pc::CompressedFormat::Bc7,
         };
-        if renderer.upload_sprite_bc(id, sprite.width, sprite.height, format, &c.data) {
+        // The master says what the alpha is (the blocks of a BC7 can't):
+        // a mask lets the GPU path cut it instead of the CPU path blending.
+        let alpha = trino_platform_pc::SpriteAlpha::of_rgba(&sprite.rgba);
+        if renderer.upload_sprite_compressed(
+            id,
+            sprite.width,
+            sprite.height,
+            format,
+            &c.data,
+            Some(alpha),
+        ) {
             return;
         }
         static ONCE: std::sync::Once = std::sync::Once::new();

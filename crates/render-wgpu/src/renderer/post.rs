@@ -85,7 +85,7 @@ impl PostView {
 /// blob/planar shadows, the SSAO and the shadow map's composite. (The GPU
 /// T&L's twin lives in `GpuTnl`, next to its own.)
 pub(super) struct HdrSet {
-    pub scene: [wgpu::RenderPipeline; 4],
+    pub scene: [wgpu::RenderPipeline; super::SCENE_PIPES],
     pub water: [wgpu::RenderPipeline; 2],
     pub shadow: shadow::ShadowPipes,
     pub ao: ao::AoPass,

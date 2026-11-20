@@ -66,7 +66,7 @@ pub use lit::{
     tessellate_ripples, tessellate_ripples_except, tessellate_surface, water_plane, water_rings,
     water_rings_with, water_rsp, water_rsp_frame, water_vertex,
 };
-pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check};
+pub use pc::{PcGpuReject, pc_gpu_check, pc_gpu_mesh_check, pc_offscreen};
 pub use pose_cache::{POSE_CACHE_ENTRIES, PoseCache, PoseCacheEntry};
 
 /// Mesh blob format ("TMDL", little-endian):

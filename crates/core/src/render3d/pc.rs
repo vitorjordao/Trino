@@ -47,11 +47,8 @@ pub enum PcGpuReject {
     /// path culls it (invisible work).
     Offscreen,
     // Reported by the renderer, never by [`pc_gpu_check`] (it knows the
-    // lights, the textures and its own settings).
-    /// Shaded per pixel by a local light, gloss or wetness: the lit
-    /// pipeline's surface varyings come from the CPU path
-    /// ([`tessellate_surface`](super::tessellate_surface)).
-    PerPixelLit,
+    // textures and its own settings). A draw shaded per pixel (a local
+    // light, gloss, wetness) is no reason: the GPU path has lit pipelines.
     /// A texture with texels below full alpha: they blend, so the draw
     /// keeps the CPU path's painter order (the budget can't see textures
     /// and doesn't predict it).
@@ -72,13 +69,12 @@ impl PcGpuReject {
         PcGpuReject::Translucent,
         PcGpuReject::FlatSkinned,
         PcGpuReject::Offscreen,
-        PcGpuReject::PerPixelLit,
         PcGpuReject::TextureAlpha,
         PcGpuReject::Disabled,
     ];
 
     /// Reasons in all ([`PcGpuReject::ALL`]'s length).
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 7;
 
     /// The reason's slot in a per-reason histogram (`[u32; COUNT]`).
     pub const fn index(self) -> usize {
@@ -93,7 +89,6 @@ impl PcGpuReject {
             PcGpuReject::Translucent => "translucent",
             PcGpuReject::FlatSkinned => "flat-shaded skeleton",
             PcGpuReject::Offscreen => "off screen",
-            PcGpuReject::PerPixelLit => "per-pixel lit",
             PcGpuReject::TextureAlpha => "texture alpha",
             PcGpuReject::Disabled => "GPU T&L off",
         }
@@ -107,7 +102,6 @@ impl PcGpuReject {
             PcGpuReject::Translucent => "translucent",
             PcGpuReject::FlatSkinned => "flat_skinned",
             PcGpuReject::Offscreen => "offscreen",
-            PcGpuReject::PerPixelLit => "per_pixel_lit",
             PcGpuReject::TextureAlpha => "texture_alpha",
             PcGpuReject::Disabled => "disabled",
         }
@@ -148,21 +142,30 @@ pub fn pc_gpu_check(
     // The CPU path culls a draw wholly outside its guard band or behind the
     // near plane (`tessellate_with`'s sphere test, the same arithmetic): do
     // the same, so both paths draw (and count) the same set of meshes.
-    if let Some((c, r)) = mesh.bounds() {
-        let c = ctx.view.mul(model).transform_point(c);
-        let s = model.axis_scales_sq();
-        let r2 = r * r * s.x.max(s.y).max(s.z);
-        let outside = |d: f32, lim: f32| d < 0.0 && d * d > r2 * (lim * lim + 1.0);
-        let behind = c.z <= NEAR && (NEAR - c.z) * (NEAR - c.z) >= r2;
-        let (lim_x, lim_y) = (ctx.lim_x, ctx.lim_y);
-        if behind
-            || outside(lim_x * c.z - c.x, lim_x)
-            || outside(lim_x * c.z + c.x, lim_x)
-            || outside(lim_y * c.z - c.y, lim_y)
-            || outside(lim_y * c.z + c.y, lim_y)
-        {
-            return Err(PcGpuReject::Offscreen);
-        }
+    if pc_offscreen(ctx, mesh, model) {
+        return Err(PcGpuReject::Offscreen);
     }
     Ok(())
+}
+
+/// Whether the draw is wholly outside the view: its bounding sphere past
+/// one of the guard band's side planes or behind the near plane
+/// (`tessellate_with`'s sphere test, the same arithmetic). Such a draw shows
+/// nothing on any path; the PC drops it before choosing one (a CPU T&L job
+/// of a culled mesh still walks its vertices).
+pub fn pc_offscreen(ctx: &TnlContext, mesh: &Mesh, model: &Mat34) -> bool {
+    let Some((c, r)) = mesh.bounds() else {
+        return false;
+    };
+    let c = ctx.view.mul(model).transform_point(c);
+    let s = model.axis_scales_sq();
+    let r2 = r * r * s.x.max(s.y).max(s.z);
+    let outside = |d: f32, lim: f32| d < 0.0 && d * d > r2 * (lim * lim + 1.0);
+    let behind = c.z <= NEAR && (NEAR - c.z) * (NEAR - c.z) >= r2;
+    let (lim_x, lim_y) = (ctx.lim_x, ctx.lim_y);
+    behind
+        || outside(lim_x * c.z - c.x, lim_x)
+        || outside(lim_x * c.z + c.x, lim_x)
+        || outside(lim_y * c.z - c.y, lim_y)
+        || outside(lim_y * c.z + c.y, lim_y)
 }

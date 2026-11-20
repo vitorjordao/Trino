@@ -12,6 +12,15 @@
 //! crowd through `draw_model_instances`) cost one call each, whatever API
 //! drew them. The draws are opaque and depth-tested, so their order inside
 //! a batch doesn't change the picture (exact depth ties aside).
+//!
+//! Draws shaded per pixel (a local light reaches them, gloss, wetness)
+//! take the lit pipelines (`vs_mesh_lit` / `fs_mesh_lit`): the same vertex
+//! work plus the surface the CPU path's lit triangles carry, and the
+//! renderer's light sets bound as group 3. Their instance packs the gloss,
+//! the light set and the mask of the lights that reach the draw
+//! ([`LitDraw`]). Draws whose texture's alpha is a mask
+//! ([`super::SpriteAlpha::Cutout`]) take the cutout pipelines: cut at half
+//! alpha, opaque and depth-written.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -75,6 +84,25 @@ const SHADING_FLAT: u32 = 1;
 const SHADING_UNLIT: u32 = 2;
 const FLAG_AFFINE: u32 = 4;
 const FLAG_SKINNED: u32 = 8;
+/// Shaded per pixel (the lit pipelines); bits 8..16 the gloss, 16..19 the
+/// light set, 19..27 the light mask.
+const FLAG_LIT: u32 = 16;
+
+/// What a per-pixel lit draw adds to its instance: the light set it reads
+/// (`lights::LightSets::index`, 0..8), the lights that reach it (one bit
+/// per local light) and its gloss (0..=255, `ModelParams::gloss`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LitDraw {
+    pub set: u32,
+    pub mask: u32,
+    pub gloss: u8,
+}
+
+impl LitDraw {
+    fn flags(self) -> u32 {
+        FLAG_LIT | (self.gloss as u32) << 8 | (self.set & 7) << 16 | (self.mask & 255) << 19
+    }
+}
 
 const MESH_VERTEX_STRIDE: u64 = core::mem::size_of::<MeshVertex>() as u64;
 const INSTANCE_STRIDE: u64 = core::mem::size_of::<GpuInstance>() as u64;
@@ -128,6 +156,7 @@ pub fn instance(
     params: &ModelParams,
     affine: bool,
     detail_scale: f32,
+    lit: Option<LitDraw>,
 ) -> GpuInstance {
     let (view, _, _) = ctx.projection();
     let mv = view.mul(model);
@@ -142,7 +171,8 @@ pub fn instance(
             FLAG_SKINNED
         } else {
             0
-        };
+        }
+        | lit.map_or(0, LitDraw::flags);
     let palette = match params.palette {
         Some(p) if mesh.has_slots() => p.map(pack),
         _ => [pack(Color::WHITE); 4],
@@ -204,6 +234,8 @@ struct GpuDraw {
     joints: u32,
     texture: Option<TexKey>,
     double_sided: bool,
+    lit: bool,
+    cutout: bool,
     first: u32,
     count: u32,
 }
@@ -216,6 +248,10 @@ pub struct GpuBatch {
     joints: u32,
     pub texture: Option<TexKey>,
     double_sided: bool,
+    /// The lit pipelines (the light sets bound).
+    pub lit: bool,
+    /// The cutout pipelines.
+    pub cutout: bool,
     pub instances: Range<u32>,
 }
 
@@ -226,20 +262,27 @@ pub struct DrawKey<'a> {
     pub mesh: &'a Mesh<'a>,
     pub params: &'a ModelParams,
     pub texture: Option<TexKey>,
+    /// Shaded per pixel: every instance carries a [`LitDraw`].
+    pub lit: bool,
+    /// The texture's alpha is a mask: cut at half alpha.
+    pub cutout: bool,
 }
 
 /// The GPU T&L path's pipelines, resident meshes and per-frame streams.
 pub struct GpuTnl {
     bgl: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
+    /// `layout` plus the light sets (group 3).
+    lit_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
-    /// Back faces culled, double-sided; single- and (built on demand)
-    /// multisampled.
-    pipelines: [wgpu::RenderPipeline; 2],
-    ms_pipelines: Option<[wgpu::RenderPipeline; 2]>,
+    /// Back faces culled, double-sided, then the same two lit, then those
+    /// four cutting their texture's alpha; single- and (built on demand)
+    /// multisampled ([`pipelines`]).
+    pipelines: [wgpu::RenderPipeline; MESH_PIPES],
+    ms_pipelines: Option<[wgpu::RenderPipeline; MESH_PIPES]>,
     /// The same into the post stack's HDR target (issue #64): single
     /// sampled, then multisampled; built when post first runs.
-    hdr_pipelines: [Option<[wgpu::RenderPipeline; 2]>; 2],
+    hdr_pipelines: [Option<[wgpu::RenderPipeline; MESH_PIPES]>; 2],
     meshes: HashMap<u32, GpuMesh>,
     /// Bytes between two context / joint blocks (the device's uniform
     /// offset alignment).
@@ -274,10 +317,30 @@ fn identity_block() -> JointBlock {
     b
 }
 
+/// The pipelines of one target: plain (back faces culled, double-sided),
+/// lit (the same two), then the four cutting their texture's alpha
+/// ([`pipe_index`]).
+pub const MESH_PIPES: usize = 8;
+
+/// The pipeline of a draw call in a [`pipelines`] set.
+fn pipe_index(double_sided: bool, lit: bool, cutout: bool) -> usize {
+    cutout as usize * 4 + lit as usize * 2 + double_sided as usize
+}
+
+/// What building the pipelines takes ([`pipelines`]): the plain and the lit
+/// layouts and the shader.
+#[derive(Clone)]
+pub struct MeshSource {
+    pub layout: wgpu::PipelineLayout,
+    pub lit_layout: wgpu::PipelineLayout,
+    pub shader: wgpu::ShaderModule,
+}
+
 impl GpuTnl {
     /// `groups`: the globals and the 3D texture layouts (groups 0 and 1,
-    /// shared with the screen-space triangle pipelines).
-    pub fn new(device: &wgpu::Device, groups: [&wgpu::BindGroupLayout; 2]) -> GpuTnl {
+    /// shared with the screen-space triangle pipelines) and the light sets'
+    /// (the lit pipelines' group 3, the screen-space lit pipeline's 2).
+    pub fn new(device: &wgpu::Device, groups: [&wgpu::BindGroupLayout; 3]) -> GpuTnl {
         let dynamic = |binding: u32, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -299,8 +362,28 @@ impl GpuTnl {
             bind_group_layouts: &[Some(groups[0]), Some(groups[1]), Some(&bgl)],
             immediate_size: 0,
         });
+        let lit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("trino-tnl-lit-layout"),
+            bind_group_layouts: &[
+                Some(groups[0]),
+                Some(groups[1]),
+                Some(&bgl),
+                Some(groups[2]),
+            ],
+            immediate_size: 0,
+        });
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders_tnl.wgsl"));
-        let pipelines = pipelines(device, &layout, &shader, 1, OFFSCREEN_FORMAT);
+        let src = MeshSource {
+            layout,
+            lit_layout,
+            shader,
+        };
+        let pipelines = pipelines(device, &src, 1, OFFSCREEN_FORMAT);
+        let MeshSource {
+            layout,
+            lit_layout,
+            shader,
+        } = src;
         let a = device.limits().min_uniform_buffer_offset_alignment as u64;
         let (ctx_stride, joint_stride) = (align(ctx_size, a), align(joint_size, a));
         let ctx_buf = uniform(device, "trino-tnl-ctx", ctx_stride * 16);
@@ -315,6 +398,7 @@ impl GpuTnl {
         GpuTnl {
             bgl,
             layout,
+            lit_layout,
             shader,
             pipelines,
             ms_pipelines: None,
@@ -342,8 +426,7 @@ impl GpuTnl {
         if self.ms_pipelines.is_none() {
             self.ms_pipelines = Some(pipelines(
                 device,
-                &self.layout,
-                &self.shader,
+                &self.ms_source(),
                 samples,
                 OFFSCREEN_FORMAT,
             ));
@@ -356,12 +439,16 @@ impl GpuTnl {
 
     /// What a precompile job needs to build the multisampled pipelines on
     /// a worker ([`pipelines`]).
-    pub fn ms_source(&self) -> (wgpu::PipelineLayout, wgpu::ShaderModule) {
-        (self.layout.clone(), self.shader.clone())
+    pub fn ms_source(&self) -> MeshSource {
+        MeshSource {
+            layout: self.layout.clone(),
+            lit_layout: self.lit_layout.clone(),
+            shader: self.shader.clone(),
+        }
     }
 
     /// Multisampled pipelines a precompile job built (kept if already set).
-    pub fn install_ms(&mut self, pipes: [wgpu::RenderPipeline; 2]) {
+    pub fn install_ms(&mut self, pipes: [wgpu::RenderPipeline; MESH_PIPES]) {
         self.ms_pipelines.get_or_insert(pipes);
     }
 
@@ -371,7 +458,7 @@ impl GpuTnl {
     }
 
     /// HDR pipelines (kept if already set).
-    pub fn install_hdr(&mut self, ms: bool, pipes: [wgpu::RenderPipeline; 2]) {
+    pub fn install_hdr(&mut self, ms: bool, pipes: [wgpu::RenderPipeline; MESH_PIPES]) {
         self.hdr_pipelines[ms as usize].get_or_insert(pipes);
     }
 
@@ -466,6 +553,8 @@ impl GpuTnl {
             joints,
             texture: key.texture,
             double_sided: key.params.double_sided,
+            lit: key.lit,
+            cutout: key.cutout,
             first: self.pending_inst.len() as u32,
             count: instances.len() as u32,
         });
@@ -487,6 +576,8 @@ impl GpuTnl {
         order.sort_by_key(|&i| {
             let d = &pending[i];
             (
+                d.cutout,
+                d.lit,
                 d.double_sided,
                 d.texture.map_or(0, |t| t.group() + 1),
                 d.model,
@@ -510,6 +601,8 @@ impl GpuTnl {
                         && b.joints == d.joints
                         && b.texture == d.texture
                         && b.double_sided == d.double_sided
+                        && b.lit == d.lit
+                        && b.cutout == d.cutout
                         && b.instances.end == first =>
                 {
                     b.instances.end = end;
@@ -520,6 +613,8 @@ impl GpuTnl {
                     joints: d.joints,
                     texture: d.texture,
                     double_sided: d.double_sided,
+                    lit: d.lit,
+                    cutout: d.cutout,
                     instances: first..end,
                 }),
             }
@@ -577,8 +672,15 @@ impl GpuTnl {
         (ctx_bytes.len() + joint_bytes.len() + inst_bytes.len()) as u32
     }
 
+    /// Whether any draw call of `range` is lit (its pass needs the light
+    /// sets written).
+    pub fn any_lit(&self, range: Range<u32>) -> bool {
+        self.batches(range).iter().any(|b| b.lit)
+    }
+
     /// Record the draw calls `range` into `pass` (`ms`: the multisampled
-    /// pipelines). `texture` gives a draw's group 1. Returns the calls.
+    /// pipelines). `texture` gives a draw's group 1, `lights` the lit
+    /// draws' group 3. Returns the calls.
     pub fn record<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -586,6 +688,7 @@ impl GpuTnl {
         ms: bool,
         hdr: bool,
         texture: &dyn Fn(Option<TexKey>) -> &'a wgpu::BindGroup,
+        lights: &wgpu::BindGroup,
     ) -> u32 {
         let pipes = match (
             &self.ms_pipelines,
@@ -603,7 +706,10 @@ impl GpuTnl {
             let Some(mesh) = self.meshes.get(&b.model) else {
                 continue;
             };
-            pass.set_pipeline(&pipes[b.double_sided as usize]);
+            pass.set_pipeline(&pipes[pipe_index(b.double_sided, b.lit, b.cutout)]);
+            if b.lit {
+                pass.set_bind_group(3, lights, &[]);
+            }
             pass.set_bind_group(1, texture(b.texture), &[]);
             pass.set_bind_group(
                 2,
@@ -619,6 +725,43 @@ impl GpuTnl {
         }
         calls
     }
+}
+
+/// What a compressed texture's alpha does ([`super::SpriteAlpha`]), read
+/// from its blocks: BC1's alpha is one bit (a mask whenever it has any);
+/// BC3's texel values are classified as they decode; BC7 and the Web's
+/// formats can't be read cheaply, so any alpha blends (a host with the
+/// master passes the class instead).
+pub fn bc_alpha_class(format: super::CompressedFormat, blocks: &[u8]) -> super::SpriteAlpha {
+    use super::CompressedFormat as F;
+    use super::SpriteAlpha;
+    match format {
+        F::Bc1 if bc_alpha(format, blocks) => SpriteAlpha::Cutout,
+        F::Bc3 => SpriteAlpha::of_values(blocks.as_chunks::<16>().0.iter().flat_map(|b| {
+            let values = bc3_alpha(b);
+            let bits = u64::from_le_bytes([b[2], b[3], b[4], b[5], b[6], b[7], 0, 0]);
+            (0..16).map(move |t| values[((bits >> (3 * t)) & 7) as usize])
+        })),
+        F::Bc1 | F::Bc7 => bc_alpha(format, blocks).into(),
+        F::Etc2Rgb8 => SpriteAlpha::Opaque,
+        F::Etc2Rgba8 | F::Astc4x4 => SpriteAlpha::Blend,
+    }
+}
+
+/// A BC3 alpha block's eight values (the 3-bit indices' table).
+fn bc3_alpha(b: &[u8; 16]) -> [u8; 8] {
+    let (a0, a1) = (b[0] as u32, b[1] as u32);
+    core::array::from_fn(|i| {
+        let i = i as u32;
+        (match i {
+            0 => a0,
+            1 => a1,
+            i if a0 > a1 => ((8 - i) * a0 + (i - 1) * a1) / 7,
+            6 => 0,
+            7 => 255,
+            i => ((6 - i) * a0 + (i - 1) * a1) / 5,
+        }) as u8
+    })
 }
 
 /// Does a block-compressed texture have a texel below full alpha? Exact for
@@ -638,17 +781,9 @@ pub fn bc_alpha(format: super::CompressedFormat, blocks: &[u8]) -> bool {
             c0 <= c1 && (0..16).any(|t| (idx >> (2 * t)) & 3 == 3)
         }),
         F::Bc3 => blocks.as_chunks::<16>().0.iter().any(|b| {
-            let (a0, a1) = (b[0] as u32, b[1] as u32);
+            let values = bc3_alpha(b);
             let bits = u64::from_le_bytes([b[2], b[3], b[4], b[5], b[6], b[7], 0, 0]);
-            let value = |i: u32| match i {
-                0 => a0,
-                1 => a1,
-                i if a0 > a1 => ((8 - i) * a0 + (i - 1) * a1) / 7,
-                6 => 0,
-                7 => 255,
-                i => ((6 - i) * a0 + (i - 1) * a1) / 5,
-            };
-            (0..16).any(|t| value(((bits >> (3 * t)) & 7) as u32) < 255)
+            (0..16).any(|t| values[((bits >> (3 * t)) & 7) as usize] < 255)
         }),
         F::Bc7 => blocks.as_chunks::<16>().0.iter().any(|b| {
             let bits = u128::from_le_bytes(*b);
@@ -715,14 +850,16 @@ fn bind_group(
     })
 }
 
-/// The two pipelines (back faces culled, double-sided) for `samples`.
+/// The eight pipelines for `samples` ([`pipe_index`]): back faces culled
+/// and double-sided, plain and shaded per pixel, whole and cut at half
+/// alpha.
 pub(super) fn pipelines(
     device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
+    src: &MeshSource,
     samples: u32,
     format: wgpu::TextureFormat,
-) -> [wgpu::RenderPipeline; 2] {
+) -> [wgpu::RenderPipeline; MESH_PIPES] {
+    let shader = &src.shader;
     let vertex_attrs = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
@@ -742,15 +879,19 @@ pub(super) fn pipelines(
         13 => Uint32x4,
         14 => Uint32x4,
     ];
-    let make = |cull: Option<wgpu::Face>| {
+    let make = |cull: Option<wgpu::Face>, lit: bool, cut: bool| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
-                label: Some("trino-tnl-pipeline"),
-                layout: Some(layout),
+                label: Some(if lit {
+                    "trino-tnl-lit-pipeline"
+                } else {
+                    "trino-tnl-pipeline"
+                }),
+                layout: Some(if lit { &src.lit_layout } else { &src.layout }),
                 vertex: wgpu::VertexState {
                     module: shader,
-                    entry_point: Some("vs_mesh"),
+                    entry_point: Some(if lit { "vs_mesh_lit" } else { "vs_mesh" }),
                     compilation_options: Default::default(),
                     buffers: &[
                         wgpu::VertexBufferLayout {
@@ -767,7 +908,12 @@ pub(super) fn pipelines(
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
-                    entry_point: Some("fs_mesh"),
+                    entry_point: Some(match (lit, cut) {
+                        (false, false) => "fs_mesh",
+                        (true, false) => "fs_mesh_lit",
+                        (false, true) => "fs_mesh_cut",
+                        (true, true) => "fs_mesh_lit_cut",
+                    }),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -799,7 +945,11 @@ pub(super) fn pipelines(
             },
         )
     };
-    [make(Some(wgpu::Face::Back)), make(None)]
+    core::array::from_fn(|i| {
+        let (double_sided, lit, cut) = (i & 1 != 0, i & 2 != 0, i & 4 != 0);
+        debug_assert_eq!(pipe_index(double_sided, lit, cut), i);
+        make((!double_sided).then_some(wgpu::Face::Back), lit, cut)
+    })
 }
 
 #[cfg(test)]
@@ -835,6 +985,49 @@ mod tests {
         let low = m6 & !(1u128 << 63);
         assert!(bc_alpha(F::Bc7, &low.to_le_bytes()));
         assert!(bc_alpha(F::Bc7, &(1u128 << 5).to_le_bytes()));
+    }
+
+    /// A mask (every alpha near 0 or 255) is cut on the GPU; a half
+    /// transparent texel makes the texture blend. BC1's one-bit alpha is a
+    /// mask; BC3's texels are read as they decode.
+    #[test]
+    fn alpha_masks_are_told_from_blends() {
+        use super::super::CompressedFormat as F;
+        use super::super::SpriteAlpha as A;
+        assert_eq!(A::of_values([255, 255]), A::Opaque);
+        assert_eq!(A::of_values([0, 255, 255]), A::Cutout);
+        assert_eq!(A::of_values([3, 250, 16, 239]), A::Cutout);
+        assert_eq!(A::of_values([0, 255, 17]), A::Blend);
+        assert_eq!(A::of_values([128]), A::Blend);
+        assert_eq!(A::of_rgba(&[9, 9, 9, 255, 9, 9, 9, 0]), A::Cutout);
+        let opaque_bc1 = [0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(bc_alpha_class(F::Bc1, &opaque_bc1), A::Opaque);
+        let holed_bc1 = [0x00, 0x00, 0xFF, 0xFF, 0x03, 0x00, 0x00, 0x00];
+        assert_eq!(bc_alpha_class(F::Bc1, &holed_bc1), A::Cutout);
+        // BC3: a0 = 255, a1 = 0 (eight-value table): texel 0 at a1 is a
+        // mask; at index 4 (between them) it blends.
+        let mut bc3 = [0u8; 16];
+        bc3[0] = 255;
+        assert_eq!(bc_alpha_class(F::Bc3, &bc3), A::Opaque);
+        bc3[2] = 1;
+        assert_eq!(bc_alpha_class(F::Bc3, &bc3), A::Cutout);
+        bc3[2] = 4;
+        assert_eq!(bc_alpha_class(F::Bc3, &bc3), A::Blend);
+        // BC7 can't be read cheaply: any alpha blends.
+        assert_eq!(
+            bc_alpha_class(F::Bc7, &(1u128 << 5).to_le_bytes()),
+            A::Blend
+        );
+        assert_eq!(bc_alpha_class(F::Etc2Rgb8, &[]), A::Opaque);
+    }
+
+    #[test]
+    fn pipeline_indices_cover_the_set() {
+        let mut seen = [false; MESH_PIPES];
+        for i in 0..8 {
+            seen[pipe_index(i & 1 != 0, i & 2 != 0, i & 4 != 0)] = true;
+        }
+        assert!(seen.iter().all(|&s| s));
     }
 
     #[test]

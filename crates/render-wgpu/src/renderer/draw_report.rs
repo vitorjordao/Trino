@@ -202,7 +202,7 @@ mod tests {
             r.gpu(1, 10, 100);
             r.cpu(2, 1, 1, 40, PcGpuReject::TextureAlpha);
             r.cpu(2, 1, 1, 40, PcGpuReject::TextureAlpha);
-            r.cpu(2, 1, 1, 40, PcGpuReject::PerPixelLit);
+            r.cpu(2, 1, 1, 40, PcGpuReject::Offscreen);
             r.cpu_time(2, 30_000);
             r.cpu(3, 1, 1, 8, PcGpuReject::Translucent);
             r.frame();

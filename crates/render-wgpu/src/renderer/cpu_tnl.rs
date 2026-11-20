@@ -165,7 +165,7 @@ fn run_chunk(
     let mut out = ChunkOut::default();
     for job in jobs {
         let before = out.tris.len();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let stats = run_job(meshes, ctxs, poses, cache, job, scratch, &mut out);
         out.ns
             .push(t0.elapsed().as_nanos().min(u64::MAX as u128) as u64);

@@ -278,6 +278,39 @@ fn the_surface_path_hands_over_the_displaced_normals() {
     assert_eq!(with, n);
 }
 
+/// The per-pixel tier's water is never bisected by depth span: its pixels
+/// come from the interpolated world position, so the splits only cost
+/// triangles. The per-vertex tiers (fog and light per vertex) still split.
+#[test]
+fn per_pixel_water_is_not_split_by_depth() {
+    // A big sheet seen low: long edges spanning a lot of depth.
+    let blob = sheet(2, 40.0);
+    let mesh = Mesh::from_tmdl(&blob).unwrap();
+    let state = WaterState::new(0.3, &[], 4);
+    let ctx = ctx(&state);
+    let params = water(Water {
+        wave_amplitude: 0.2,
+        ..CALM
+    });
+    let (_, vertex) = draw(&ctx, &blob, &params);
+    assert!(vertex.splits > 0, "the per-vertex tier splits: {vertex:?}");
+    let mut scratch = SurfaceScratch::new();
+    let mut emitted = 0;
+    let surface = render3d::tessellate_surface(
+        &ctx,
+        &mut scratch,
+        &mesh,
+        &Mat34::IDENTITY,
+        &params,
+        &mut |_, _| emitted += 1,
+    );
+    assert_eq!(surface.splits, 0, "{surface:?}");
+    assert!(
+        emitted > 0 && emitted < vertex.emitted,
+        "{emitted} vs {vertex:?}"
+    );
+}
+
 #[test]
 fn water_takes_the_water_overlay_and_stays_off_the_gpu_path_and_the_memo() {
     let blob = sheet(2, 1.0);

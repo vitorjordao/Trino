@@ -1051,8 +1051,18 @@ pub fn tessellate_surface(
     } else {
         ([0; MAX_VERTEX_LIGHTS], 0)
     };
+    let mut base = setup(ctx, mesh, model, params);
+    // Water shaded per pixel (the only water this path draws) takes its
+    // light, Fresnel, fog and foam from the interpolated world position, and
+    // its UVs are perspective-correct: the depth-span bisection (applied
+    // after the displacement, so it adds no swell) changes no pixel and
+    // only multiplies the triangles. A kart track's sea split 3.4 k
+    // triangles into ~40 k, half the frame of an integrated GPU.
+    if params.water.is_some() {
+        base.split = false;
+    }
     let s = LitSetup {
-        s: setup(ctx, mesh, model, params),
+        s: base,
         view: &ctx.view,
         locals: &ctx.view_locals,
         pick,

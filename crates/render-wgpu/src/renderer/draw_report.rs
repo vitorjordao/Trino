@@ -74,10 +74,6 @@ impl DrawReport {
         self.on = on;
     }
 
-    pub fn is_on(&self) -> bool {
-        self.on
-    }
-
     pub fn name(&mut self, id: u32, name: &str) {
         self.names.insert(id, name.to_string());
     }

@@ -155,19 +155,22 @@ fn pc_gpu_rules_reject_only_what_the_gpu_path_does_not_port() {
     }
     .matrix();
     assert_eq!(check(&near, &ModelParams::DEFAULT), Ok(()));
-    // Blending, water, and what the CPU path culls.
-    assert_eq!(
-        check(
-            &at(0.0),
-            &ModelParams::tinted(Color::rgba(255, 255, 255, 254))
-        ),
-        Err(PcGpuReject::Translucent)
-    );
+    // Blending and water take the GPU path too (ADR 0016 §13); what the
+    // CPU path culls doesn't.
+    let glass = ModelParams::tinted(Color::rgba(255, 255, 255, 254));
+    assert_eq!(check(&at(0.0), &glass), Ok(()));
+    assert!(trino_core::render3d::pc_translucent(&cube, &glass));
+    assert!(!trino_core::render3d::pc_translucent(
+        &cube,
+        &ModelParams::DEFAULT
+    ));
     let water = ModelParams {
         water: Some(Water::DEFAULT),
         ..ModelParams::DEFAULT
     };
-    assert_eq!(check(&at(0.0), &water), Err(PcGpuReject::Water));
+    assert_eq!(check(&at(0.0), &water), Ok(()));
+    // Water blends, but after the batch's translucent draws: not one.
+    assert!(!trino_core::render3d::pc_translucent(&cube, &water));
     assert_eq!(
         check(&at(400.0), &ModelParams::DEFAULT),
         Err(PcGpuReject::Offscreen)

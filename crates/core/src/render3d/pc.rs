@@ -12,10 +12,11 @@
 //! (WGSL vertex stage, resident vertex buffers, instanced draws), and the
 //! CPU path stays the oracle for everything else. The rules are permissive:
 //! a desktop GPU can do what the CPU path does (skeletons and smooth
-//! skinning included, since Phase 3), so a reject names only what the GPU
-//! path doesn't port (water, the per-pixel lit surfaces, a flat-shaded
-//! skeleton) or what needs the CPU path's per-triangle painter order
-//! (blending: a translucent tint, vertex alpha or a texture with alpha).
+//! skinning included, since Phase 3; per-pixel light since ADR 0016 §12;
+//! translucent draws, sorted back to front per copy, and water surfaces,
+//! displaced in the vertex stage, since §13), so a reject names only what
+//! the GPU path doesn't port (a flat-shaded skeleton) or what needs the CPU
+//! path's per-triangle painter order (a texture whose texels blend).
 //!
 //! The console simulation profiles (`SimProfile::N64` / `N3ds`) never take
 //! this path: they keep the CPU path and report the RSP / PICA200 splits.
@@ -33,12 +34,10 @@ pub enum PcGpuReject {
     // The mesh (decided once per mesh, [`pc_gpu_mesh_check`]).
     /// No vertices or no triangles.
     Empty,
-    // The draw.
-    /// A water surface: the core displaces it ([`crate::water`]).
-    Water,
-    /// A tint with alpha below 255, or vertex alpha below 255: blending
-    /// follows the CPU path's per-triangle painter order.
-    Translucent,
+    // The draw. Water surfaces and translucent draws (a tint or vertex
+    // alpha below 255) were reasons until ADR 0016 §13: the GPU path
+    // displaces water in its vertex stage and sorts translucent copies back
+    // to front, between the CPU path's blended triangles.
     /// [`Shading::Flat`](crate::Shading::Flat) on a skeleton: a face
     /// normal needs the three corners' posed positions, which a vertex
     /// stage doesn't see (a static mesh carries its face normal instead).
@@ -50,8 +49,9 @@ pub enum PcGpuReject {
     // textures and its own settings). A draw shaded per pixel (a local
     // light, gloss, wetness) is no reason: the GPU path has lit pipelines.
     /// A texture with texels below full alpha: they blend, so the draw
-    /// keeps the CPU path's painter order (the budget can't see textures
-    /// and doesn't predict it).
+    /// keeps the CPU path's per-triangle painter order (crossed cards of
+    /// foliage blend within one copy; the budget can't see textures and
+    /// doesn't predict it).
     TextureAlpha,
     /// The GPU path is turned off (`TRINO_PC_TNL=cpu`,
     /// `PcRenderer::set_hw_tnl(false)`): a draw it would have taken.
@@ -65,8 +65,6 @@ impl PcGpuReject {
     /// Every reason, in [`PcGpuReject::index`] order.
     pub const ALL: [PcGpuReject; PcGpuReject::COUNT] = [
         PcGpuReject::Empty,
-        PcGpuReject::Water,
-        PcGpuReject::Translucent,
         PcGpuReject::FlatSkinned,
         PcGpuReject::Offscreen,
         PcGpuReject::TextureAlpha,
@@ -74,7 +72,7 @@ impl PcGpuReject {
     ];
 
     /// Reasons in all ([`PcGpuReject::ALL`]'s length).
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 5;
 
     /// The reason's slot in a per-reason histogram (`[u32; COUNT]`).
     pub const fn index(self) -> usize {
@@ -85,8 +83,6 @@ impl PcGpuReject {
     pub const fn label(self) -> &'static str {
         match self {
             PcGpuReject::Empty => "empty mesh",
-            PcGpuReject::Water => "water surface",
-            PcGpuReject::Translucent => "translucent",
             PcGpuReject::FlatSkinned => "flat-shaded skeleton",
             PcGpuReject::Offscreen => "off screen",
             PcGpuReject::TextureAlpha => "texture alpha",
@@ -94,12 +90,10 @@ impl PcGpuReject {
         }
     }
 
-    /// One word for `TRINO_FRAME` lines (`off_pc_gpu=translucent:3,...`).
+    /// One word for `TRINO_FRAME` lines (`off_pc_gpu=offscreen:3,...`).
     pub const fn key(self) -> &'static str {
         match self {
             PcGpuReject::Empty => "empty",
-            PcGpuReject::Water => "water",
-            PcGpuReject::Translucent => "translucent",
             PcGpuReject::FlatSkinned => "flat_skinned",
             PcGpuReject::Offscreen => "offscreen",
             PcGpuReject::TextureAlpha => "texture_alpha",
@@ -123,6 +117,8 @@ pub fn pc_gpu_mesh_check(mesh: &Mesh) -> Result<(), PcGpuReject> {
 /// hardware and lights in floats, so there is no near-plane, band, scale,
 /// light-color, fog, texture, palette or shading rule (unlike
 /// [`rsp_check`](super::rsp_check) and [`gpu_check`](super::gpu_check)).
+/// Translucent draws ([`pc_translucent`]) and water surfaces pass: the GPU
+/// path blends the first back to front and displaces the second.
 /// In the core so a host tool (`scene budget`) predicts the split exactly.
 pub fn pc_gpu_check(
     ctx: &TnlContext,
@@ -130,13 +126,8 @@ pub fn pc_gpu_check(
     model: &Mat34,
     params: &ModelParams,
 ) -> Result<(), PcGpuReject> {
-    if params.water.is_some() {
-        return Err(PcGpuReject::Water);
-    }
-    if params.tint.a < 255 || !mesh.opaque {
-        return Err(PcGpuReject::Translucent);
-    }
-    if params.shading == crate::Shading::Flat && mesh.joint_count() != 0 {
+    // Water is never faceted (its normal is the displaced surface's).
+    if params.shading == crate::Shading::Flat && mesh.joint_count() != 0 && params.water.is_none() {
         return Err(PcGpuReject::FlatSkinned);
     }
     // The CPU path culls a draw wholly outside its guard band or behind the
@@ -146,6 +137,25 @@ pub fn pc_gpu_check(
         return Err(PcGpuReject::Offscreen);
     }
     Ok(())
+}
+
+/// Whether a draw blends (a tint or vertex alpha below 255): the CPU path
+/// sorts its triangles after the batch's opaque ones, back to front, and
+/// the GPU path its copies, by the view depth of their bounding sphere's
+/// center ([`pc_sort_depth`]). Water blends too, after both.
+pub fn pc_translucent(mesh: &Mesh, params: &ModelParams) -> bool {
+    params.water.is_none() && (params.tint.a < 255 || !mesh.opaque)
+}
+
+/// The view depth a translucent copy sorts by on the GPU path: its bounding
+/// sphere's center (the mesh origin without bounds), never nearer than the
+/// near plane. The CPU path sorts each triangle by its farthest corner;
+/// a copy is one item, so convex shapes and copies apart from each other
+/// come out the same.
+pub fn pc_sort_depth(mesh: &Mesh, model_view: &Mat34) -> f32 {
+    let c = mesh.bounds().map_or(crate::math::Vec3::ZERO, |(c, _)| c);
+    let z = model_view.transform_point(c).z;
+    if z > NEAR { z } else { NEAR }
 }
 
 /// Whether the draw is wholly outside the view: its bounding sphere past

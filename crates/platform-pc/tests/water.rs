@@ -21,6 +21,7 @@ use trino_platform_pc::{PcRenderer, SimProfile};
 const FLOOR: ModelId = ModelId(0x2001);
 const SHEET: ModelId = ModelId(0x2002);
 const POST: ModelId = ModelId(0x2003);
+const SEA: ModelId = ModelId(0x2004);
 const LAYER: SpriteId = SpriteId(0x2101);
 const GRAIN: SpriteId = SpriteId(0x2102);
 
@@ -322,10 +323,11 @@ fn each_tier_matches_its_golden() {
             let gpu = tnl_oracle(&mut r, name, |r| {
                 frame(r, Some((1.25, &[RIPPLE])), &water_params())
             });
-            assert!(
-                gpu > 0,
-                "the riverbed goes to the GPU, the water stays on the CPU"
-            );
+            // The riverbed, the post and (ADR 0016 §13) the water itself.
+            assert_eq!(gpu, 3, "every draw on the GPU path");
+            frame(&mut r, Some((1.25, &[RIPPLE])), &water_params());
+            assert_eq!(r.pc_gpu_rejects().iter().sum::<u32>(), 0);
+            assert_eq!(r.stats().tnl.verts, 0, "no CPU T&L");
         }
     }
 }
@@ -607,3 +609,145 @@ fn strict_mode_refuses_more_ripples_than_the_cap() {
     r.begin_frame(Color::BLACK);
     r.set_water(0.0, &[RIPPLE; 5]);
 }
+
+/// The water on the GPU path (ADR 0016 §13: displaced in the vertex stage,
+/// shaded by the CPU path's own per-pixel water) against the CPU path:
+/// ripples, the swell, a double-sided surface, MSAA (the multisampled depth
+/// copy and the water pipelines' twins) and a glowing one. No CPU vertex
+/// work is left.
+#[test]
+fn the_gpu_path_draws_the_water_the_cpu_path_draws() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let ripples = [
+        RIPPLE,
+        Ripple {
+            pos: Vec2::new(1.5, -0.5),
+            age: 1.1,
+            strength: 0.2,
+        },
+    ];
+    let variants = [
+        ("water_gpu", water_params()),
+        (
+            "water_gpu_double_sided_glow",
+            ModelParams {
+                double_sided: true,
+                emissive: Color::rgb(90, 30, 0),
+                ..water_params()
+            },
+        ),
+    ];
+    for msaa in [false, true] {
+        r.set_msaa(msaa);
+        for (name, params) in &variants {
+            let name = format!("{name}{}", if msaa { "_msaa" } else { "" });
+            let gpu = tnl_oracle(&mut r, &name, |r| frame(r, Some((0.75, &ripples)), params));
+            assert_eq!(gpu, 3, "{name}");
+            frame(&mut r, Some((0.75, &ripples)), params);
+            assert_eq!(r.pc_gpu_rejects().iter().sum::<u32>(), 0, "{name}");
+            assert_eq!(r.stats().tnl.verts, 0, "{name}: no CPU T&L");
+        }
+    }
+}
+
+/// `ModelParams::emissive` lights the per-pixel water on both paths (it was
+/// ignored: a lava flow needed a light of its own), under the flowing
+/// layers, as on any mesh.
+#[test]
+fn emissive_makes_the_water_glow() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let open = Vec3::new(-1.0, 0.0, -1.5);
+    let glow = ModelParams {
+        emissive: Color::rgb(200, 60, 0),
+        ..water_params()
+    };
+    for hw in [true, false] {
+        r.set_hw_tnl(hw);
+        let plain = frame(&mut r, Some((0.0, &[])), &water_params());
+        let lit = frame(&mut r, Some((0.0, &[])), &glow);
+        let (a, b) = (px(&r, &plain, open), px(&r, &lit, open));
+        assert!(
+            b[0] as i32 > a[0] as i32 + 40 && b[2].abs_diff(a[2]) < 12,
+            "hw_tnl={hw}: {a:?} -> {b:?}"
+        );
+    }
+}
+
+/// Far water at a grazing angle doesn't shimmer: the swell's, the
+/// ripples' and the capillary waves' normals fade where a pixel is too
+/// coarse for their wavelength (`water.wgsl::resolvable`). Without the fade
+/// the 0.27 m capillaries aliased into moiré rings a few tens of meters
+/// away, and the Fresnel term turned them into bright noise. Measured as
+/// the mean step between neighbouring pixels of the far band.
+#[test]
+fn far_water_does_not_shimmer() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    r.set_internal_size(640, 360);
+    r.upload_mesh(SEA, grid(200.0, 40, 0.0, [40, 110, 200, 200], false));
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 2.0, -95.0),
+        target: Vec3::new(0.0, 0.0, -40.0),
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let sea = ModelParams {
+        gloss: 220,
+        water: Some(Water {
+            wave_amplitude: 0.08,
+            wave_frequency: 0.7,
+            ..WATER
+        }),
+        ..ModelParams::DEFAULT
+    };
+    let (w, h) = r.internal_size();
+    // Screen rows of the water from 30 to 80 m ahead.
+    let row = |z: f32| {
+        let v = camera.view().transform_point(Vec3::new(0.0, 0.0, z));
+        let half = camera.fov_y * 0.5;
+        let focal = half.cos() / half.sin() * h as f32 * 0.5;
+        (h as f32 * 0.5 - v.y * focal / v.z) as u32
+    };
+    let (top, bottom) = (row(-15.0), row(-65.0));
+    assert!(top + 10 < bottom, "{top}..{bottom}");
+    for hw in [true, false] {
+        r.set_hw_tnl(hw);
+        r.begin_frame(Color::rgb(130, 170, 220));
+        r.set_camera(&camera);
+        r.set_light(&SUN);
+        r.set_water(3.3, &[]);
+        r.draw_model(SEA, &Transform3::default(), Material::VertexLit, &sea);
+        r.end_frame();
+        let img = r.read_offscreen();
+        shots(&r, &format!("water_far_hw{hw}"), &img);
+        let (mut sum, mut n) = (0u64, 0u64);
+        for y in top..bottom {
+            for x in 1..w {
+                let i = ((y * w + x) * 4) as usize;
+                let j = i - 4;
+                sum += (0..3)
+                    .map(|k| img[i + k].abs_diff(img[j + k]) as u64)
+                    .sum::<u64>();
+                n += 3;
+            }
+        }
+        let step = sum as f64 / n as f64;
+        eprintln!("hw_tnl={hw}: far band rows {top}..{bottom}, mean step {step:.2}/255");
+        assert!(
+            step < FAR_STEP,
+            "hw_tnl={hw}: far water shimmers: {step:.2}/255"
+        );
+    }
+}
+
+/// The far band's mean neighbour step `far_water_does_not_shimmer` allows.
+const FAR_STEP: f64 = 2.0;

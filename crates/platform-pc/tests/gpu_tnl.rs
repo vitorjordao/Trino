@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use trino_asset_pipeline::primitive::{Pivot, Primitive, Shape};
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Fog, PcGpuReject};
 use trino_core::{
-    AnimRef, ClipId, Color, Instance, LocalLight, Mat34, Material, ModelId, ModelParams, Renderer,
-    Shading, Transform3, Vec3,
+    AnimRef, BillboardParams, ClipId, Color, Instance, LocalLight, Mat34, Material, ModelId,
+    ModelParams, Renderer, Shading, SpriteId, Transform3, Vec2, Vec3,
 };
 use trino_platform_pc::{PcRenderer, SimProfile, tnl_oracle};
 
@@ -21,6 +21,9 @@ const BALL: ModelId = ModelId(2);
 const FLOOR: ModelId = ModelId(3);
 const ROBOT: ModelId = ModelId(4);
 const STRIP: ModelId = ModelId(5);
+/// A box whose vertices are translucent (`Mesh::opaque` false).
+const GLASS: ModelId = ModelId(6);
+const PUFF: SpriteId = SpriteId(7);
 
 /// One GPU test at a time (parallel headless devices crash some drivers).
 fn gpu() -> std::sync::MutexGuard<'static, ()> {
@@ -102,6 +105,18 @@ fn upload(r: &mut PcRenderer) {
         STRIP,
         bake("models/proxies/selftest-strip.gltf", true, 20.0),
     );
+    r.upload_mesh(
+        GLASS,
+        prim(
+            Shape::Box {
+                size: [0.7, 0.9, 0.7],
+            },
+            [140, 230, 160, 110],
+            1,
+        ),
+    );
+    // A soft white puff for billboards (their tint blends them).
+    r.upload_sprite(PUFF, 4, 4, &[255; 64]);
 }
 
 fn camera() -> Camera3 {
@@ -462,10 +477,13 @@ fn rejected_draws_stay_on_the_cpu_with_their_reason() {
         r.read_offscreen()
     };
     let d = oracle(&mut r, "rejected_draws", frame);
-    assert_eq!(d.gpu_draws, 1);
+    // The translucent crate blends on the GPU path (ADR 0016 §13); the
+    // flat-shaded skeleton stays.
+    assert_eq!(d.gpu_draws, 2);
+    frame(&mut r);
     let off = r.pc_gpu_rejects();
-    assert_eq!(off[PcGpuReject::Translucent as usize], 1);
     assert_eq!(off[PcGpuReject::FlatSkinned as usize], 1);
+    assert_eq!(off.iter().sum::<u32>(), 1, "{off:?}");
     assert!(
         r.stats().tnl.verts > 0,
         "the rejected draws ran the CPU T&L"
@@ -699,4 +717,188 @@ fn the_parallel_cpu_fallback_draws_the_same_frame_on_any_worker_count() {
         assert!(img == serial, "{threads} workers drew a different frame");
         assert_eq!(s, stats, "{threads} workers counted different work");
     }
+}
+
+fn unlit(tint: Color) -> ModelParams {
+    ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::tinted(tint)
+    }
+}
+
+/// Translucent draws on the GPU path (ADR 0016 §13): a tint below 255,
+/// vertex alpha (`GLASS`), a double-sided sphere (back faces first), a lit
+/// one under a lamp, instanced copies some of which blend, all in fog, and
+/// a blended billboard among them (CPU triangles, merged back to front with
+/// the GPU copies): the CPU path's picture, nothing rejected.
+#[test]
+fn translucent_draws_match_the_cpu_path() {
+    let _gpu = gpu();
+    let Some(mut r) = headless() else {
+        return;
+    };
+    upload(&mut r);
+    let lamp = [LocalLight::point(
+        Vec3::new(1.6, 1.2, -0.4),
+        Color::rgb(255, 190, 120),
+        3.0,
+    )];
+    let copies: Vec<Instance> = (0..6)
+        .map(|i| Instance {
+            tint: Color::rgba(
+                255,
+                200,
+                120 + i as u8 * 20,
+                if i % 2 == 0 { 120 } else { 255 },
+            ),
+            ..Instance::new(at(i as f32 * 1.1 - 3.0, 0.0, 3.0 + i as f32 * 0.3, 0.4))
+        })
+        .collect();
+    let frame = |r: &mut PcRenderer| {
+        begin(r, true);
+        r.set_local_lights(&lamp);
+        r.draw_model_matrix(
+            FLOOR,
+            &at(0.0, -0.2, 2.0, 0.0),
+            Material::VertexLit,
+            &ModelParams::DEFAULT,
+        );
+        r.draw_model_matrix(
+            CRATE,
+            &at(-0.6, 0.0, 1.2, 0.5),
+            Material::VertexLit,
+            &ModelParams::tinted(Color::rgba(255, 140, 90, 140)),
+        );
+        r.draw_model_matrix(
+            BALL,
+            &at(-0.3, 0.3, -0.2, 0.0),
+            Material::VertexLit,
+            &ModelParams {
+                double_sided: true,
+                ..ModelParams::tinted(Color::rgba(90, 200, 255, 120))
+            },
+        );
+        r.draw_model_matrix(
+            GLASS,
+            &at(0.5, 0.0, 0.4, 0.3),
+            Material::VertexLit,
+            &ModelParams::DEFAULT,
+        );
+        r.draw_model_matrix(
+            CRATE,
+            &at(1.6, 0.0, 0.0, 0.2),
+            Material::VertexLit,
+            &ModelParams {
+                gloss: 180,
+                ..ModelParams::tinted(Color::rgba(255, 255, 255, 150))
+            },
+        );
+        r.draw_billboard(
+            PUFF,
+            Vec3::new(0.1, 0.5, 0.8),
+            &BillboardParams {
+                size: Vec2::new(1.2, 1.2),
+                tint: Color::rgba(255, 240, 220, 130),
+                ..BillboardParams::DEFAULT
+            },
+        );
+        r.draw_model_instances(CRATE, &copies, &ModelParams::DEFAULT);
+        r.end_frame();
+        r.read_offscreen()
+    };
+    let d = oracle(&mut r, "translucent_draws", frame);
+    assert_eq!(d.gpu_draws, 11, "every model draw on the GPU path");
+    frame(&mut r);
+    assert!(
+        r.pc_gpu_rejects().iter().all(|&n| n == 0),
+        "nothing rejected: {:?}",
+        r.pc_gpu_rejects()
+    );
+}
+
+/// A red box behind a blue one, both half transparent, drawn near first:
+/// the GPU path sorts them back to front (blue over red) as the CPU path
+/// does; 40 copies of one mesh in depth order are one instanced call, and
+/// a blended billboard between them cuts the run where it lies. A
+/// double-sided copy draws its back faces, then its front faces, each copy
+/// on its own (in one call a far copy's front would cover a near copy's
+/// back).
+#[test]
+fn translucent_copies_sort_back_to_front_in_few_calls() {
+    let _gpu = gpu();
+    let Some(mut r) = headless() else {
+        return;
+    };
+    upload(&mut r);
+    let pair = |r: &mut PcRenderer| {
+        begin(r, false);
+        let center = |z| Transform3 {
+            position: Vec3::new(0.0, 0.6, z),
+            scale: Vec3::new(3.0, 3.0, 3.0),
+            ..Transform3::default()
+        };
+        r.draw_model(
+            CRATE,
+            &center(-2.0),
+            Material::VertexLit,
+            &unlit(Color::rgba(0, 0, 255, 128)),
+        );
+        r.draw_model(
+            CRATE,
+            &center(2.0),
+            Material::VertexLit,
+            &unlit(Color::rgba(255, 0, 0, 128)),
+        );
+        r.end_frame();
+        let (w, h) = r.internal_size();
+        r.read_pixel(w / 2, h / 2).expect("inside the frame")
+    };
+    for hw in [true, false] {
+        r.set_hw_tnl(hw);
+        let c = pair(&mut r);
+        assert!(
+            c.b as i32 > c.r as i32 + 40,
+            "hw_tnl={hw}: blue over red, got {c:?}"
+        );
+    }
+    r.set_hw_tnl(true);
+    // A line of copies receding from the camera, submitted near first.
+    let line: Vec<Instance> = (0..40)
+        .map(|i| Instance::new(at(0.0, 0.0, 6.0 - i as f32 * 0.3, 0.0)))
+        .collect();
+    let calls = |r: &mut PcRenderer, double_sided: bool, puff: bool| {
+        begin(r, false);
+        if puff {
+            r.draw_billboard(
+                PUFF,
+                Vec3::new(0.0, 0.3, 0.1),
+                &BillboardParams {
+                    tint: Color::rgba(255, 255, 255, 100),
+                    ..BillboardParams::DEFAULT
+                },
+            );
+        }
+        r.draw_model_instances(
+            CRATE,
+            &line,
+            &ModelParams {
+                double_sided,
+                ..ModelParams::tinted(Color::rgba(255, 255, 255, 90))
+            },
+        );
+        r.end_frame();
+        r.frame_times().draw_calls
+    };
+    assert_eq!(calls(&mut r, false, false), 1, "one instanced call");
+    assert_eq!(calls(&mut r, true, false), 80, "back, then front, per copy");
+    assert_eq!(
+        calls(&mut r, false, true),
+        3,
+        "the copies behind the puff, the puff, the copies before it"
+    );
+    let d = oracle(&mut r, "translucent_line", |r| {
+        calls(r, true, true);
+        r.read_offscreen()
+    });
+    assert_eq!(d.gpu_draws, 40);
 }

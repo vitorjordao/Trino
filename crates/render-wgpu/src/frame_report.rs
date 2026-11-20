@@ -549,10 +549,10 @@ mod tests {
         stats.tnl.pc_gpu_tris = 120;
         stats.tnl.instanced = 4;
         let mut off = [0; PcGpuReject::COUNT];
-        off[PcGpuReject::Water.index()] = 1;
-        off[PcGpuReject::Translucent.index()] = 2;
+        off[PcGpuReject::TextureAlpha.index()] = 1;
+        off[PcGpuReject::Offscreen.index()] = 2;
         m.add(&stats, &off);
-        off[PcGpuReject::Translucent.index()] = 0;
+        off[PcGpuReject::Offscreen.index()] = 0;
         m.add(&stats, &off);
         m.record_memory(&trino_core::MemoryReport {
             heap_used: 900,
@@ -567,7 +567,7 @@ mod tests {
         assert!(
             line.contains(
                 "frames=2 fps=0 draws=10 tris=300 pc_gpu_draws=7 pc_gpu_tris=120 instanced=4 \
-                 off_pc_gpu=water:1,translucent:1 heap=900/1200"
+                 off_pc_gpu=offscreen:1,texture_alpha:1 heap=900/1200"
             ),
             "{line}"
         );

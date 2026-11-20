@@ -77,10 +77,13 @@ pub enum Cmd {
         kind: TriKind,
     },
     /// Instanced draw calls of the GPU T&L path (`gpu_tnl::GpuBatch`
-    /// indices): a batch's opaque GPU draws, ahead of its CPU triangles.
+    /// indices): a batch's opaque GPU draws, ahead of its CPU triangles,
+    /// its translucent ones among the CPU path's blended triangles, and
+    /// (`water`) its water surfaces, last.
     Meshes {
         first: u32,
         count: u32,
+        water: bool,
     },
 }
 
@@ -125,8 +128,10 @@ pub enum Segment {
         texture: Option<TexKey>,
         kind: TriKind,
     },
-    /// GPU T&L draw calls (`gpu_tnl::GpuBatch` indices).
-    Meshes { first: u32, count: u32 },
+    /// GPU T&L draw calls (`gpu_tnl::GpuBatch` indices). Water calls
+    /// never share a segment with others: the per-pixel water's depth copy
+    /// is taken between segments.
+    Meshes { first: u32, count: u32, water: bool },
 }
 
 /// Resolve a `draw_sprite` call into a command: apply scale to the sprite's
@@ -228,14 +233,22 @@ pub fn build_segments(commands: &[Cmd]) -> (Vec<Instance>, Vec<Segment>) {
                     kind: *kind,
                 }),
             },
-            Cmd::Meshes { first, count } => match segments.last_mut() {
+            Cmd::Meshes {
+                first,
+                count,
+                water,
+            } => match segments.last_mut() {
                 Some(Segment::Meshes {
                     first: seg_first,
                     count: seg_count,
-                }) if *seg_first + *seg_count == *first => *seg_count += count,
+                    water: seg_water,
+                }) if *seg_first + *seg_count == *first && seg_water == water => {
+                    *seg_count += count
+                }
                 _ => segments.push(Segment::Meshes {
                     first: *first,
                     count: *count,
+                    water: *water,
                 }),
             },
         }
@@ -352,6 +365,44 @@ mod tests {
                     count: 3,
                     texture: Some(tex5()),
                     kind: TriKind::Lit
+                },
+            ]
+        );
+    }
+
+    /// GPU draw calls merge into one segment, except water ones: the
+    /// per-pixel water's depth copy goes between segments, after the
+    /// opaque draws.
+    #[test]
+    fn gpu_water_calls_get_their_own_segment() {
+        let meshes = |first, count, water| Cmd::Meshes {
+            first,
+            count,
+            water,
+        };
+        let (_, segments) = build_segments(&[
+            meshes(0, 2, false),
+            meshes(2, 1, false),
+            meshes(3, 1, true),
+            meshes(4, 1, false),
+        ]);
+        assert_eq!(
+            segments,
+            vec![
+                Segment::Meshes {
+                    first: 0,
+                    count: 3,
+                    water: false
+                },
+                Segment::Meshes {
+                    first: 3,
+                    count: 1,
+                    water: true
+                },
+                Segment::Meshes {
+                    first: 4,
+                    count: 1,
+                    water: false
                 },
             ]
         );

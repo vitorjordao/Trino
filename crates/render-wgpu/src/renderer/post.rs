@@ -104,8 +104,7 @@ pub(super) fn build_hdr_set(
     let samples = if ms { MSAA_SAMPLES } else { 1 };
     let [g0, g1, g2] = water.0;
     let water = if ms {
-        let source = include_str!("shaders.wgsl")
-            .replace("texture_depth_2d", "texture_depth_multisampled_2d");
+        let source = super::SCENE_WGSL.replace("texture_depth_2d", "texture_depth_multisampled_2d");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("trino-shaders-ms-water-hdr"),
             source: wgpu::ShaderSource::Wgsl(source.into()),

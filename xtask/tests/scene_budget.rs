@@ -179,13 +179,11 @@ fn the_rsp_split_names_each_rule_and_follows_the_scene() {
     assert_eq!(fog.rsp_draws, b.rsp_draws);
     assert_eq!(fog.off_rsp, b.off_rsp);
     // The PC has no RSP: its GPU T&L takes what `pc_gpu_check` accepts
-    // (fog included) and the translucent rock stays CPU work.
+    // (fog included), the translucent rock too (sorted back to front on
+    // the GPU since ADR 0016 §13).
     let pc = estimate(&scene, &lib, &meshes, Target::Pc);
-    assert_eq!((pc.rsp_draws, pc.pc_gpu_draws, pc.cpu_draws), (0, 2, 1));
-    assert_eq!(
-        pc.off_pc_gpu,
-        vec![(trino_core::PcGpuReject::Translucent, 1)]
-    );
+    assert_eq!((pc.rsp_draws, pc.pc_gpu_draws, pc.cpu_draws), (0, 3, 0));
+    assert!(pc.off_pc_gpu.is_empty(), "{:?}", pc.off_pc_gpu);
     assert!(pc.off_rsp.is_empty());
     // The 3DS splits by its own rules (`gpu_check`): fog is the vertex
     // shader's, the flat and the translucent rock stay on the CPU.

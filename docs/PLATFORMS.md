@@ -157,6 +157,11 @@ presets; Ultra is High supersampled at 1.25×. The consoles' presets are fixed (
   rate presents FIFO and sleeps, over it presents mailbox or immediate.
 - **`TRINO_FRAME`** carries the 1% lows and the quality:
   `low1_us=… low1_fps=… quality=low scale=0.82 quality_from=detected detected=low gpu_us=…`.
+  With per-stage times, `p50_us= p95_us= p99_us= spikes=` and a `TRINO_SPIKES:` line
+  naming the stage behind each spike; `TRINO_FRAME_LOG=<csv>` keeps every frame,
+  `TRINO_DRAW_REPORT=1` ranks the models by cost (`TRINO_DRAWS:`), and
+  `TRINO_FRAME_LIMIT` / `TRINO_MSAA=0` override the saved quality for one run
+  ([profiling](../.agents/skills/profiling/SKILL.md)).
 - **The project's presets** live in `assets/quality.ron` (each preset names only what it
   changes); `cargo xtask quality show|check|set|reset|bench` and the editor's Quality tab
   edit it:

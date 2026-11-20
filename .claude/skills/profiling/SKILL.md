@@ -1,6 +1,6 @@
 ---
 name: profiling
-description: Record and read timeline traces of a Trino game on every target — zones, counters and frame marks (`trino_core::trace`), `--trace` builds on PC, N64 (ares/hardware), 3DS (Azahar/3dslink) and the Web, `cargo xtask trace collect|report|diff`, Perfetto/Chrome JSON, Tracy on the PC, GPU pass zones, the editor's Profiler tab — plus the N64's backend counters, per-command RSP cost (`--prof rsp`), CPU sampler (`--prof sample`), `rsp count`, `perf report|ab` over code layouts — and turn them into the evidence a perf PR quotes. Use for "profile", "trace", "timeline", "where does the frame go", "spike", "stall", "Tracy", "Perfetto", "compare PC and N64", or before/after numbers of an optimization.
+description: Measure PC frames without a trace build (`TRINO_FRAME` p50/p95/p99, `TRINO_SPIKES` with the stage that caused each spike, `TRINO_FRAME_LOG` CSV, `TRINO_DRAW_REPORT` per-model cost and why a draw left the GPU path, `TRINO_FRAME_LIMIT=unlimited`); record and read timeline traces of a Trino game on every target — zones, counters and frame marks (`trino_core::trace`), `--trace` builds on PC, N64 (ares/hardware), 3DS (Azahar/3dslink) and the Web, `cargo xtask trace collect|report|diff`, Perfetto/Chrome JSON, Tracy on the PC, GPU pass zones, the editor's Profiler tab — plus the N64's backend counters, per-command RSP cost (`--prof rsp`), CPU sampler (`--prof sample`), `rsp count`, `perf report|ab` over code layouts — and turn them into the evidence a perf PR quotes. Use for "profile", "trace", "timeline", "where does the frame go", "spike", "stall", "Tracy", "Perfetto", "compare PC and N64", or before/after numbers of an optimization.
 ---
 
 # profiling: one trace format from every target
@@ -49,6 +49,36 @@ What the N64 zones mean: `begin` = waiting for a framebuffer (vsync/RDP: never j
 triangles to the RDP), `rsp queue` (RSP commands queued), `2d`, `end` (frame end; the
 profiled drain is in it), host `update`/`render`/`audio`. Counters: `draws`, `tris`,
 `rsp_draws`, `rsp_tris`.
+
+## Frame report on the PC: stages, spikes, the costly models
+
+No trace build needed: the runner measures every frame (`trino-runner-pc`) and prints
+at exit (smoke runs, `TRINO_SMOKE_FRAMES=N`, or closing the window while one is on):
+
+| Switch | What it adds |
+|---|---|
+| `TRINO_FRAME_LIMIT=unlimited` (or `vsync`, `60`, `144`…) | overrides the saved frame limit for this run: measure what the machine can do, not the display's rate |
+| `TRINO_MSAA=0` | MSAA off for this run (A/B the multisampled pass) |
+| `TRINO_FRAME_LOG=frames.csv` | one CSV row per frame: `frame,frame_us,update_us,render_us,tnl_us,batch_us,submit_us,gpu_us,draws,tris,cpu_draws,pipelines` (plot it, find the frame) |
+| `TRINO_DRAW_REPORT=1` (or a row count, default 20) | `TRINO_DRAWS:` lines: per model and per frame, draws, copies, GPU and CPU triangles, the CPU path's T&L µs and why it left the GPU path (`why=texture_alpha`, `translucent`, `offscreen`…), costliest first |
+
+`TRINO_FRAME` then adds `p50_us= p95_us= p99_us= spikes=`, and a `TRINO_SPIKES:` line
+lists the worst frames (`frame:µs`), each over 1.5× the median and 4 ms past it, with
+`cause=` the stage (`update`, `render`, `tnl`, `batch`, `submit`, `gpu`) that grew the
+most over its own median and by how many µs, then every stage's time, the draws, the
+CPU-path draws and the pipelines compiled that frame:
+
+```
+TRINO_FRAME_LIMIT=unlimited TRINO_SMOKE_FRAMES=600 TRINO_DRAW_REPORT=1 TRINO_FRAME_LOG=/tmp/f.csv ./mygame
+TRINO_SPIKES: count=3 median_us=11800 worst=212:41200(cause=batch +18700; update=900 render=1200 tnl=9100 batch=21000 submit=2100 gpu=6900 draws=455 cpu_draws=140 pipes=0) ...
+TRINO_DRAWS: models/fence draws=58.7 copies=58.7 gpu_tris=0 cpu_copies=58.7 cpu_tris=25910 cpu_us=16600.0 why=texture_alpha
+```
+
+Read it top-down: a model with a large `cpu_us` is the fix (an alpha texture that
+should be a mask, a lamp that reaches everything, a translucent shell); `gpu_us` near
+the frame means the GPU (resolution, MSAA, post); `batch`/`tnl` spikes mean CPU-path
+draws; `update` spikes are the game's own. `scene budget` predicts the same split
+offline.
 
 ## Tracy (PC)
 

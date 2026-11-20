@@ -30,12 +30,11 @@ evidence; this ADR records the first one and the shape the rest must keep.
   is no near-plane, band, scale, colored-light, fog, texture, palette, flat or
   double-sided rule. `PcGpuReject` names only what the GPU path won't port, or not
   yet. Phase 1 had `Skinned` and `Blended`; Phases 2–3 ported both and replaced
-  them (§7): the reasons are now `Empty`, `Water` (the core displaces it, ADR 0015), `Translucent` (tint or
-  vertex alpha < 255: the CPU path's per-triangle painter order is the blending
-  order), `Offscreen` (exactly the CPU path's sphere cull, tested against it;
-  since §12 such a draw is dropped before either path), `FlatSkinned`,
-  `TextureAlpha` and `Disabled` (§7). `PerPixelLit` was one until §12 gave the
-  GPU path lit pipelines.
+  them (§7): the reasons are now `Empty`, `Offscreen` (exactly the CPU path's
+  sphere cull, tested against it; since §12 such a draw is dropped before
+  either path), `FlatSkinned`, `TextureAlpha` and `Disabled` (§7).
+  `PerPixelLit` was one until §12 gave the GPU path lit pipelines; `Water`
+  and `Translucent` were until §13.
 - The rule is a separate function from `rsp_check`/`gpu_check` and is never
   called on the consoles, so the N64's hot path and I-cache don't see it.
 
@@ -168,7 +167,8 @@ evidence; this ADR records the first one and the shape the rest must keep.
   measurements show no upload cost worth a ring's complexity.
 - **Order:** GPU draws are opaque and depth-tested, so they are recorded before
   the batch's CPU triangles; translucent and water triangles keep their painter
-  order after them.
+  order after them (since §13 the GPU path's translucent and water draws join
+  that order).
 
 ### 8. Phase 4: the parallel CPU fallback
 
@@ -254,8 +254,12 @@ Adapter: AMD Radeon(TM) Graphics (Vulkan), 4x MSAA, 240 measured frames per row 
 
 - Scene v4 `instancing = false` per entity (optional in the issue): automatic
   instancing has no visible effect to opt out of.
-- Translucent draws, water and textures that really blend stay on the CPU
-  path (per-pixel lit draws and masked textures moved in §12).
+- Textures that really blend stay on the CPU path (per-pixel lit draws and
+  masked textures moved in §12, translucent draws and water in §13): a
+  foliage card's blending needs the per-triangle order.
+- An additive blend mode in `ModelParams` (light shafts, smoke) was left
+  out: a new field reaches the scene codegen's exhaustive literals and every
+  generated scene; it waits for a host that needs it.
 
 ### 12. Per-pixel light, masked textures and off-screen draws (Bongo Kart)
 
@@ -289,6 +293,58 @@ and track chunks wholly off screen that the CPU path transformed only to cull.
   hid what was behind it. Blended triangles now take depth-test-only
   pipelines and sort after the opaque ones, back to front across textures
   (`what_is_behind_a_translucent_draw_still_shows`).
+
+### 13. Translucent draws and water on the GPU path (Bongo Kart)
+
+After §12 the kart game's remaining CPU draws were its light shafts and
+smoke (tinted below 255), its liquids (sea, acid, lava, lakes: `Water`) and
+a few blending textures. `Translucent` and `Water` are no longer reasons.
+
+- **Translucent draws** (`pc_translucent`: tint alpha or vertex alpha below
+  255, not water) take blend pipelines: depth-tested, no depth write, the
+  same blend as the CPU path's blended triangles. They are not merged with
+  the opaque calls: each copy (an instanced call's copies too) is its own
+  item, keyed by the view depth of its bounding sphere's center
+  (`pc_sort_depth`) with the CPU path's `painter_key`, and merged back to
+  front with the batch's blended CPU triangles (billboards, particles,
+  `TextureAlpha` draws) into one stream: GPU runs and triangle runs
+  interleave where depths cross, a triangle first on ties. Consecutive
+  copies of one mesh and state stay one instanced call (the GPU blends an
+  instanced call's copies in instance order). A double-sided copy draws its
+  back faces then its front faces, each copy on its own: in one call a far
+  copy's front would cover a near copy's back. The CPU path sorts triangles,
+  the GPU path copies, so a copy's own faces keep their index order and two
+  intersecting translucent copies may differ; the oracle tests hold
+  (`translucent_draws_match_the_cpu_path`, `translucent_copies_sort_back_to_
+  front_in_few_calls`).
+- **Water** takes water pipelines (`shaders_tnl_water.wgsl`, the base T&L
+  module and the shared `water.wgsl`). The vertex stage lifts the world
+  position by `water_height`: the swell's two sines and the ripples with the
+  core's `sin_turns`, the same formula the CPU T&L displaces with, from the
+  draw's water set (its index in the instance flags' light-set bits, unused
+  by water). The fragment is the CPU path's per-pixel water, `water_shade`,
+  now shared by both modules (`SCENE_WGSL` = `shaders.wgsl` + `water.wgsl`),
+  so the two paths shade the same pixels: the oracle holds at 0/255 mean
+  with ripples, double-sided, glowing and with MSAA (`the_gpu_path_draws_
+  the_water_the_cpu_path_draws`). The water set carries the texture scroll
+  (the vertex stage adds it). Water calls go after the batch's CPU water,
+  far to near, in segments of their own (`Segment::Meshes { water }`) so the
+  depth copy is taken before them; group 3 is the water bind group of the
+  pass's sample count. Skinned water is accepted too.
+- **Emissive water:** the water set carries `ModelParams::emissive`, added
+  to the lit color under the texture on both paths (a lava flow glowed only
+  through a separate light). `emissive_makes_the_water_glow`.
+- **Far water doesn't shimmer:** each wave's normal (the swell, the
+  ripples, the two capillary waves) fades out where the pixel's footprint on
+  the surface, from the world position's derivatives, passes a quarter of
+  its wavelength, gone at half (`resolvable`). Far water at a grazing angle
+  had aliased into moiré rings, turned to noise by the Fresnel term; the
+  far band's mean neighbour step fell from 16.8/255 to 0.02/255
+  (`far_water_does_not_shimmer`). This changed the far band of the
+  `water_native` golden (re-blessed).
+- WebGL2: the water module is translated with the depth read as a float
+  texture like the screen-space water; both new shaders pass the GLSL
+  translation test.
 
 ## Consequences
 

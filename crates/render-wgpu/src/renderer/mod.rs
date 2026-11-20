@@ -87,9 +87,67 @@ struct SpriteEntry {
     /// ([`PcRenderer::sprite_memory`]).
     bytes: u64,
     compressed: bool,
-    /// Some texel is below full alpha (it blends): a model drawn with it
-    /// stays on the CPU path (`PcGpuReject::TextureAlpha`).
+    /// Some texel is below full alpha: on the CPU path a model drawn with
+    /// it blends (back to front, no depth written).
     alpha: bool,
+    /// Its alpha is a mask ([`SpriteAlpha::Cutout`]): the GPU path draws
+    /// it with the cutout pipelines. A blending texture that isn't keeps
+    /// its models on the CPU path (`PcGpuReject::TextureAlpha`).
+    cutout: bool,
+}
+
+/// What a sprite's alpha does to a model drawn with it
+/// ([`PcRenderer::upload_sprite_compressed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpriteAlpha {
+    /// Every texel opaque.
+    Opaque,
+    /// A mask: every texel nearly transparent or nearly opaque (a fence,
+    /// leaves, a grille), within [`SpriteAlpha::CUT_MARGIN`]. The GPU path
+    /// cuts it at half alpha and writes depth, as an opaque draw.
+    Cutout,
+    /// Some texel half transparent (glass, smoke): the CPU path's blended
+    /// triangles, back to front.
+    Blend,
+}
+
+impl SpriteAlpha {
+    /// How far from 0 or 255 a mask's alpha may be: a cut at half alpha
+    /// misses the blend by at most this much (6%), what BC compression and
+    /// a soft-edged brush leave on a binary mask.
+    pub const CUT_MARGIN: u8 = 16;
+
+    /// The class of an RGBA8 image's alpha.
+    pub fn of_rgba(rgba: &[u8]) -> SpriteAlpha {
+        Self::of_values(rgba.as_chunks::<4>().0.iter().map(|p| p[3]))
+    }
+
+    /// The class of a set of alpha values.
+    pub fn of_values(values: impl IntoIterator<Item = u8>) -> SpriteAlpha {
+        let mut class = SpriteAlpha::Opaque;
+        for a in values {
+            if a == 255 {
+                continue;
+            }
+            if a > Self::CUT_MARGIN && a < 255 - Self::CUT_MARGIN {
+                return SpriteAlpha::Blend;
+            }
+            class = SpriteAlpha::Cutout;
+        }
+        class
+    }
+}
+
+impl From<bool> for SpriteAlpha {
+    /// `true`: some texel blends (all a caller that only knows that can
+    /// say).
+    fn from(blends: bool) -> SpriteAlpha {
+        if blends {
+            SpriteAlpha::Blend
+        } else {
+            SpriteAlpha::Opaque
+        }
+    }
 }
 
 /// A block-compressed sprite format the renderer uploads as is
@@ -2597,7 +2655,10 @@ impl PcRenderer {
         }
         let _pipes = pipes::scope(&self.pipe_entry);
         let gpu = self.gpu.get_or_insert_with(|| {
-            gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
+            gpu_tnl::GpuTnl::new(
+                &self.device,
+                [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+            )
         });
         if samples > 1 {
             gpu.ensure_ms(&self.device, samples);
@@ -2856,7 +2917,11 @@ impl PcRenderer {
             device: self.device.clone(),
             sources: self.sources.clone(),
             webgl2: self.webgl2,
-            tnl_groups: [self.globals_bgl.clone(), self.tex3d_bgl.clone()],
+            tnl_groups: [
+                self.globals_bgl.clone(),
+                self.tex3d_bgl.clone(),
+                self.water.groups[2].clone(),
+            ],
             gpu_ms: want_ms,
             gpu_ms_source: self.gpu.as_ref().map(|g| g.ms_source()),
             cvd_layout,
@@ -3821,7 +3886,7 @@ impl PcRenderer {
             );
             return;
         }
-        let alpha = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        let alpha = SpriteAlpha::of_rgba(rgba);
         self.install_sprite(
             id,
             (width, height),
@@ -3878,9 +3943,10 @@ impl PcRenderer {
     /// one. Returns `false` and uploads nothing when the renderer doesn't
     /// sample `format` ([`PcRenderer::supports_compressed`]), or the size
     /// or the block data is not a texture it can make (logged): the caller
-    /// uploads decoded RGBA8 instead. `alpha`: whether some texel blends
-    /// (a model drawn with it stays on the CPU path); `None` reads it from
-    /// BC blocks, and takes the ETC2 RGBA and ASTC formats as blending.
+    /// uploads decoded RGBA8 instead. `alpha`: what the texture's alpha
+    /// does ([`SpriteAlpha`]: a host that has the master knows it best);
+    /// `None` reads it from BC blocks ([`gpu_tnl::bc_alpha_class`]), and
+    /// takes the ETC2 RGBA and ASTC formats as blending.
     pub fn upload_sprite_compressed(
         &mut self,
         id: SpriteId,
@@ -3888,7 +3954,7 @@ impl PcRenderer {
         height: u32,
         format: CompressedFormat,
         blocks: &[u8],
-        alpha: Option<bool>,
+        alpha: Option<SpriteAlpha>,
     ) -> bool {
         if !self.supports_compressed(format) {
             return false;
@@ -3910,13 +3976,7 @@ impl PcRenderer {
             );
             return false;
         }
-        let alpha = alpha.unwrap_or_else(|| match format {
-            CompressedFormat::Bc1 | CompressedFormat::Bc3 | CompressedFormat::Bc7 => {
-                gpu_tnl::bc_alpha(format, blocks)
-            }
-            CompressedFormat::Etc2Rgb8 => false,
-            CompressedFormat::Etc2Rgba8 | CompressedFormat::Astc4x4 => true,
-        });
+        let alpha = alpha.unwrap_or_else(|| gpu_tnl::bc_alpha_class(format, blocks));
         self.install_sprite(id, (width, height), format.wgpu(), blocks, row, alpha);
         true
     }
@@ -3952,7 +4012,7 @@ impl PcRenderer {
 
     /// Create the texture, write `data` (rows of `row_bytes`: pixels, or
     /// 4×4 blocks for a compressed format) and register its bind group
-    /// under `id`. `alpha`: some texel is below full alpha.
+    /// under `id`. `alpha`: what its alpha does.
     fn install_sprite(
         &mut self,
         id: SpriteId,
@@ -3960,7 +4020,7 @@ impl PcRenderer {
         format: wgpu::TextureFormat,
         data: &[u8],
         row_bytes: u32,
-        alpha: bool,
+        alpha: SpriteAlpha,
     ) {
         let rows = if format == OFFSCREEN_FORMAT {
             height
@@ -4025,7 +4085,8 @@ impl PcRenderer {
                 size: (width, height),
                 bytes: (row_bytes * rows) as u64,
                 compressed: format != OFFSCREEN_FORMAT,
-                alpha,
+                alpha: alpha != SpriteAlpha::Opaque,
+                cutout: alpha == SpriteAlpha::Cutout,
             },
         );
     }
@@ -4932,10 +4993,9 @@ impl PcRenderer {
             if let Some(g) = &mut self.gpu
                 && !g.has_hdr(ms)
             {
-                let (layout, shader) = g.ms_source();
+                let src = g.ms_source();
                 let samples = if ms { MSAA_SAMPLES } else { 1 };
-                let p =
-                    gpu_tnl::pipelines(&self.device, &layout, &shader, samples, post::HDR_FORMAT);
+                let p = gpu_tnl::pipelines(&self.device, &src, samples, post::HDR_FORMAT);
                 g.install_hdr(ms, p);
             }
         }
@@ -5070,14 +5130,19 @@ impl PcRenderer {
         }
         self.times.upload_bytes += tri_bytes.len() as u32;
         self.tri_verts.clear();
-        if segments.iter().any(|s| {
-            matches!(
-                s,
-                Segment::Tris {
-                    kind: TriKind::Lit | TriKind::LitBlend | TriKind::Water,
-                    ..
-                }
-            )
+        // The lit triangles, the water and the GPU path's lit meshes read
+        // the light sets.
+        let gpu_lit = |first: u32, count: u32| {
+            self.gpu
+                .as_ref()
+                .is_some_and(|g| g.any_lit(first..first + count))
+        };
+        if segments.iter().any(|s| match s {
+            Segment::Tris { kind, .. } => {
+                matches!(kind, TriKind::Lit | TriKind::LitBlend | TriKind::Water)
+            }
+            Segment::Meshes { first, count } => gpu_lit(*first, *count),
+            Segment::Sprites { .. } => false,
         }) {
             let lights = self.light_sets.bytes();
             self.queue.write_buffer(&self.lights_buf, 0, &lights);
@@ -5787,6 +5852,7 @@ impl PcRenderer {
                             ms.is_some(),
                             hdr,
                             &texture,
+                            &self.lights_bg,
                         );
                     }
                 }
@@ -5849,7 +5915,10 @@ impl PcRenderer {
         );
         let _pipes = pipes::scope(&self.pipe_entry);
         let gpu = self.gpu.get_or_insert_with(|| {
-            gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
+            gpu_tnl::GpuTnl::new(
+                &self.device,
+                [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+            )
         });
         if !gpu.has_mesh(model.0) {
             gpu.upload_mesh(&self.device, &self.queue, model.0, &mesh);
@@ -5858,6 +5927,10 @@ impl PcRenderer {
             gpu.ensure_ms(&self.device, self.msaa);
         }
         let insts: Vec<gpu_tnl::GpuInstance> = accepted.iter().map(|a| a.0).collect();
+        let cutout = accepted[0]
+            .1
+            .and_then(|t| self.sprites.get(&t.id))
+            .is_some_and(|e| e.cutout);
         gpu.draw(
             &ctx,
             gpu_tnl::DrawKey {
@@ -5865,6 +5938,8 @@ impl PcRenderer {
                 mesh: &mesh,
                 params,
                 texture: accepted[0].1,
+                lit: accepted[0].2,
+                cutout,
             },
             &insts,
         );
@@ -5992,16 +6067,12 @@ struct N64Split {
 /// on).
 fn pc_gpu_decide(
     (ctx, mesh, matrix, params): (&TnlContext, &Mesh, &Mat34, &ModelParams),
-    lit: bool,
     alpha: bool,
     enabled: bool,
 ) -> Result<(), PcGpuReject> {
     use trino_core::render3d::{pc_gpu_check, pc_gpu_mesh_check};
     pc_gpu_mesh_check(mesh)?;
     pc_gpu_check(ctx, mesh, matrix, params)?;
-    if lit {
-        return Err(PcGpuReject::PerPixelLit);
-    }
     if alpha {
         return Err(PcGpuReject::TextureAlpha);
     }
@@ -6033,7 +6104,9 @@ fn push_ctx(ctxs: &mut Vec<TnlContext>, ctx: TnlContext) -> u32 {
 }
 
 /// A copy the GPU T&L path accepted, with its texture state.
-type GpuInstanceOf = (gpu_tnl::GpuInstance, Option<TexKey>);
+/// A copy the GPU path accepted: its instance, texture and whether it is
+/// shaded per pixel.
+type GpuInstanceOf = (gpu_tnl::GpuInstance, Option<TexKey>, bool);
 
 /// [`PcRenderer::n64_estimate`]: the frame's 3D on the N64.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -6629,16 +6702,36 @@ impl Renderer for PcRenderer {
             0
         };
         let lit = per_pixel && !unlit && (reach != 0 || self.wetness > 0.0 || params.gloss > 0);
+        if native && trino_core::render3d::pc_offscreen(&ctx, &mesh, matrix) {
+            // Wholly outside the view: nothing to draw on either path (a CPU
+            // job would still transform every vertex to cull them).
+            self.pc_gpu_off[PcGpuReject::Offscreen.index()] += 1;
+            self.draw_report
+                .cpu(model.0, 1, 1, 0, PcGpuReject::Offscreen);
+            return;
+        }
         if native {
-            let alpha = texture.is_some_and(|t| self.sprites.get(&t.0).is_some_and(|e| e.alpha));
-            let decided = pc_gpu_decide(
-                (&ctx, &mesh, matrix, params),
-                lit,
-                alpha,
-                self.gpu_tnl_active(),
-            );
+            let sprite = texture.and_then(|t| self.sprites.get(&t.0));
+            // A masked texture is cut on the GPU; one that blends stays.
+            let cutout = sprite.is_some_and(|e| e.cutout);
+            let alpha = sprite.is_some_and(|e| e.alpha) && !cutout;
+            let decided =
+                pc_gpu_decide((&ctx, &mesh, matrix, params), alpha, self.gpu_tnl_active());
             if decided.is_ok() {
                 let detail = detail_scale(&self.sprites, texture, params);
+                // Shaded per pixel on the GPU too: the lit pipelines read
+                // the same light set and mask the CPU path's lit job would.
+                let lit_draw = lit.then(|| gpu_tnl::LitDraw {
+                    set: self.light_sets.index(lights::SetKey::new(
+                        &self.camera,
+                        &self.light,
+                        &self.locals,
+                        self.wetness,
+                    )),
+                    mask: reach,
+                    gloss: params.gloss,
+                });
+                self.times.lit_draws += lit as u32;
                 let inst = gpu_tnl::instance(
                     &ctx,
                     &mesh,
@@ -6646,10 +6739,14 @@ impl Renderer for PcRenderer {
                     params,
                     !trino_core::render3d::split_policy(&ctx, &mesh, params),
                     detail,
+                    lit_draw,
                 );
                 let _pipes = pipes::scope(&self.pipe_entry);
                 let gpu = self.gpu.get_or_insert_with(|| {
-                    gpu_tnl::GpuTnl::new(&self.device, [&self.globals_bgl, &self.tex3d_bgl])
+                    gpu_tnl::GpuTnl::new(
+                        &self.device,
+                        [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+                    )
                 });
                 if !gpu.has_mesh(model.0) {
                     gpu.upload_mesh(&self.device, &self.queue, model.0, &mesh);
@@ -6664,6 +6761,8 @@ impl Renderer for PcRenderer {
                         mesh: &mesh,
                         params,
                         texture: texkey,
+                        lit,
+                        cutout,
                     },
                     &[inst],
                 );
@@ -6832,21 +6931,34 @@ impl Renderer for PcRenderer {
                 let texture = mesh
                     .texture_for(&p)
                     .filter(|t| self.sprites.contains_key(&t.0));
-                let alpha =
-                    texture.is_some_and(|t| self.sprites.get(&t.0).is_some_and(|e| e.alpha));
+                let alpha = texture
+                    .and_then(|t| self.sprites.get(&t.0))
+                    .is_some_and(|e| e.alpha && !e.cutout);
                 // Copies share the call's surface but for tint and palette,
                 // so one texture state and one pose for all of them.
                 if p.water.is_none()
-                    && pc_gpu_decide((&ctx, &mesh, &i.matrix, &p), lit, alpha, true).is_ok()
+                    && pc_gpu_decide((&ctx, &mesh, &i.matrix, &p), alpha, true).is_ok()
                 {
                     if p.shadow.casts() {
                         cast.push(i.matrix);
                     }
                     let detail = detail_scale(&self.sprites, texture, &p);
                     let affine = !trino_core::render3d::split_policy(&ctx, &mesh, &p);
+                    let lit_draw = lit.then(|| gpu_tnl::LitDraw {
+                        set: self.light_sets.index(lights::SetKey::new(
+                            &self.camera,
+                            &self.light,
+                            &self.locals,
+                            self.wetness,
+                        )),
+                        mask: reach,
+                        gloss: p.gloss,
+                    });
+                    self.times.lit_draws += lit as u32;
                     accepted.push((
-                        gpu_tnl::instance(&ctx, &mesh, &i.matrix, &p, affine, detail),
+                        gpu_tnl::instance(&ctx, &mesh, &i.matrix, &p, affine, detail, lit_draw),
                         texture.map(|t| TexKey::model(t.0, &p, self.tex_filter)),
+                        lit,
                     ));
                 } else {
                     rest.push((i.matrix, p));
@@ -6856,8 +6968,14 @@ impl Renderer for PcRenderer {
         for m in &cast {
             self.cast_shadow(model, m, params);
         }
-        if !accepted.is_empty() {
-            self.draw_gpu_instances(model, params, &accepted);
+        // The plain copies and the lit ones take different pipelines: one
+        // instanced call each.
+        let (lit, plain): (Vec<GpuInstanceOf>, Vec<GpuInstanceOf>) =
+            accepted.into_iter().partition(|a| a.2);
+        for group in [plain, lit] {
+            if !group.is_empty() {
+                self.draw_gpu_instances(model, params, &group);
+            }
         }
         for (m, p) in rest {
             self.draw_model_matrix(model, &m, Material::VertexLit, &p);

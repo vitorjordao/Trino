@@ -120,6 +120,7 @@ fn mul_row(a: vec4<f32>, b0: vec4<f32>, b1: vec4<f32>, b2: vec4<f32>) -> vec4<f3
 // One joint's posed position and normal, in view and world space.
 struct Posed {
     view: vec3<f32>,
+    world: vec3<f32>,
     normal: vec3<f32>,
 };
 
@@ -134,20 +135,34 @@ fn posed(j: u32, inst: InstIn, pos: vec3<f32>, n: vec3<f32>) -> Posed {
         mul_row(inst.mv2, s0, s1, s2),
         pos,
     );
-    out.normal = xform_dir(
-        mul_row(inst.m0, s0, s1, s2),
-        mul_row(inst.m1, s0, s1, s2),
-        mul_row(inst.m2, s0, s1, s2),
-        n,
-    );
+    let w0 = mul_row(inst.m0, s0, s1, s2);
+    let w1 = mul_row(inst.m1, s0, s1, s2);
+    let w2 = mul_row(inst.m2, s0, s1, s2);
+    out.world = xform_point(w0, w1, w2, pos);
+    out.normal = xform_dir(w0, w1, w2, n);
     return out;
 }
 
+// What both vertex stages compute: the plain stage's output and, for the
+// per-pixel lit stage, the vertex's surface (`SurfaceVert`: world
+// position, world normal, the color lighting multiplies).
+struct MeshVert {
+    out: MeshOut,
+    world: vec3<f32>,
+    normal: vec3<f32>,
+    base: vec4<f32>,
+};
+
 @vertex
 fn vs_mesh(v: MeshIn, inst: InstIn) -> MeshOut {
+    return mesh_vertex(v, inst).out;
+}
+
+fn mesh_vertex(v: MeshIn, inst: InstIn) -> MeshVert {
     let flags = inst.misc.z;
     let shading = flags & SHADING_MASK;
     var p: vec3<f32>;
+    var world: vec3<f32>;
     var n: vec3<f32>;
     if (flags & FLAG_SKINNED) != 0u {
         // Rigid joints, and the second joint blended in by its weight
@@ -155,9 +170,11 @@ fn vs_mesh(v: MeshIn, inst: InstIn) -> MeshOut {
         let a = posed(v.skin.x, inst, v.pos, v.normal);
         let b = posed(v.skin.y, inst, v.pos, v.normal);
         p = a.view + (b.view - a.view) * v.weight;
+        world = a.world + (b.world - a.world) * v.weight;
         n = a.normal + (b.normal - a.normal) * v.weight;
     } else {
         p = xform_point(inst.mv0, inst.mv1, inst.mv2, v.pos);
+        world = xform_point(inst.m0, inst.m1, inst.m2, v.pos);
         n = xform_dir(inst.m0, inst.m1, inst.m2, v.normal);
     }
     if shading == SHADING_FLAT {
@@ -224,7 +241,14 @@ fn vs_mesh(v: MeshIn, inst: InstIn) -> MeshOut {
         select(0.0, 1.0, (flags & FLAG_AFFINE) != 0u),
         bitcast<f32>(inst.misc.w),
     );
-    return out;
+    var mv: MeshVert;
+    mv.out = out;
+    mv.world = world;
+    // An unlit draw's zero normal leaves it to the vertex color
+    // (`shade_lit`), as the CPU path's surface does.
+    mv.normal = select(normalize(n), vec3<f32>(0.0), shading == SHADING_UNLIT);
+    mv.base = vec4<f32>(vec3<f32>(c.rgb) * tint.rgb, f32(c.a) * tint.a) / 255.0;
+    return mv;
 }
 
 // The detail layer's factor (white without one): `detail_texel` in
@@ -239,6 +263,10 @@ fn detail_factor(uv: vec2<f32>, scale: f32) -> vec4<f32> {
 
 @fragment
 fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
+    return mesh_color(in);
+}
+
+fn mesh_color(in: MeshOut) -> vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.
     let detail = detail_factor(in.uv, in.params.y);
     let texel = textureSample(t_sprite, s_sprite, in.uv);
@@ -248,3 +276,151 @@ fn fs_mesh(in: MeshOut) -> @location(0) vec4<f32> {
     }
     return texel * c * detail;
 }
+
+// A texture whose alpha is a mask (`SpriteAlpha::Cutout`: a fence, leaves):
+// cut at half alpha and opaque, so it writes depth like any opaque draw
+// instead of blending back to front on the CPU path. Its own pipelines:
+// a `discard` in `fs_mesh` would cost every draw its early depth test.
+@fragment
+fn fs_mesh_cut(in: MeshOut) -> @location(0) vec4<f32> {
+    let c = mesh_color(in);
+    if c.a < 0.5 {
+        discard;
+    }
+    return vec4<f32>(c.rgb, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// Per-pixel lighting on the GPU path: the draws a local light reaches, or
+// glossy or wet ones (`LightTier::PerPixel`), shaded as the CPU path's lit
+// pipeline shades them (`fs_tri_lit`, `shade_lit` in shaders.wgsl): the
+// vertex color carries the sun's diffuse, the fragment adds the local
+// lights, the specular and the wetness. The light sets are the lit
+// pipeline's (lights.rs::GpuSet), bound as group 3.
+
+const FLAG_LIT: u32 = 16u;
+
+struct GpuLight {
+    pos_radius: vec4<f32>,
+    color_spot: vec4<f32>,
+    dir_cos: vec4<f32>,
+    cone: vec4<f32>,
+};
+
+struct LightSet {
+    sun_dir: vec4<f32>,    // xyz: direction the light travels; w: ambient
+    sun_color: vec4<f32>,  // rgb; w: wetness
+    eye: vec4<f32>,        // xyz: camera; w: local light count
+    lights: array<GpuLight, 8>,
+};
+
+struct LightSets {
+    sets: array<LightSet, 8>,
+};
+
+@group(3) @binding(0) var<uniform> light_sets: LightSets;
+
+struct MeshLitOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) world: vec3<f32>,
+    @location(3) normal: vec3<f32>,
+    @location(4) base: vec4<f32>,
+    // x: gloss 0..1, y: the light set | mask << 3, z: the detail scale.
+    @location(5) @interpolate(flat) params: vec3<f32>,
+};
+
+@vertex
+fn vs_mesh_lit(v: MeshIn, inst: InstIn) -> MeshLitOut {
+    let m = mesh_vertex(v, inst);
+    let flags = inst.misc.z;
+    var out: MeshLitOut;
+    out.clip = m.out.clip;
+    // Always perspective-correct, as the CPU path's lit triangles.
+    out.color = m.out.color;
+    out.uv = m.out.uv;
+    out.world = m.world;
+    out.normal = m.normal;
+    out.base = m.base;
+    out.params = vec3<f32>(
+        f32((flags >> 8u) & 255u) / 255.0,
+        f32((flags >> 16u) & 2047u),
+        m.out.params.y,
+    );
+    return out;
+}
+
+// Blinn-Phong lobe for gloss 0..1 (`specular` in shaders.wgsl).
+fn specular(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, gloss: f32) -> f32 {
+    let h = normalize(l + v);
+    let e = mix(8.0, 256.0, gloss * gloss);
+    return pow(max(dot(n, h), 0.0), e) * gloss * (e + 8.0) / 64.0;
+}
+
+@fragment
+fn fs_mesh_lit(in: MeshLitOut) -> @location(0) vec4<f32> {
+    return mesh_lit_color(in);
+}
+
+@fragment
+fn fs_mesh_lit_cut(in: MeshLitOut) -> @location(0) vec4<f32> {
+    let c = mesh_lit_color(in);
+    if c.a < 0.5 {
+        discard;
+    }
+    return vec4<f32>(c.rgb, 1.0);
+}
+
+fn mesh_lit_color(in: MeshLitOut) -> vec4<f32> {
+    // Sampled unconditionally: textureSample requires uniform control flow.
+    let texel = textureSample(t_sprite, s_sprite, in.uv) * detail_factor(in.uv, in.params.z);
+    let c = in.color * texel;
+    if dot(in.normal, in.normal) < 1e-8 {
+        return c;
+    }
+    let packed = u32(in.params.y + 0.5);
+    let lset = &light_sets.sets[packed & 7u];
+    let mask = packed >> 3u;
+    let n = normalize(in.normal);
+    let albedo = in.base.rgb * texel.rgb;
+    let v = normalize((*lset).eye.xyz - in.world);
+    let wet = (*lset).sun_color.w * smoothstep(0.55, 0.9, n.y);
+    let gloss = max(in.params.x, wet * 0.9);
+    var rgb = c.rgb * (1.0 - 0.4 * wet);
+    let alb = albedo * (1.0 - 0.4 * wet);
+    let ls = -normalize((*lset).sun_dir.xyz);
+    if gloss > 0.0 && dot(n, ls) > 0.0 {
+        rgb += (*lset).sun_color.rgb * specular(n, ls, v, gloss) * (1.0 - (*lset).sun_dir.w);
+    }
+    let count = u32((*lset).eye.w + 0.5);
+    for (var i = 0u; i < count; i++) {
+        if (mask & (1u << i)) == 0u {
+            continue;
+        }
+        let li = &(*lset).lights[i];
+        let pr = (*li).pos_radius;
+        let to = pr.xyz - in.world;
+        let d2 = dot(to, to);
+        let r2 = pr.w * pr.w;
+        if d2 >= r2 || d2 <= 0.0 {
+            continue;
+        }
+        let k = 1.0 - d2 / r2;
+        var att = k * k;
+        let l = to * inverseSqrt(d2);
+        let cs = (*li).color_spot;
+        if cs.w > 0.5 {
+            let dc = (*li).dir_cos;
+            let t = clamp((dot(-l, dc.xyz) - dc.w) * (*li).cone.x, 0.0, 1.0);
+            att *= t * t * (3.0 - 2.0 * t);
+        }
+        let ndl = max(dot(n, l), 0.0);
+        rgb += alb * cs.rgb * att * ndl;
+        if gloss > 0.0 && ndl > 0.0 {
+            rgb += cs.rgb * att * specular(n, l, v, gloss);
+        }
+    }
+    return vec4<f32>(rgb, c.a);
+}
+

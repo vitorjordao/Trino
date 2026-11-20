@@ -722,19 +722,17 @@ pub fn estimate<'m>(
             continue;
         }
         if matches!(console, Target::Pc | Target::Web) {
-            // A glossy draw is shaded per pixel on the PC (the estimate has
-            // no local lights or wetness, the other two reasons).
+            // A glossy draw is shaded per pixel on the PC: the GPU path's lit
+            // pipelines (the estimate has no local lights or wetness, the
+            // other two reasons).
             let per_pixel =
                 item.params.gloss > 0 && item.params.shading != trino_core::Shading::Unlit;
             match pc_gpu_mesh_check(&mesh)
                 .and_then(|_| pc_gpu_check(&ctx, &mesh, &item.matrix, &item.params))
-                .and(match per_pixel {
-                    true => Err(PcGpuReject::PerPixelLit),
-                    false => Ok(()),
-                }) {
+            {
                 Ok(()) => {
                     let texture = mesh.texture_for(&item.params).map_or(0, |t| t.0);
-                    web_call(WEB_GPU, id.0, texture);
+                    web_call(if per_pixel { WEB_LIT } else { WEB_GPU }, id.0, texture);
                     b.pc_gpu_draws += 1;
                     b.pc_gpu_tris += (mesh.index_count / 3) as u32;
                     b.paths.push(path(item, RenderPath::Hardware));
@@ -743,7 +741,6 @@ pub fn estimate<'m>(
                     let texture = mesh.texture_for(&item.params).map_or(0, |t| t.0);
                     let pipe = match r {
                         PcGpuReject::Water => WEB_WATER,
-                        PcGpuReject::PerPixelLit => WEB_LIT,
                         _ => WEB_TRIS,
                     };
                     web_call(pipe, 0, texture);
@@ -825,6 +822,8 @@ fn model_bytes<'m>(resolved: &Resolved, meshes: &dyn Fn(ModelId) -> Option<&'m [
 /// The Web's pipelines ([`WebCalls::pipelines`]), as bit numbers.
 const WEB_GPU: u8 = 0;
 const WEB_TRIS: u8 = 1;
+/// Shaded per pixel (the CPU path's lit triangles or the GPU path's lit
+/// meshes).
 const WEB_LIT: u8 = 2;
 /// Water: one call per surface (drawn last, blended).
 const WEB_WATER: u8 = 3;

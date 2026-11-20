@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use trino_asset_pipeline::primitive::{Pivot, Primitive, Shape};
 use trino_core::render3d::{Camera3, DEFAULT_LIGHT, Fog, PcGpuReject};
 use trino_core::{
-    AnimRef, ClipId, Color, Instance, Mat34, Material, ModelId, ModelParams, Renderer, Shading,
-    Transform3, Vec3,
+    AnimRef, ClipId, Color, Instance, LocalLight, Mat34, Material, ModelId, ModelParams, Renderer,
+    Shading, Transform3, Vec3,
 };
 use trino_platform_pc::{PcRenderer, SimProfile, tnl_oracle};
 
@@ -470,6 +470,153 @@ fn rejected_draws_stay_on_the_cpu_with_their_reason() {
         r.stats().tnl.verts > 0,
         "the rejected draws ran the CPU T&L"
     );
+}
+
+/// Draws shaded per pixel (a point light and a spot reach them, gloss,
+/// wetness) take the GPU path's lit pipelines: the same light sets and
+/// masks as the CPU path's lit triangles, within the oracle's tolerance,
+/// with no CPU vertex work. Instanced copies split into a plain and a lit
+/// call. A lamp's reach used to send every draw it touched to the CPU.
+#[test]
+fn per_pixel_lit_draws_match_the_cpu_path() {
+    let _gpu = gpu();
+    let Some(mut r) = headless() else {
+        return;
+    };
+    upload(&mut r);
+    let lamps = [
+        LocalLight::point(Vec3::new(-1.4, 1.0, -0.6), Color::rgb(255, 170, 80), 3.0),
+        LocalLight::spot(
+            Vec3::new(1.2, 3.5, 0.5),
+            Vec3::new(0.0, -1.0, 0.1),
+            0.3,
+            0.5,
+            Color::rgb(80, 220, 255),
+            6.0,
+        ),
+    ];
+    // Copies near the lamps (lit) and far from them (plain).
+    let copies: Vec<Instance> = (0..6)
+        .map(|i| Instance::new(at(i as f32 * 1.6 - 4.0, 0.0, 4.0 - i as f32 * 0.9, 0.3)))
+        .collect();
+    let frame = |r: &mut PcRenderer, wet: f32, lamps: &[LocalLight]| {
+        begin(r, false);
+        r.set_local_lights(lamps);
+        if wet > 0.0 {
+            r.set_wetness(wet);
+        }
+        r.draw_model_matrix(
+            FLOOR,
+            &at(0.0, -0.2, 2.0, 0.0),
+            Material::VertexLit,
+            &ModelParams::DEFAULT,
+        );
+        r.draw_model_matrix(
+            BALL,
+            &at(-1.4, 0.0, 0.0, 0.0),
+            Material::VertexLit,
+            &ModelParams {
+                gloss: 200,
+                ..ModelParams::DEFAULT
+            },
+        );
+        r.draw_model_matrix(
+            ROBOT,
+            &at(1.2, 0.0, 0.5, 2.6),
+            Material::VertexLit,
+            &ModelParams {
+                anim: Some(AnimRef::new(ClipId::from_name("walk"), 0.2)),
+                ..ModelParams::DEFAULT
+            },
+        );
+        r.draw_model_instances(CRATE, &copies, &ModelParams::DEFAULT);
+        r.end_frame();
+        r.read_offscreen()
+    };
+    for (name, wet) in [("lit_draws", 0.0), ("lit_draws_wet", 0.8)] {
+        let d = oracle(&mut r, name, |r| frame(r, wet, &lamps));
+        assert_eq!(d.gpu_draws, 9, "{name}: every draw on the GPU path");
+        frame(&mut r, wet, &lamps);
+        let s = r.stats();
+        assert_eq!((s.tnl.verts, s.tnl.emitted), (0, 0), "{name}: no CPU T&L");
+        assert!(
+            r.pc_gpu_rejects().iter().all(|&n| n == 0),
+            "{name}: nothing rejected: {:?}",
+            r.pc_gpu_rejects()
+        );
+    }
+    // The lamps do light the GPU frame (the lit pipelines aren't a no-op).
+    let lit = frame(&mut r, 0.0, &lamps);
+    let dark = frame(&mut r, 0.0, &[]);
+    let brighter = lit
+        .chunks(4)
+        .zip(dark.chunks(4))
+        .filter(|(a, b)| {
+            let sum = |p: &[u8]| p[..3].iter().map(|&c| c as u32).sum::<u32>();
+            sum(a) > sum(b) + 30
+        })
+        .count();
+    assert!(brighter > 500, "{brighter} pixels lit by the lamps");
+}
+
+/// A draw wholly outside the view (behind the camera, past a side) costs
+/// nothing on either path: counted as off screen, no CPU vertex work, no
+/// GPU draw. Lit, translucent and alpha-textured ones too: the test comes
+/// before every other reason (the CPU path used to transform their
+/// vertices only to cull them).
+#[test]
+fn offscreen_draws_are_dropped_before_any_path() {
+    let _gpu = gpu();
+    let Some(mut r) = headless() else {
+        return;
+    };
+    upload(&mut r);
+    for hw in [true, false] {
+        r.set_hw_tnl(hw);
+        begin(&mut r, false);
+        r.set_local_lights(&[LocalLight::point(
+            Vec3::new(0.0, 1.0, -12.0),
+            Color::WHITE,
+            5.0,
+        )]);
+        // Behind the camera (it looks toward +z from z = -7).
+        r.draw_model_matrix(
+            CRATE,
+            &at(0.0, 0.0, -12.0, 0.0),
+            Material::VertexLit,
+            &ModelParams::DEFAULT,
+        );
+        r.draw_model_matrix(
+            BALL,
+            &at(0.5, 0.0, -12.0, 0.0),
+            Material::VertexLit,
+            &ModelParams::tinted(Color::rgba(255, 255, 255, 100)),
+        );
+        // Far past the left edge.
+        r.draw_model_matrix(
+            CRATE,
+            &at(-60.0, 0.0, 2.0, 0.0),
+            Material::VertexLit,
+            &ModelParams {
+                gloss: 128,
+                ..ModelParams::DEFAULT
+            },
+        );
+        r.end_frame();
+        let s = r.stats();
+        assert_eq!(
+            (s.tnl.verts, s.tnl.pc_gpu_draws, s.tris),
+            (0, 0, 0),
+            "hw_tnl={hw}: nothing transformed or drawn"
+        );
+        let off = r.pc_gpu_rejects();
+        assert_eq!(
+            off[PcGpuReject::Offscreen as usize],
+            3,
+            "hw_tnl={hw}: {off:?}"
+        );
+        assert_eq!(off.iter().sum::<u32>(), 3, "hw_tnl={hw}: {off:?}");
+    }
 }
 
 /// `set_hw_tnl(false)` (`TRINO_PC_TNL=cpu`) is the old path: every draw on

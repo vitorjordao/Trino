@@ -93,3 +93,89 @@ fn what_is_behind_a_translucent_draw_still_shows() {
         );
     }
 }
+
+/// A green box whose texture is `rgba` (16×16) in front of a big opaque
+/// red box: the frame's pixels.
+fn masked_frame(r: &mut PcRenderer) -> Vec<u8> {
+    r.begin_frame(Color::BLACK);
+    r.set_camera(&Camera3::default());
+    r.set_light(&light());
+    let unlit = ModelParams {
+        shading: Shading::Unlit,
+        ..ModelParams::DEFAULT
+    };
+    r.draw_model(
+        model(BOX),
+        &Transform3 {
+            position: Vec3::new(0.0, 0.0, 3.0),
+            scale: Vec3::new(4.0, 4.0, 4.0),
+            ..Transform3::default()
+        },
+        Material::VertexLit,
+        &ModelParams {
+            tint: Color::rgb(255, 0, 0),
+            ..unlit
+        },
+    );
+    r.draw_model(
+        model(TBOX),
+        &Transform3 {
+            position: Vec3::new(0.0, 0.0, -2.0),
+            scale: Vec3::new(1.5, 1.5, 1.5),
+            ..Transform3::default()
+        },
+        Material::VertexLit,
+        &unlit,
+    );
+    r.end_frame();
+    r.read_offscreen()
+}
+
+/// A texture whose alpha is a mask (a fence, a grille: every texel clear or
+/// solid) draws on the GPU path, cut at half alpha and depth-written, and
+/// shows what the CPU path's blending shows; one that is half transparent
+/// stays on the CPU path. The fence of a kart track used to cost a third of
+/// the frame on the CPU path.
+#[test]
+fn a_masked_texture_is_cut_on_the_gpu_path() {
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let assets = bake_project(dir.path());
+    upload(&assets, &mut r, None);
+    // 4×4-texel cells, clear and solid in a checker.
+    let mask: Vec<u8> = (0..16 * 16)
+        .flat_map(|i| {
+            let (x, y) = (i % 16 / 4, i / 16 / 4);
+            [0, 255, 0, if (x + y) % 2 == 0 { 255 } else { 0 }]
+        })
+        .collect();
+    r.upload_sprite(sprite(TEX), 16, 16, &mask);
+    let d = trino_platform_pc::tnl_oracle::compare(&mut r, masked_frame)
+        .expect("the native profile has the GPU path");
+    eprintln!("masked: {d}");
+    assert_eq!(d.gpu_draws, 2, "both boxes on the GPU path");
+    // The cut and the blend only differ along the cells' filtered edges.
+    assert!(d.mean < 4.0 && d.far_share < 0.04, "{d}");
+    r.set_hw_tnl(true);
+    let px = masked_frame(&mut r);
+    assert_eq!(r.pc_gpu_rejects().iter().sum::<u32>(), 0);
+    let count = |want: fn(&[u8]) -> bool| px.chunks(4).filter(|p| want(p)).count();
+    let green = count(|p| p[1] > 200 && p[0] < 60);
+    let red_through = count(|p| p[0] > 200 && p[1] < 60);
+    assert!(green > 500, "the solid cells: {green}");
+    assert!(
+        red_through > 500,
+        "the red box through the holes: {red_through}"
+    );
+    // Half transparent: blended back to front on the CPU path.
+    let glass: Vec<u8> = (0..16 * 16).flat_map(|_| [0, 255, 0, 128]).collect();
+    r.upload_sprite(sprite(TEX), 16, 16, &glass);
+    masked_frame(&mut r);
+    let off = r.pc_gpu_rejects();
+    assert_eq!(
+        off[trino_core::render3d::PcGpuReject::TextureAlpha as usize],
+        1
+    );
+}

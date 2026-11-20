@@ -66,11 +66,11 @@ pub(crate) enum Built {
     DepthBlit(Box<depth_blit::DepthBlit>),
     Cvd(CvdMode, CvdKind, wgpu::RenderPipeline),
     Hdr(bool, Box<post::HdrSet>),
-    HdrGpu(bool, [wgpu::RenderPipeline; 2]),
+    HdrGpu(bool, [wgpu::RenderPipeline; gpu_tnl::MESH_PIPES]),
     Post(Box<post::PostPass>),
     Stereo(StereoView, wgpu::RenderPipeline),
     GpuTnl(Box<gpu_tnl::GpuTnl>),
-    GpuTnlMs([wgpu::RenderPipeline; 2]),
+    GpuTnlMs([wgpu::RenderPipeline; gpu_tnl::MESH_PIPES]),
     WaterMs(wgpu::BindGroupLayout, [wgpu::RenderPipeline; 2]),
 }
 
@@ -87,11 +87,11 @@ pub(crate) struct Inputs {
     pub sources: SceneSources,
     pub webgl2: bool,
     /// Groups 0 and 1 of the GPU T&L layout (globals, 3D texture).
-    pub tnl_groups: [wgpu::BindGroupLayout; 2],
+    pub tnl_groups: [wgpu::BindGroupLayout; 3],
     /// Build the GPU T&L path's MSAA twin with it.
     pub gpu_ms: bool,
     /// The built GPU T&L path's layout and shader (for [`JobKind::GpuTnlMs`]).
-    pub gpu_ms_source: Option<(wgpu::PipelineLayout, wgpu::ShaderModule)>,
+    pub gpu_ms_source: Option<gpu_tnl::MeshSource>,
     /// The color-vision pass's layout (the pass exists before its jobs run).
     pub cvd_layout: wgpu::PipelineLayout,
     /// The stereo preview pass's layout (made before its jobs run).
@@ -148,40 +148,31 @@ pub(crate) fn build(kind: JobKind, i: &Inputs) -> Built {
             )),
         ),
         JobKind::HdrGpu(ms) => {
-            let (layout, shader) = i
+            let src = i
                 .gpu_ms_source
                 .as_ref()
                 .expect("planned only with the GPU T&L path built");
             let samples = if ms { MSAA_SAMPLES } else { 1 };
-            Built::HdrGpu(
-                ms,
-                gpu_tnl::pipelines(d, layout, shader, samples, post::HDR_FORMAT),
-            )
+            Built::HdrGpu(ms, gpu_tnl::pipelines(d, src, samples, post::HDR_FORMAT))
         }
         JobKind::Post => Built::Post(Box::new(post::PostPass::new(d, i.hdr))),
         JobKind::Stereo(view) => {
             Built::Stereo(view, stereo::build_pipeline(d, &i.stereo_layout, view))
         }
         JobKind::GpuTnl => {
-            let [g0, g1] = &i.tnl_groups;
-            let mut gpu = gpu_tnl::GpuTnl::new(d, [g0, g1]);
+            let [g0, g1, g2] = &i.tnl_groups;
+            let mut gpu = gpu_tnl::GpuTnl::new(d, [g0, g1, g2]);
             if i.gpu_ms {
                 gpu.ensure_ms(d, MSAA_SAMPLES);
             }
             Built::GpuTnl(Box::new(gpu))
         }
         JobKind::GpuTnlMs => {
-            let (layout, shader) = i
+            let src = i
                 .gpu_ms_source
                 .as_ref()
                 .expect("planned only with the GPU T&L path built");
-            Built::GpuTnlMs(gpu_tnl::pipelines(
-                d,
-                layout,
-                shader,
-                MSAA_SAMPLES,
-                OFFSCREEN_FORMAT,
-            ))
+            Built::GpuTnlMs(gpu_tnl::pipelines(d, src, MSAA_SAMPLES, OFFSCREEN_FORMAT))
         }
         JobKind::WaterMs => {
             let (bgl, pipes) = WaterGpu::ms_pipelines(d, &i.water_groups);

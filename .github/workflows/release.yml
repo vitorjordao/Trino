@@ -87,10 +87,16 @@ jobs:
     needs: tag
     if: needs.tag.outputs.created == 'true'
     runs-on: ubuntu-24.04
+    # The console nightly is pinned (ADR 0002): from nightly-2026-11-19 on
+    # (LLVM 23.1.6) rustc emits no 64-bit instruction for the o32 target, and
+    # the football template's match went from 31 to 36 ms a frame (budget 33.3).
+    env:
+      TRINO_NIGHTLY: nightly-2026-11-18
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.TRINO_NIGHTLY }}
           components: rust-src
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

@@ -646,6 +646,108 @@ pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String>
         .map_err(|e| e.to_string())
 }
 
+/// `TRINO_CAPTURE=<dir>`: every rendered frame (from frame
+/// `TRINO_CAPTURE_FROM`, default 0, one in `TRINO_CAPTURE_EVERY`, default 1)
+/// as `<dir>/frame_000000.png`, numbered from 0 in capture order. With
+/// `TRINO_FIXED_DT` the frames are evenly spaced in game time, so
+/// `ffmpeg -framerate <1/dt> -i <dir>/frame_%06d.png` makes a video of what
+/// the player saw, however slow the machine (or the PNG encoder) is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptureConfig {
+    pub dir: PathBuf,
+    pub from: u64,
+    pub every: u64,
+}
+
+impl CaptureConfig {
+    /// Reads the switches through `var` (the environment in a run).
+    pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> Option<CaptureConfig> {
+        let dir = var("TRINO_CAPTURE").filter(|v| !v.is_empty())?;
+        let num = |k: &str, d: u64| var(k).and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+        Some(CaptureConfig {
+            dir: PathBuf::from(dir),
+            from: num("TRINO_CAPTURE_FROM", 0),
+            every: num("TRINO_CAPTURE_EVERY", 1).max(1),
+        })
+    }
+
+    /// The capture index of frame `frame` (counted from 0), if it is taken.
+    pub fn index_of(&self, frame: u64) -> Option<u64> {
+        (frame >= self.from && (frame - self.from).is_multiple_of(self.every))
+            .then(|| (frame - self.from) / self.every)
+    }
+
+    pub fn path(&self, index: u64) -> PathBuf {
+        self.dir.join(format!("frame_{index:06}.png"))
+    }
+}
+
+/// `TRINO_FIXED_DT=<seconds>` (for example `0.0333333`): every update gets
+/// exactly this step instead of the wall-clock time (a capture, a benchmark
+/// or a bug report that must not depend on the machine's speed).
+pub fn fixed_dt_from(var: impl Fn(&str) -> Option<String>) -> Option<f32> {
+    var("TRINO_FIXED_DT")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|dt| dt.is_finite() && *dt > 0.0 && *dt <= 0.1)
+}
+
+/// One captured frame on its way to disk: path, width, height, RGBA8.
+type CapturedFrame = (PathBuf, u32, u32, Vec<u8>);
+
+/// Writes captured frames on a thread of its own: the encoder never holds
+/// the frame loop (a bounded queue: when it is full, the loop waits).
+struct FrameWriter {
+    tx: Option<std::sync::mpsc::SyncSender<CapturedFrame>>,
+    worker: Option<std::thread::JoinHandle<u64>>,
+}
+
+impl FrameWriter {
+    fn new() -> FrameWriter {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(PathBuf, u32, u32, Vec<u8>)>(6);
+        let worker = std::thread::spawn(move || {
+            let mut written = 0;
+            for (path, w, h, rgba) in rx {
+                match write_png_fast(&path, w, h, &rgba) {
+                    Ok(()) => written += 1,
+                    Err(e) => eprintln!("TRINO_CAPTURE {}: {e}", path.display()),
+                }
+            }
+            written
+        });
+        FrameWriter {
+            tx: Some(tx),
+            worker: Some(worker),
+        }
+    }
+
+    fn push(&self, path: PathBuf, w: u32, h: u32, rgba: Vec<u8>) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send((path, w, h, rgba));
+        }
+    }
+
+    /// Waits for the queue to drain; how many frames were written.
+    fn finish(&mut self) -> u64 {
+        self.tx = None;
+        self.worker.take().and_then(|w| w.join().ok()).unwrap_or(0)
+    }
+}
+
+/// [`write_png`] with the fastest compression (captures: many big frames).
+fn write_png_fast(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let f = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut e = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.set_compression(png::Compression::Fast);
+    e.write_header()
+        .and_then(|mut w| w.write_image_data(rgba))
+        .map_err(|e| e.to_string())
+}
+
 /// `TRINO_SIM`, defaulting to the N64 look.
 /// `TRINO_TRACE` (issue #62): record the engine's zones as `session`
 /// (`pc-castle64`) when the build has `trino-core/trace` (`cargo xtask run
@@ -713,6 +815,10 @@ pub fn tier_from_env() -> trino_core::HwTier {
         .map_or(trino_core::HwTier::Base, |(_, t)| t)
 }
 
+fn env_var(k: &str) -> Option<String> {
+    std::env::var(k).ok()
+}
+
 /// Open a window and run the game made by `make(screen)` until closed.
 /// Panics with a readable message on setup errors (bad assets, no GPU).
 pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 'static) {
@@ -739,9 +845,12 @@ pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 
         smoke_frames,
         meter: trino_platform_pc::FrameMeter::new(profile),
         trace: None,
+        fixed_dt: fixed_dt_from(env_var),
+        capture: CaptureConfig::from_vars(env_var).map(|c| (c, FrameWriter::new())),
     };
     host.trace = trace_from_env(&format!("pc-{}", host.config.save_name));
     event_loop.run_app(&mut host).expect("event loop error");
+    host.finish_capture();
     if let Some(t) = host.trace.take() {
         t.finish();
     }
@@ -799,9 +908,21 @@ struct Host {
     meter: trino_platform_pc::FrameMeter,
     /// `TRINO_TRACE`: the engine's zones (issue #62).
     trace: Option<trino_platform_pc::trace_host::TraceHost>,
+    /// `TRINO_FIXED_DT`: the step every update gets.
+    fixed_dt: Option<f32>,
+    /// `TRINO_CAPTURE`: where the frames go, and the thread writing them.
+    capture: Option<(CaptureConfig, FrameWriter)>,
 }
 
 impl Host {
+    /// Drains the capture queue (before the process exits).
+    fn finish_capture(&mut self) {
+        if let Some((cfg, mut writer)) = self.capture.take() {
+            let n = writer.finish();
+            println!("TRINO_CAPTURE: {n} frame(s) in {}", cfg.dir.display());
+        }
+    }
+
     fn init(&mut self, event_loop: &ActiveEventLoop) -> Ctx {
         let cfg = &self.config;
         let mut settings = std::fs::read_to_string(cfg.display_file())
@@ -1163,6 +1284,7 @@ impl ApplicationHandler for Host {
                 let now = Instant::now();
                 // Clamp dt: pauses and window drags must not teleport.
                 let dt = (now - ctx.last_frame).as_secs_f32().min(0.1);
+                let dt = self.fixed_dt.unwrap_or(dt);
                 ctx.last_frame = now;
                 // The players (issue #67): the game's seat requests, the
                 // devices, then a recording over them.
@@ -1273,6 +1395,13 @@ impl ApplicationHandler for Host {
                     self.meter.set_quality(q.note(&ctx.renderer));
                 }
 
+                // TRINO_CAPTURE: the frame just drawn, to the writer thread.
+                if let Some((cfg, writer)) = &self.capture
+                    && let Some(index) = cfg.index_of(self.frames)
+                {
+                    let (w, h) = ctx.renderer.internal_size();
+                    writer.push(cfg.path(index), w, h, ctx.renderer.read_offscreen());
+                }
                 self.frames += 1;
                 self.meter.record(
                     &trino_core::Renderer::stats(&ctx.renderer),
@@ -1318,6 +1447,73 @@ impl ApplicationHandler for Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `TRINO_CAPTURE` takes the frames from `TRINO_CAPTURE_FROM`, one in
+    /// `TRINO_CAPTURE_EVERY`, numbered in capture order; no directory, no
+    /// capture. `TRINO_FIXED_DT` refuses nonsense (it would freeze or
+    /// teleport the game).
+    #[test]
+    fn capture_and_fixed_dt_read_their_switches() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(CaptureConfig::from_vars(vars(&[])), None);
+        assert_eq!(
+            CaptureConfig::from_vars(vars(&[("TRINO_CAPTURE", "")])),
+            None
+        );
+        let c = CaptureConfig::from_vars(vars(&[
+            ("TRINO_CAPTURE", "out/lap"),
+            ("TRINO_CAPTURE_FROM", "10"),
+            ("TRINO_CAPTURE_EVERY", "2"),
+        ]))
+        .unwrap();
+        assert_eq!(c.index_of(9), None);
+        assert_eq!(c.index_of(10), Some(0));
+        assert_eq!(c.index_of(11), None);
+        assert_eq!(c.index_of(14), Some(2));
+        assert_eq!(c.path(2), PathBuf::from("out/lap/frame_000002.png"));
+        let every0 = CaptureConfig::from_vars(vars(&[
+            ("TRINO_CAPTURE", "x"),
+            ("TRINO_CAPTURE_EVERY", "0"),
+        ]));
+        assert_eq!(every0.unwrap().every, 1, "0 would divide by zero");
+        assert_eq!(
+            fixed_dt_from(vars(&[("TRINO_FIXED_DT", "0.0333")])),
+            Some(0.0333)
+        );
+        for bad in ["0", "-1", "nan", "inf", "0.5", "x"] {
+            let pairs: &'static [(&'static str, &'static str)] =
+                Box::leak(Box::new([("TRINO_FIXED_DT", bad)]));
+            assert_eq!(fixed_dt_from(vars(pairs)), None, "{bad}");
+        }
+    }
+
+    /// The writer thread writes every frame it was handed before
+    /// `finish` returns (the process exits right after).
+    #[test]
+    fn the_frame_writer_drains_before_finishing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut w = FrameWriter::new();
+        for i in 0..10 {
+            w.push(
+                dir.path().join(format!("frame_{i:06}.png")),
+                4,
+                2,
+                vec![i as u8; 4 * 2 * 4],
+            );
+        }
+        assert_eq!(w.finish(), 10);
+        let (pw, ph, rgba) =
+            trino_asset_pipeline::decode_png(&dir.path().join("frame_000009.png")).unwrap();
+        assert_eq!((pw, ph), (4, 2));
+        assert!(rgba.iter().all(|&b| b == 9));
+    }
 
     #[test]
     fn resample_halves_and_keeps_identity() {

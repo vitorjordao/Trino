@@ -58,7 +58,7 @@ pub(crate) enum JobKind {
 
 /// What a job built.
 pub(crate) enum Built {
-    MsScene(Box<[wgpu::RenderPipeline; 4]>),
+    MsScene(Box<[wgpu::RenderPipeline; super::SCENE_PIPES]>),
     ShadowPipes(u32, Box<shadow::ShadowPipes>),
     Ao(bool, Box<ao::AoPass>),
     ShadowMap(bool, Box<shadow_map::MapPass>),

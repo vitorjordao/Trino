@@ -335,12 +335,16 @@ pub struct PcRenderer {
     /// Per-pixel lighting (`LightTier::PerPixel`): local lights, specular
     /// and wetness on top of the vertex color.
     lit_pipeline: wgpu::RenderPipeline,
-    /// What the scene pipelines are built from, and the four again for a
+    /// `tri`, `tri clamp` and `lit` again for blended triangles: depth
+    /// tested, never written ([`TriKind::PlainBlend`]).
+    blend_pipelines: [wgpu::RenderPipeline; 3],
+    /// What the scene pipelines are built from, and the seven again for a
     /// multisampled target, built by the first [`PcRenderer::set_msaa`]
-    /// that turns it on: sprite, tri, tri clamp, lit. (Building them for
-    /// every renderer made parallel headless tests crash RADV.)
+    /// that turns it on: sprite, tri, tri clamp, lit and the three blended
+    /// ones. (Building them for every renderer made parallel headless tests
+    /// crash RADV.)
     sources: SceneSources,
-    ms_pipelines: Option<[wgpu::RenderPipeline; 4]>,
+    ms_pipelines: Option<[wgpu::RenderPipeline; SCENE_PIPES]>,
     /// Samples per pixel of the main screen's scene pass (1 = off), and
     /// its multisampled color and depth (resolved into the offscreen
     /// target at the end of the pass).
@@ -1094,6 +1098,10 @@ fn create_targets(
 
 /// Samples per pixel when multisampling is on.
 pub const MSAA_SAMPLES: u32 = 4;
+
+/// The scene pipelines of one target ([`scene_pipelines`]): sprite, tri,
+/// tri clamp, lit, then tri, tri clamp and lit for blended triangles.
+pub(crate) const SCENE_PIPES: usize = 7;
 /// The shader and layouts the scene pipelines are built from, kept so the
 /// multisampled set ([`PcRenderer::set_msaa`]) is only built when asked for.
 #[derive(Clone)]
@@ -1166,12 +1174,65 @@ fn lit_attributes() -> Vec<wgpu::VertexAttribute> {
 
 /// The four scene pipelines for a target with `samples` samples per pixel:
 /// sprite, tri, tri clamp (billboards), lit.
+/// Whether a batch triangle blends with what is behind it: a vertex alpha
+/// below 255, or a tiled (model) texture with texels below full alpha.
+/// Billboards' clamped textures are cut out at half alpha (`fs_tri_clamp`)
+/// and stay opaque unless their tint blends.
+fn blends(tri: &ScreenTri, tex: Option<TexKey>, alpha_texture: impl Fn(u32) -> bool) -> bool {
+    tri.colors.iter().any(|c| c.a < 255) || tex.is_some_and(|t| !t.clamp && alpha_texture(t.id))
+}
+
+/// The batch's sort keys, `(group, painter key)` ascending:
+///
+/// - **opaque** triangles grouped by texture (one bind per group) and
+///   pipeline (plain / lit), each group in painter order: the z-buffer
+///   resolves the order between groups;
+/// - **blended** triangles (bit 62, [`blends`]) after every opaque one, in
+///   painter order across textures and pipelines: they write no depth, so
+///   only the order makes the nearer cover the farther, and a texture
+///   group drawn first would have hidden the opaque triangles behind it;
+/// - **water** (bit 63) last: it blends over what the batch drew under it,
+///   and writes no depth.
+fn batch_keys(
+    tris: &[ScreenTri],
+    tex: &[Option<TexKey>],
+    surf: &[Option<SurfTri>],
+    alpha_texture: impl Fn(u32) -> bool,
+) -> Vec<(u64, u64)> {
+    let mut keys: Vec<(u64, u64)> = tris
+        .iter()
+        .enumerate()
+        .map(|(i, tri)| {
+            let t = tex.get(i).copied().flatten();
+            let group = match t {
+                Some(t) => (((t.id as u64) << 1) | t.clamp as u64) + 1,
+                None => 0,
+            };
+            // Per-pixel lit triangles group apart too (another pipeline):
+            // interleaved with plain ones in depth order they cut the batch
+            // into a draw call per switch.
+            let s = surf.get(i).copied().flatten();
+            let lit = s.is_some() as u64;
+            let painter = trino_core::render3d::painter_key(tri.depth, i);
+            if s.is_some_and(|s| s.water) {
+                (1 << 63 | group << 1 | lit, painter)
+            } else if blends(tri, t, &alpha_texture) {
+                (1 << 62, painter)
+            } else {
+                (group << 1 | lit, painter)
+            }
+        })
+        .collect();
+    keys.sort_unstable();
+    keys
+}
+
 fn scene_pipelines(
     device: &wgpu::Device,
     src: &SceneSources,
     samples: u32,
     format: wgpu::TextureFormat,
-) -> [wgpu::RenderPipeline; 4] {
+) -> [wgpu::RenderPipeline; SCENE_PIPES] {
     let SceneSources {
         shader,
         sprite_layout,
@@ -1260,7 +1321,7 @@ fn scene_pipelines(
         )
     };
     let tri_attrs = tri_attributes();
-    let make_tri_pipeline = |fragment: &str, samples: u32| {
+    let make_tri_pipeline = |fragment: &str, samples: u32, depth_write: bool| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
@@ -1289,9 +1350,11 @@ fn scene_pipelines(
                 primitive: wgpu::PrimitiveState::default(),
                 // Real per-pixel occlusion: interpenetrating meshes (a cap
                 // through a head) resolve correctly, which no painter sort can.
+                // Blended triangles test but never write: what is behind
+                // them and drawn later still shows through.
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(depth_write),
                     depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -1306,7 +1369,7 @@ fn scene_pipelines(
         )
     };
     let lit_attrs = lit_attributes();
-    let make_lit_pipeline = |samples: u32| {
+    let make_lit_pipeline = |samples: u32, depth_write: bool| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
@@ -1335,7 +1398,7 @@ fn scene_pipelines(
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(depth_write),
                     depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -1351,9 +1414,12 @@ fn scene_pipelines(
     };
     [
         make_sprite_pipeline(samples),
-        make_tri_pipeline("fs_tri", samples),
-        make_tri_pipeline("fs_tri_clamp", samples),
-        make_lit_pipeline(samples),
+        make_tri_pipeline("fs_tri", samples, true),
+        make_tri_pipeline("fs_tri_clamp", samples, true),
+        make_lit_pipeline(samples, true),
+        make_tri_pipeline("fs_tri", samples, false),
+        make_tri_pipeline("fs_tri_clamp", samples, false),
+        make_lit_pipeline(samples, false),
     ]
 }
 
@@ -2063,6 +2129,9 @@ impl PcRenderer {
             tri_pipeline,
             tri_clamp_pipeline,
             lit_pipeline,
+            blend_plain,
+            blend_clamp,
+            blend_lit,
         ] = scene_pipelines(&device, &sources, 1, OFFSCREEN_FORMAT);
 
         // Water: the lit vertices, groups 0..2 as the lit pipeline (the
@@ -2276,6 +2345,7 @@ impl PcRenderer {
             tri_pipeline,
             tri_clamp_pipeline,
             lit_pipeline,
+            blend_pipelines: [blend_plain, blend_clamp, blend_lit],
             sources,
             ms_pipelines: None,
             msaa: 1,
@@ -4327,50 +4397,34 @@ impl PcRenderer {
     fn flush_model_batch_now(&mut self) {
         // Painter order as keys (texture group, depth, submission index) —
         // the same order the console backends draw in.
-        let mut keys: Vec<(u64, u64)> = self
-            .pending_tris
+        let keys = batch_keys(
+            &self.pending_tris,
+            &self.pending_tex,
+            &self.pending_surf,
+            |id| self.sprites.get(&id).is_some_and(|e| e.alpha),
+        );
+        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>, bool)> = keys
             .iter()
-            .enumerate()
-            .map(|(i, tri)| {
-                let group = match self.pending_tex.get(i).copied().flatten() {
-                    Some(t) => (((t.id as u64) << 1) | t.clamp as u64) + 1,
-                    None => 0,
-                };
-                // Per-pixel lit triangles group apart too (another pipeline):
-                // interleaved with plain ones in depth order they cut the
-                // batch into a draw call per switch. The z-buffer resolves
-                // the order between groups. Water comes last: it blends over
-                // what the batch drew under it, and writes no depth.
-                let surf = self.pending_surf.get(i).copied().flatten();
-                let lit = surf.is_some() as u64;
-                let water = surf.is_some_and(|s| s.water) as u64;
-                (
-                    (water << 63) | (group << 1) | lit,
-                    trino_core::render3d::painter_key(tri.depth, i),
-                )
-            })
-            .collect();
-        keys.sort_unstable();
-        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>)> = keys
-            .iter()
-            .map(|&(_, key)| {
+            .map(|&(k, key)| {
                 let i = trino_core::render3d::painter_index(key);
                 (
                     self.pending_tex.get(i).copied().flatten(),
                     self.pending_tris[i],
                     self.pending_surf.get(i).copied().flatten(),
+                    k >> 62 == 1,
                 )
             })
             .collect();
-        // Water comes last in the keys: the batch's shadows go in between,
-        // over the opaque surfaces and under the water.
-        let water_at = keys
+        // The opaque triangles, the batch's shadows over them, then the
+        // blended triangles and the water (keys put them last, in that
+        // order).
+        let blend_at = keys
             .iter()
-            .position(|&(k, _)| k >> 63 == 1)
+            .position(|&(k, _)| k >> 62 != 0)
             .unwrap_or(keys.len());
-        self.push_tri_runs(&order[..water_at]);
+        self.push_tri_runs(&order[..blend_at]);
         self.push_shadow_runs();
-        self.push_tri_runs(&order[water_at..]);
+        self.push_tri_runs(&order[blend_at..]);
         self.pending_tris.clear();
         self.pending_tex.clear();
         self.pending_surf.clear();
@@ -4378,7 +4432,7 @@ impl PcRenderer {
 
     /// Append `order`'s triangles as GPU vertices and commands, a command
     /// per run of one texture and pipeline.
-    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>)]) {
+    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>, bool)]) {
         let rgba = |c: Color| {
             [
                 c.r as f32 / 255.0,
@@ -4387,16 +4441,18 @@ impl PcRenderer {
                 c.a as f32 / 255.0,
             ]
         };
-        let kind = |s: &Option<SurfTri>| match s {
+        let kind = |s: &Option<SurfTri>, blend: bool| match s {
+            None if blend => TriKind::PlainBlend,
             None => TriKind::Plain,
             Some(s) if s.water => TriKind::Water,
+            Some(_) if blend => TriKind::LitBlend,
             Some(_) => TriKind::Lit,
         };
         let mut run_start = self.tri_verts.len() as u32;
-        let mut run = order.first().map(|(t, _, s)| (*t, kind(s)));
-        for (tex, tri, surf) in order {
+        let mut run = order.first().map(|(t, _, s, b)| (*t, kind(s, *b)));
+        for (tex, tri, surf, blend) in order {
             let lit = surf.is_some();
-            let k = kind(surf);
+            let k = kind(surf, *blend);
             if Some((*tex, k)) != run {
                 let first = run_start;
                 let count = self.tri_verts.len() as u32 - first;
@@ -5018,7 +5074,7 @@ impl PcRenderer {
             matches!(
                 s,
                 Segment::Tris {
-                    kind: TriKind::Lit | TriKind::Water,
+                    kind: TriKind::Lit | TriKind::LitBlend | TriKind::Water,
                     ..
                 }
             )
@@ -5592,13 +5648,16 @@ impl PcRenderer {
             (None, None) => self.shadow_pipes.as_ref(),
         };
         let pipes = match (hdr_set, ms) {
-            (Some(h), _) => [&h.scene[0], &h.scene[1], &h.scene[2], &h.scene[3]],
-            (None, Some((_, p, _))) => [&p[0], &p[1], &p[2], &p[3]],
+            (Some(h), _) => std::array::from_fn(|i| &h.scene[i]),
+            (None, Some((_, p, _))) => std::array::from_fn(|i| &p[i]),
             (None, None) => [
                 &self.sprite_pipeline,
                 &self.tri_pipeline,
                 &self.tri_clamp_pipeline,
                 &self.lit_pipeline,
+                &self.blend_pipelines[0],
+                &self.blend_pipelines[1],
+                &self.blend_pipelines[2],
             ],
         };
         let mut draws = 0;
@@ -5685,8 +5744,14 @@ impl PcRenderer {
                             pass.set_bind_group(2, &self.lights_bg, &[]);
                             (pipes[3], 3)
                         }
+                        TriKind::LitBlend => {
+                            pass.set_bind_group(2, &self.lights_bg, &[]);
+                            (pipes[6], 11)
+                        }
                         TriKind::Plain if texture.is_some_and(|t| t.clamp) => (pipes[2], 2),
                         TriKind::Plain => (pipes[1], 1),
+                        TriKind::PlainBlend if texture.is_some_and(|t| t.clamp) => (pipes[5], 10),
+                        TriKind::PlainBlend => (pipes[4], 9),
                         TriKind::Shadow | TriKind::ShadowMark | TriKind::ShadowApply => {
                             // Built by `ensure_shadow_pipes` before the
                             // frame's passes.
@@ -7592,5 +7657,70 @@ mod webgl2_tests {
             wgpu::Features::TEXTURE_COMPRESSION_ASTC
         );
         assert!(CompressedFormat::Bc7.is_bc() && !CompressedFormat::Etc2Rgba8.is_bc());
+    }
+}
+
+#[cfg(test)]
+mod batch_order_tests {
+    use super::*;
+    use trino_core::Vec2;
+
+    fn tri(depth: f32, alpha: u8) -> ScreenTri {
+        ScreenTri {
+            pts: [Vec2::new(0.0, 0.0); 3],
+            colors: [Color::rgba(255, 255, 255, alpha); 3],
+            depth,
+            z: [0.5; 3],
+            uv: [Vec2::new(0.0, 0.0); 3],
+            w: [depth; 3],
+        }
+    }
+
+    fn tex(id: u32, clamp: bool) -> Option<TexKey> {
+        Some(if clamp {
+            TexKey::billboard(id, TexFilter::Bilinear)
+        } else {
+            TexKey::model(id, &ModelParams::DEFAULT, TexFilter::Bilinear)
+        })
+    }
+
+    /// Opaque triangles group by texture; every blended one (vertex alpha,
+    /// a model texture with alpha) comes after them, farthest first across
+    /// textures; a billboard's alpha is a cutout and stays opaque.
+    #[test]
+    fn blended_triangles_sort_after_the_opaque_ones_back_to_front() {
+        // 0: near glass (untextured, alpha 128) — the old order drew it first.
+        // 1: far opaque textured box. 2: mid glass with an alpha texture (5).
+        // 3: far opaque untextured. 4: billboard with an alpha texture.
+        // 5: farthest glass, textured with an opaque texture (7).
+        let tris = [
+            tri(2.0, 128),
+            tri(9.0, 255),
+            tri(5.0, 255),
+            tri(8.0, 255),
+            tri(4.0, 255),
+            tri(10.0, 200),
+        ];
+        let texs = [
+            None,
+            tex(7, false),
+            tex(5, false),
+            None,
+            tex(5, true),
+            tex(7, false),
+        ];
+        let keys = batch_keys(&tris, &texs, &[], |id| id == 5);
+        let order: Vec<usize> = keys
+            .iter()
+            .map(|&(_, k)| trino_core::render3d::painter_index(k))
+            .collect();
+        let blended: Vec<bool> = keys.iter().map(|&(k, _)| k >> 62 == 1).collect();
+        // Opaque: group 0 (untextured), then texture 5 clamped (the
+        // billboard), then texture 7; then the glass, far to near.
+        assert_eq!(order, [3, 4, 1, 5, 2, 0]);
+        assert_eq!(blended, [false, false, false, true, true, true]);
+        assert!(!blends(&tris[4], texs[4], |id| id == 5));
+        assert!(blends(&tris[2], texs[2], |id| id == 5));
+        assert!(blends(&tris[0], None, |_| false));
     }
 }

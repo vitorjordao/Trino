@@ -46,6 +46,11 @@ pub enum TriKind {
     Plain,
     /// Shaded per pixel (local lights, specular, wetness).
     Lit,
+    /// [`Plain`](Self::Plain) and [`Lit`](Self::Lit) triangles that blend
+    /// (vertex alpha, a model texture with alpha): after the batch's opaque
+    /// triangles, back to front, depth tested but never written.
+    PlainBlend,
+    LitBlend,
     /// A water surface (ADR 0015): translucent, after the batch's others.
     Water,
     /// Blob and planar shadows (ADR 0025, `shadow.rs`): blended over the

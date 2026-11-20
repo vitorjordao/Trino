@@ -50,6 +50,16 @@
 //! runs take High); `TRINO_MSAA=0` turns MSAA off whatever the preset. The
 //! `TRINO_FRAME:` line ends with the 1% lows and the quality in effect.
 //! See [`quality::QualityHost`].
+//!
+//! **Where the frame goes:** every run times the game's update and render
+//! (the renderer's T&L, sort and submit inside it) and the GPU per frame.
+//! `TRINO_FRAME_LIMIT=unlimited` lifts the cap (VSync hides every frame
+//! faster than the display), `TRINO_FRAME_LOG=<file.csv>` writes one row
+//! per frame, and a smoke run (or any run with the log or the draw report
+//! on, at exit) prints the frame time's percentiles on `TRINO_FRAME` and a
+//! `TRINO_SPIKES:` line naming the slowest frames and the stage that grew.
+//! `TRINO_DRAW_REPORT=1` (or `=<n>` rows) adds `TRINO_DRAWS:` lines: the
+//! models that cost the most, their path (GPU or CPU T&L) and why.
 
 pub mod crash;
 pub mod net;
@@ -419,6 +429,7 @@ pub fn upload_assets(
     for model in assets.models {
         let id = trino_core::ModelId(model.id);
         let before = renderer.mesh_bytes(id) as u64;
+        renderer.name_model(id, &model.logical);
         let tmdl = model_for(renderer, model);
         let after = tmdl.len() as u64;
         renderer.upload_mesh(id, tmdl);
@@ -847,6 +858,8 @@ pub fn run<G: Game + 'static>(config: RunConfig, make: impl FnOnce(Vec2) -> G + 
         trace: None,
         fixed_dt: fixed_dt_from(env_var),
         capture: CaptureConfig::from_vars(env_var).map(|c| (c, FrameWriter::new())),
+        frame_log: trino_platform_pc::FrameLog::from_env(),
+        draw_report: draw_report_rows(std::env::var("TRINO_DRAW_REPORT").ok().as_deref()),
     };
     host.trace = trace_from_env(&format!("pc-{}", host.config.save_name));
     event_loop.run_app(&mut host).expect("event loop error");
@@ -912,9 +925,41 @@ struct Host {
     fixed_dt: Option<f32>,
     /// `TRINO_CAPTURE`: where the frames go, and the thread writing them.
     capture: Option<(CaptureConfig, FrameWriter)>,
+    /// `TRINO_FRAME_LOG`: one CSV row per frame.
+    frame_log: Option<trino_platform_pc::FrameLog>,
+    /// `TRINO_DRAW_REPORT`: how many models `TRINO_DRAWS` lists.
+    draw_report: Option<usize>,
+}
+
+/// `TRINO_DRAW_REPORT`'s rows: `1`/`on` → 20, a number → that many,
+/// `0`/`off`/unset → none.
+fn draw_report_rows(value: Option<&str>) -> Option<usize> {
+    match value?.trim() {
+        "" | "0" | "off" => None,
+        "1" | "on" => Some(20),
+        v => v.parse::<usize>().ok().filter(|n| *n > 0),
+    }
 }
 
 impl Host {
+    /// The run's verdict on its frames (`TRINO_FRAME` and the reports
+    /// after it), at the end of a smoke run or at exit when a report was
+    /// asked for.
+    fn print_frame_report(&mut self) {
+        println!("{}", self.meter.line(&self.config.save_name));
+        if let Some(line) = self.meter.spikes_line(5) {
+            println!("{line}");
+        }
+        if let (Some(rows), Some(ctx)) = (self.draw_report, &self.ctx) {
+            for line in ctx.renderer.draw_report_lines(rows) {
+                println!("{line}");
+            }
+        }
+        if let Some(log) = &mut self.frame_log {
+            log.flush();
+        }
+    }
+
     /// Drains the capture queue (before the process exits).
     fn finish_capture(&mut self) {
         if let Some((cfg, mut writer)) = self.capture.take() {
@@ -965,6 +1010,7 @@ impl Host {
             &options,
         ))
         .expect("failed to initialize wgpu renderer");
+        renderer.set_draw_report(self.draw_report.is_some());
         // `TRINO_THREADS` (read by the renderer) beats the project's value.
         if let Some(t) = cfg
             .threads
@@ -1259,7 +1305,12 @@ impl ApplicationHandler for Host {
             return;
         };
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if self.frame_log.is_some() || self.draw_report.is_some() {
+                    self.print_frame_report();
+                }
+                event_loop.exit()
+            }
             WindowEvent::Resized(size) => {
                 ctx.renderer.resize(size.width, size.height);
                 refit(ctx, self.profile);
@@ -1319,6 +1370,7 @@ impl ApplicationHandler for Host {
                     .pump(&mut ctx.renderer, &mut ctx.audio, &mut ctx.platform);
                 zone.end();
                 let zone = trino_core::trace::Zone::begin("update");
+                let t_update = Instant::now();
                 if let Some(net) = &mut ctx.net {
                     // Online (issue #67): the session advances the game;
                     // this machine's devices are its seat.
@@ -1345,10 +1397,13 @@ impl ApplicationHandler for Host {
                     ctx.session.after(ctx.game.as_ref(), &players, dt);
                 }
                 zone.end();
+                let update_us = micros_since(t_update);
                 let zone = trino_core::trace::Zone::begin("render");
+                let t_render = Instant::now();
                 ctx.renderer
                     .apply_access(&trino_core::Platform::access(&ctx.platform));
                 ctx.game.render(&mut ctx.renderer);
+                let render_us = micros_since(t_render);
                 zone.end();
                 if let Some(t) = &mut self.trace {
                     t.frame();
@@ -1415,10 +1470,22 @@ impl ApplicationHandler for Host {
                     ctx.renderer.frame_times().post_passes,
                     ctx.renderer.frame_times().bloom_levels,
                 );
+                let sample = frame_sample(
+                    self.frames,
+                    self.meter.last_frame_us(),
+                    update_us,
+                    render_us,
+                    &ctx.renderer,
+                );
+                self.meter.record_stages(sample);
+                if let Some(log) = &mut self.frame_log {
+                    log.write(&sample);
+                }
                 if let Some(max) = self.smoke_frames
                     && self.frames >= max
                 {
-                    println!("{}", self.meter.line(&self.config.save_name));
+                    self.print_frame_report();
+                    let Some(ctx) = &mut self.ctx else { return };
                     println!("{}", texture_line(&ctx.renderer));
                     println!("{}", audio_line(&ctx.audio));
                     if let Ok(path) = std::env::var("TRINO_SCREENSHOT") {
@@ -1444,9 +1511,53 @@ impl ApplicationHandler for Host {
     }
 }
 
+/// µs since `t0`, saturated.
+fn micros_since(t0: Instant) -> u32 {
+    t0.elapsed().as_micros().min(u32::MAX as u128) as u32
+}
+
+/// One frame's [`FrameSample`](trino_platform_pc::FrameSample): the host's
+/// clocks and the renderer's own (`PcFrameTimes`, the GPU timer, counters).
+fn frame_sample(
+    frame: u64,
+    frame_us: u32,
+    update_us: u32,
+    render_us: u32,
+    renderer: &PcRenderer,
+) -> trino_platform_pc::FrameSample {
+    let times = renderer.frame_times();
+    let stats = trino_core::Renderer::stats(renderer);
+    trino_platform_pc::FrameSample {
+        frame,
+        frame_us,
+        update_us,
+        render_us,
+        tnl_us: times.tnl_us,
+        batch_us: times.batch_us,
+        submit_us: times.submit_us,
+        gpu_us: renderer.gpu_frame_us(),
+        draws: stats.models,
+        tris: stats.tris,
+        cpu_draws: renderer.pc_gpu_rejects().iter().sum(),
+        pipelines: times.pipelines,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `TRINO_DRAW_REPORT` turns the per-model report on with a row count.
+    #[test]
+    fn draw_report_reads_its_switch() {
+        assert_eq!(draw_report_rows(None), None);
+        assert_eq!(draw_report_rows(Some("0")), None);
+        assert_eq!(draw_report_rows(Some("off")), None);
+        assert_eq!(draw_report_rows(Some("1")), Some(20));
+        assert_eq!(draw_report_rows(Some("on")), Some(20));
+        assert_eq!(draw_report_rows(Some("8")), Some(8));
+        assert_eq!(draw_report_rows(Some("lots")), None);
+    }
 
     /// `TRINO_CAPTURE` takes the frames from `TRINO_CAPTURE_FROM`, one in
     /// `TRINO_CAPTURE_EVERY`, numbered in capture order; no directory, no

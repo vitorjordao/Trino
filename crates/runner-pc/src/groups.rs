@@ -272,6 +272,7 @@ impl GroupLoader {
             let key = (Kind::Model, m.id);
             if self.hold(g, key) {
                 let id = m.id;
+                renderer.name_model(ModelId(id), &m.logical);
                 let tmdl = crate::model_for(renderer, m);
                 trino_core::render3d::Mesh::from_tmdl(&tmdl)
                     .map_err(|e| format!("model {id:08x}: {e:?}"))?;

@@ -13,6 +13,7 @@ mod bench;
 mod cpu_tnl;
 mod cvd;
 mod depth_blit;
+mod draw_report;
 mod gpu_timer;
 mod gpu_tnl;
 mod gpu_zones;
@@ -402,6 +403,8 @@ pub struct PcRenderer {
     /// [`PcGpuReject`], of the frame being recorded / the last one.
     pc_gpu_off: [u32; PcGpuReject::COUNT],
     last_pc_gpu_off: [u32; PcGpuReject::COUNT],
+    /// Per model: paths, reasons and CPU time (`TRINO_DRAW_REPORT`).
+    draw_report: draw_report::DrawReport,
     /// CPU time per rendering stage and the GPU work handed over, of the
     /// frame being recorded / the last finished frame ([`PcFrameTimes`]).
     times: PcFrameTimes,
@@ -2310,6 +2313,7 @@ impl PcRenderer {
             n64: N64Split::default(),
             pc_gpu_off: [0; PcGpuReject::COUNT],
             last_pc_gpu_off: [0; PcGpuReject::COUNT],
+            draw_report: draw_report::DrawReport::default(),
             times: PcFrameTimes::default(),
             last_times: PcFrameTimes::default(),
             last_stats: FrameStats::default(),
@@ -4069,6 +4073,25 @@ impl PcRenderer {
         self.last_pc_gpu_off
     }
 
+    /// Count every model's draws from now on: which path, why off the GPU
+    /// path, the CPU path's T&L time (`TRINO_DRAW_REPORT`, the
+    /// [`draw_report_lines`](Self::draw_report_lines)).
+    pub fn set_draw_report(&mut self, on: bool) {
+        self.draw_report.set_on(on);
+    }
+
+    /// The name the draw report gives `model` (the hosts pass the logical
+    /// path at upload).
+    pub fn name_model(&mut self, model: ModelId, name: &str) {
+        self.draw_report.name(model.0, name);
+    }
+
+    /// `TRINO_DRAWS:` lines: a header, then the `top` costliest models per
+    /// frame (CPU T&L time, CPU triangles, GPU triangles).
+    pub fn draw_report_lines(&self, top: usize) -> Vec<String> {
+        self.draw_report.lines(top)
+    }
+
     /// Read the internal framebuffer back as tightly-packed RGBA8.
     /// Test/tooling path — synchronous, not for per-frame use.
     pub fn read_offscreen(&self) -> Vec<u8> {
@@ -4272,8 +4295,12 @@ impl PcRenderer {
         let mut next = jobs.iter();
         for chunk in &chunks {
             let mut at = 0;
-            for &(n, stats) in &chunk.per_job {
+            for (k, &(n, stats)) in chunk.per_job.iter().enumerate() {
                 let Some(job) = next.next() else { break };
+                if !matches!(job.kind, cpu_tnl::JobKind::Ready(_)) {
+                    let ns = chunk.ns.get(k).copied().unwrap_or(0);
+                    self.draw_report.cpu_time(job.model, ns);
+                }
                 let n = n as usize;
                 let before = self.pending_tris.len();
                 self.pending_tris.extend_from_slice(&chunk.tris[at..at + n]);
@@ -5722,6 +5749,8 @@ impl PcRenderer {
             .with_poses(&self.poses)
             .with_pose_cache(self.pose_cache.entries());
         let n = accepted.len() as u32;
+        self.draw_report
+            .gpu(model.0, n, (mesh.index_count / 3) as u32);
         self.frame_stats.models += n;
         self.frame_stats.tnl.instanced += n;
         self.frame_stats.tnl.pc_gpu_draws += n;
@@ -6441,6 +6470,13 @@ impl Renderer for PcRenderer {
             let per_pixel = self.caps.water_tier == WaterTier::PerPixel;
             if native {
                 self.pc_gpu_off[PcGpuReject::Water.index()] += 1;
+                self.draw_report.cpu(
+                    model.0,
+                    1,
+                    1,
+                    (mesh.index_count / 3) as u32,
+                    PcGpuReject::Water,
+                );
                 let job_ctx = push_ctx(&mut self.job_ctxs, ctx);
                 self.cpu_jobs.push(cpu_tnl::CpuJob {
                     kind: cpu_tnl::JobKind::Water {
@@ -6568,10 +6604,14 @@ impl Renderer for PcRenderer {
                 );
                 self.frame_stats.tnl.pc_gpu_draws += 1;
                 self.frame_stats.tnl.pc_gpu_tris += (mesh.index_count / 3) as u32;
+                self.draw_report
+                    .gpu(model.0, 1, (mesh.index_count / 3) as u32);
                 return;
             }
             if let Err(r) = decided {
                 self.pc_gpu_off[r.index()] += 1;
+                self.draw_report
+                    .cpu(model.0, 1, 1, (mesh.index_count / 3) as u32, r);
             }
             self.times.lit_draws += lit as u32;
             let kind = if lit {
@@ -6945,6 +6985,7 @@ impl Renderer for PcRenderer {
             self.main_tris + (self.tri_verts.len() / 3) as u32 + self.frame_stats.tnl.pc_gpu_tris;
         self.last_stats = self.frame_stats;
         self.last_pc_gpu_off = self.pc_gpu_off;
+        self.draw_report.frame();
         let now = self.flash_frames as f32 / 60.0;
         self.flash_frames += 1;
         if self

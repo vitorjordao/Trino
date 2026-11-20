@@ -11,6 +11,13 @@
 //! carries the 1% lows (`low1_us`: the mean of the slowest 1% of frames,
 //! `low1_fps` its rate) and, where the host set one, the quality in effect
 //! (`quality= scale= quality_from= detected= gpu_us=`).
+//!
+//! **Where the frame goes** (hosts that time the game's stages,
+//! [`FrameMeter::record_stages`]): the line adds the frame time's
+//! percentiles and the spike count (`p50_us= p95_us= p99_us= spikes=`), a
+//! `TRINO_SPIKES:` line names the worst frames and the stage that grew in
+//! each ([`FrameMeter::spikes_line`]), and `TRINO_FRAME_LOG=<file.csv>`
+//! writes one row per frame ([`FrameLog`]) for a spreadsheet or a plot.
 
 use web_time::Instant;
 
@@ -49,6 +56,136 @@ pub struct FrameMeter {
     /// levels.
     post_frames: u64,
     bloom_levels: u32,
+    /// Every staged frame ([`FrameMeter::record_stages`]), bounded like
+    /// `samples`.
+    stages: Vec<FrameSample>,
+    last_us: u32,
+}
+
+/// One frame's stages, µs, as a host measured them: what
+/// `TRINO_FRAME_LOG` writes and `TRINO_SPIKES` explains.
+///
+/// `render_us` is the game's whole `render` call, the renderer's
+/// `end_frame` included, so `render_us - tnl_us - batch_us - submit_us` is
+/// the game's own drawing code. `gpu_us` is the last GPU frame time the
+/// timestamp queries returned (a frame or two late).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameSample {
+    pub frame: u64,
+    /// Wall clock since the previous frame (what the player feels).
+    pub frame_us: u32,
+    pub update_us: u32,
+    pub render_us: u32,
+    /// The renderer's CPU T&L, batch (painter sort and expansion) and
+    /// submit (`PcFrameTimes`).
+    pub tnl_us: u32,
+    pub batch_us: u32,
+    pub submit_us: u32,
+    pub gpu_us: u32,
+    pub draws: u32,
+    pub tris: u32,
+    /// Draws off the GPU T&L path (every [`PcGpuReject`]).
+    pub cpu_draws: u32,
+    /// Pipelines compiled inside the frame (hitches).
+    pub pipelines: u32,
+}
+
+/// A spike's stages, in the order `TRINO_SPIKES` names them.
+const STAGES: [&str; 6] = ["update", "render", "tnl", "batch", "submit", "gpu"];
+
+impl FrameSample {
+    /// The CSV header `TRINO_FRAME_LOG` starts with.
+    pub const CSV_HEADER: &'static str = "frame,frame_us,update_us,render_us,tnl_us,batch_us,\
+         submit_us,gpu_us,draws,tris,cpu_draws,pipelines";
+
+    /// The row (no newline).
+    pub fn csv_row(&self) -> String {
+        format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{}",
+            self.frame,
+            self.frame_us,
+            self.update_us,
+            self.render_us,
+            self.tnl_us,
+            self.batch_us,
+            self.submit_us,
+            self.gpu_us,
+            self.draws,
+            self.tris,
+            self.cpu_draws,
+            self.pipelines
+        )
+    }
+
+    /// The stages [`STAGES`] names, µs. `render` is the game's own share
+    /// (the renderer's three stages taken out), so the six don't overlap.
+    fn stages(&self) -> [u32; 6] {
+        let renderer = self.tnl_us + self.batch_us + self.submit_us;
+        [
+            self.update_us,
+            self.render_us.saturating_sub(renderer),
+            self.tnl_us,
+            self.batch_us,
+            self.submit_us,
+            self.gpu_us,
+        ]
+    }
+}
+
+/// `TRINO_FRAME_LOG=<file.csv>`: one [`FrameSample`] row per frame,
+/// written as the game runs (a crash keeps what came before).
+pub struct FrameLog {
+    out: std::io::BufWriter<std::fs::File>,
+}
+
+impl FrameLog {
+    /// The file `TRINO_FRAME_LOG` names, created with its header; `None`
+    /// without the variable (an unwritable path says why on stderr).
+    pub fn from_env() -> Option<FrameLog> {
+        let path = std::env::var_os("TRINO_FRAME_LOG")?;
+        match FrameLog::create(std::path::Path::new(&path)) {
+            Ok(log) => Some(log),
+            Err(e) => {
+                eprintln!("TRINO_FRAME_LOG {}: {e}", path.to_string_lossy());
+                None
+            }
+        }
+    }
+
+    pub fn create(path: &std::path::Path) -> std::io::Result<FrameLog> {
+        use std::io::Write as _;
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+        writeln!(out, "{}", FrameSample::CSV_HEADER)?;
+        Ok(FrameLog { out })
+    }
+
+    pub fn write(&mut self, s: &FrameSample) {
+        use std::io::Write as _;
+        let _ = writeln!(self.out, "{}", s.csv_row());
+    }
+
+    pub fn flush(&mut self) {
+        use std::io::Write as _;
+        let _ = self.out.flush();
+    }
+}
+
+impl Drop for FrameLog {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
+/// The value at quantile `q` (0..=1) of sorted `v` (nearest rank).
+fn quantile(v: &[u32], q: f32) -> u32 {
+    if v.is_empty() {
+        return 0;
+    }
+    let i = ((v.len() as f32 * q).ceil() as usize).clamp(1, v.len()) - 1;
+    v[i]
 }
 
 /// The quality a host reports on the line ([`FrameMeter::set_quality`]).
@@ -90,7 +227,104 @@ impl FrameMeter {
             stereo: trino_core::StereoStats::default(),
             post_frames: 0,
             bloom_levels: 0,
+            stages: Vec::new(),
+            last_us: 0,
         }
+    }
+
+    /// One frame's stages ([`FrameSample`]): the line's percentiles and
+    /// spikes, `TRINO_SPIKES`.
+    pub fn record_stages(&mut self, s: FrameSample) {
+        if self.stages.len() >= Self::MAX_SAMPLES {
+            self.stages.drain(..Self::MAX_SAMPLES / 2);
+        }
+        self.stages.push(s);
+    }
+
+    /// The staged frames' frame times, sorted.
+    fn sorted_frame_us(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.stages.iter().map(|s| s.frame_us).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Whether a frame of `us` is a spike against the median `p50`: half
+    /// again as long **and** 4 ms over (a 60 fps game's 25 ms frame is one;
+    /// a 300 fps game's 5 ms frame is noise, not a stutter).
+    pub fn is_spike(us: u32, p50: u32) -> bool {
+        us as u64 * 2 > p50 as u64 * 3 && us > p50.saturating_add(4_000)
+    }
+
+    /// The staged frames that are spikes ([`Self::is_spike`]), slowest
+    /// first, and the median frame they are judged against.
+    pub fn spikes(&self) -> (Vec<FrameSample>, u32) {
+        let p50 = quantile(&self.sorted_frame_us(), 0.5);
+        let mut out: Vec<FrameSample> = self
+            .stages
+            .iter()
+            .filter(|s| Self::is_spike(s.frame_us, p50))
+            .copied()
+            .collect();
+        out.sort_by(|a, b| b.frame_us.cmp(&a.frame_us).then(a.frame.cmp(&b.frame)));
+        (out, p50)
+    }
+
+    /// `TRINO_SPIKES: count= median_us= worst=` and the `worst` slowest
+    /// frames as `frame:us(cause=stage +us; update=… render=… tnl=… batch=…
+    /// submit=… gpu=… draws=… cpu_draws=… pipes=…)`: the cause is the stage
+    /// that grew most over its own median, so a spike says whether the
+    /// game, the CPU T&L, the sort, the submit or the GPU took the time.
+    /// `None` without staged frames.
+    pub fn spikes_line(&self, worst: usize) -> Option<String> {
+        if self.stages.is_empty() {
+            return None;
+        }
+        let (spikes, p50) = self.spikes();
+        let medians: Vec<u32> = (0..STAGES.len())
+            .map(|i| {
+                let mut v: Vec<u32> = self.stages.iter().map(|s| s.stages()[i]).collect();
+                v.sort_unstable();
+                quantile(&v, 0.5)
+            })
+            .collect();
+        let shown: Vec<String> = spikes
+            .iter()
+            .take(worst)
+            .map(|s| {
+                let st = s.stages();
+                let (cause, over) = st
+                    .iter()
+                    .zip(&medians)
+                    .enumerate()
+                    .map(|(i, (v, m))| (i, v.saturating_sub(*m)))
+                    .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+                    .unwrap_or((0, 0));
+                let parts: Vec<String> = STAGES
+                    .iter()
+                    .zip(st)
+                    .map(|(n, v)| format!("{n}={v}"))
+                    .collect();
+                format!(
+                    "{}:{}(cause={} +{over}; {} draws={} cpu_draws={} pipes={})",
+                    s.frame,
+                    s.frame_us,
+                    STAGES[cause],
+                    parts.join(" "),
+                    s.draws,
+                    s.cpu_draws,
+                    s.pipelines
+                )
+            })
+            .collect();
+        Some(format!(
+            "TRINO_SPIKES: count={} median_us={p50} worst={}",
+            spikes.len(),
+            if shown.is_empty() {
+                "-".to_string()
+            } else {
+                shown.join(",")
+            }
+        ))
     }
 
     /// What the line says about the quality (the host's latest).
@@ -149,11 +383,20 @@ impl FrameMeter {
     /// the wall clock since the previous call.
     pub fn record(&mut self, stats: &FrameStats, off: &[u32; PcGpuReject::COUNT]) {
         let now = Instant::now();
+        self.last_us = 0;
         if let Some(t) = self.last {
-            self.add_time(now.duration_since(t).as_micros() as u64);
+            let us = now.duration_since(t).as_micros() as u64;
+            self.last_us = us.min(u32::MAX as u64) as u32;
+            self.add_time(us);
         }
         self.last = Some(now);
         self.add(stats, off);
+    }
+
+    /// The frame time [`record`](Self::record) last measured, µs (0 for
+    /// the first frame).
+    pub fn last_frame_us(&self) -> u32 {
+        self.last_us
     }
 
     /// [`record`](Self::record) without the clock (tests).
@@ -215,6 +458,19 @@ impl FrameMeter {
         };
         let low1 = self.low1_us();
         let low1_fps = 1_000_000u64.checked_div(low1).unwrap_or(0);
+        let percentiles = match self.stages.is_empty() {
+            true => String::new(),
+            false => {
+                let v = self.sorted_frame_us();
+                format!(
+                    " p50_us={} p95_us={} p99_us={} spikes={}",
+                    quantile(&v, 0.5),
+                    quantile(&v, 0.95),
+                    quantile(&v, 0.99),
+                    self.spikes().0.len()
+                )
+            }
+        };
         let quality = match self.quality {
             None => String::new(),
             Some(q) => format!(
@@ -229,7 +485,7 @@ impl FrameMeter {
         format!(
             "TRINO_FRAME:{scene} profile={profile} avg_us={avg} max_us={} frames={} fps={fps} \
              draws={} tris={} pc_gpu_draws={} pc_gpu_tris={} instanced={} off_pc_gpu={off} {} \
-             low1_us={low1} low1_fps={low1_fps} pipes={}{quality}{stereo}{post}",
+             low1_us={low1} low1_fps={low1_fps} pipes={}{percentiles}{quality}{stereo}{post}",
             self.max_us,
             self.frames,
             per(self.models),
@@ -345,5 +601,88 @@ mod tests {
             line.contains("low1_us=36666 low1_fps=27 pipes=0 quality=medium scale=0.80 quality_from=detected detected=medium gpu_us=12345"),
             "{line}"
         );
+    }
+
+    fn staged(frame: u64, frame_us: u32, tnl_us: u32) -> FrameSample {
+        FrameSample {
+            frame,
+            frame_us,
+            update_us: 500,
+            render_us: 4_000 + tnl_us,
+            tnl_us,
+            batch_us: 1_000,
+            submit_us: 1_500,
+            gpu_us: 6_000,
+            draws: 300,
+            tris: 90_000,
+            cpu_draws: 20,
+            pipelines: 0,
+        }
+    }
+
+    /// Percentiles and spikes come from the staged frames; a spike names
+    /// the stage that grew (here the CPU T&L), the slowest first.
+    #[test]
+    fn spikes_name_the_stage_that_grew() {
+        let mut m = FrameMeter::new(SimProfile::Native);
+        assert_eq!(m.spikes_line(3), None);
+        assert!(!m.line("hub").contains("p50_us"));
+        for i in 0..100 {
+            let s = match i {
+                40 => staged(i, 31_000, 22_000),
+                70 => staged(i, 26_000, 17_000),
+                // 1.5x but under 4 ms over: not a spike at a fast rate.
+                80 => staged(i, 12_000, 3_000),
+                _ => staged(i, 8_000, 1_000),
+            };
+            m.record_stages(s);
+        }
+        let line = m.line("hub");
+        assert!(
+            line.contains(" p50_us=8000 p95_us=8000 p99_us=26000 spikes=2"),
+            "{line}"
+        );
+        let spikes = m.spikes_line(1).unwrap();
+        assert!(
+            spikes.starts_with(
+                "TRINO_SPIKES: count=2 median_us=8000 worst=40:31000(cause=tnl +21000; \
+                 update=500 render=1500 tnl=22000 batch=1000 submit=1500 gpu=6000"
+            ),
+            "{spikes}"
+        );
+        assert!(!spikes.contains("70:"), "{spikes}");
+        assert!(
+            m.spikes_line(5)
+                .unwrap()
+                .contains(",70:26000(cause=tnl +16000")
+        );
+        assert!(FrameMeter::is_spike(25_000, 16_600));
+        assert!(!FrameMeter::is_spike(19_000, 16_600));
+        assert!(!FrameMeter::is_spike(7_000, 3_000));
+    }
+
+    /// `TRINO_FRAME_LOG` writes a header and one row per frame, in the
+    /// header's order.
+    #[test]
+    fn the_frame_log_writes_csv_rows() {
+        let dir = std::env::temp_dir().join(format!("trino-frame-log-{}", std::process::id()));
+        let path = dir.join("frames.csv");
+        {
+            let mut log = FrameLog::create(&path).unwrap();
+            log.write(&staged(7, 9_000, 1_200));
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(',').collect();
+        let row: Vec<&str> = lines.next().unwrap().split(',').collect();
+        assert_eq!(header.len(), row.len());
+        let field = |name: &str| row[header.iter().position(|h| *h == name).unwrap()];
+        assert_eq!(field("frame"), "7");
+        assert_eq!(field("frame_us"), "9000");
+        assert_eq!(field("tnl_us"), "1200");
+        assert_eq!(field("render_us"), "5200");
+        assert_eq!(field("cpu_draws"), "20");
+        assert_eq!(lines.next(), None);
     }
 }

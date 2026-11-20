@@ -8,7 +8,10 @@
 //! calibration unless asked for (`TRINO_QUALITY=auto`).
 //! `TRINO_QUALITY_BENCH=1` (`cargo xtask quality bench`) calibrates, prints
 //! the `TRINO_QUALITY: bench` line and exits before the game's first
-//! frame.
+//! frame. `TRINO_FRAME_LIMIT=vsync|unlimited|<fps>` overrides the frame cap
+//! whatever the preset, the saved file or the game ask for: on a 60 Hz
+//! display VSync hides every frame faster than 16.7 ms, so a measurement of
+//! "does it hold 90 / 144 fps" needs `unlimited`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -43,6 +46,8 @@ pub struct QualityHost {
     msaa_off: bool,
     /// `TRINO_QUALITY_BENCH=1`: calibrate, report, exit.
     bench_only: bool,
+    /// `TRINO_FRAME_LIMIT`: the cap every applied setting gets.
+    limit_override: Option<FrameLimit>,
 }
 
 impl QualityHost {
@@ -87,6 +92,9 @@ impl QualityHost {
             last: None,
             msaa_off: std::env::var("TRINO_MSAA").as_deref() == Ok("0"),
             bench_only,
+            limit_override: frame_limit_override(
+                std::env::var("TRINO_FRAME_LIMIT").ok().as_deref(),
+            ),
         }
     }
 
@@ -119,11 +127,12 @@ impl QualityHost {
         }
         self.publish(renderer, platform);
         println!(
-            "TRINO_QUALITY: preset={} source={} scale={:.2} gpu={} adapter={}",
+            "TRINO_QUALITY: preset={} source={} scale={:.2} gpu={} frame_limit={} adapter={}",
             self.settings.preset.key(),
             self.source.key(),
             renderer.render_scale(),
             renderer.gpu_class().key(),
+            limit_key(self.effective().frame_limit),
             renderer.adapter_info()
         );
     }
@@ -194,11 +203,22 @@ impl QualityHost {
         cal.pick
     }
 
-    fn apply(&mut self, renderer: &mut PcRenderer) {
+    /// The settings with the environment's overrides (`TRINO_MSAA=0`,
+    /// `TRINO_FRAME_LIMIT`): what the renderer and the limiter get. The
+    /// saved file and the game keep seeing the unforced ones.
+    fn effective(&self) -> QualitySettings {
         let mut q = self.settings;
         if self.msaa_off {
             q.msaa = 1;
         }
+        if let Some(l) = self.limit_override {
+            q.frame_limit = l;
+        }
+        q
+    }
+
+    fn apply(&mut self, renderer: &mut PcRenderer) {
+        let q = self.effective();
         renderer.apply_quality(&q);
         self.limiter.set(q.frame_limit);
     }
@@ -223,5 +243,59 @@ impl QualityHost {
             handheld: self.handheld,
             gpu_us: renderer.gpu_frame_us(),
         }));
+    }
+}
+
+/// `TRINO_FRAME_LIMIT`'s value: `vsync`, `unlimited` (or `off`), or a cap
+/// in frames per second (10..=1000); anything else is ignored with a
+/// warning (a typo must not silently measure with VSync).
+pub fn frame_limit_override(value: Option<&str>) -> Option<FrameLimit> {
+    let v = value?.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let parsed = trino_core::quality::parse_frame_limit(v);
+    if parsed.is_none() {
+        eprintln!("TRINO_FRAME_LIMIT={v}: expected vsync, unlimited or 10..1000 (ignored)");
+    }
+    parsed
+}
+
+/// The cap as `TRINO_QUALITY` prints it.
+fn limit_key(l: FrameLimit) -> String {
+    match l {
+        FrameLimit::VSync => "vsync".into(),
+        FrameLimit::Unlimited => "unlimited".into(),
+        FrameLimit::Fps(n) => n.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `TRINO_FRAME_LIMIT` takes the quality file's spellings and refuses
+    /// the rest (a typo never silently keeps VSync).
+    #[test]
+    fn frame_limit_override_reads_the_three_kinds() {
+        assert_eq!(frame_limit_override(None), None);
+        assert_eq!(frame_limit_override(Some("")), None);
+        assert_eq!(frame_limit_override(Some("vsync")), Some(FrameLimit::VSync));
+        assert_eq!(
+            frame_limit_override(Some(" Unlimited ")),
+            Some(FrameLimit::Unlimited)
+        );
+        assert_eq!(
+            frame_limit_override(Some("off")),
+            Some(FrameLimit::Unlimited)
+        );
+        assert_eq!(
+            frame_limit_override(Some("144")),
+            Some(FrameLimit::Fps(144))
+        );
+        assert_eq!(frame_limit_override(Some("5")), None);
+        assert_eq!(frame_limit_override(Some("fast")), None);
+        assert_eq!(limit_key(FrameLimit::Fps(90)), "90");
+        assert_eq!(limit_key(FrameLimit::Unlimited), "unlimited");
     }
 }

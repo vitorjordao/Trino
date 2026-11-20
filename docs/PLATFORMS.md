@@ -190,8 +190,11 @@ achievements and crash reports in the player's data folder). Achievements live i
 **Toolchain:** Docker. `cargo xtask build n64` builds the pinned `trino-n64` image the first
 time (libdragon pinned by commit, about ten minutes), then the C shim, the RSP overlay,
 the assets and the ROM. Only rustc runs on the host, on nightly with `-Zbuild-std`
-(`rustup toolchain install nightly --component rust-src`) against
-`platforms/n64/mips-nintendo64-none.json`. On Windows, Docker must be reachable from WSL2;
+(`rustup toolchain install nightly-2026-11-18 --component rust-src`, then
+`TRINO_NIGHTLY=nightly-2026-11-18` or a project's `[toolchain] nightly`) against
+`platforms/n64/mips-nintendo64-none.json`. Later nightlies (LLVM 23.1.6 on) build an
+o32 ROM with no 64-bit instruction, 15–20% slower a frame: CI pins this one
+([ADR 0002](adr/0002-n64-abi-o32-staticlib.md)). On Windows, Docker must be reachable from WSL2;
 a plain dockerd inside WSL is enough.
 
 **Emulator:** [ares](https://ares-emu.net) v148, found at `$TRINO_ARES` or `ares-v148/` in

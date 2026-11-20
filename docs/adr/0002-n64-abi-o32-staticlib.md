@@ -49,9 +49,29 @@ flag set.
   by review + the comment block at the top of the shim.
 - `f64` and 64-bit integer arguments must never cross the boundary (they are
   where o32 and o64 differ). Inside Rust code they are fine.
+- The rule also binds the runtime helpers gcc's code calls (`__ctzdi2`,
+  `__clzdi2`, ...): Rust's `compiler_builtins` defines them too, weakly and
+  built for o32, so whichever copy the link meets first serves the C callers.
+  nightly-2026-11-19's `__ctzdi2` reads a 64-bit argument from a0:a1 while
+  gcc's o64 caller passes it in a0, and the shim's texture setup crashed. The
+  link therefore pulls libgcc's copies first (`-u __ctzdi2 -u __clzdi2
+  -Wl,-lgcc` ahead of the staticlib), and `check_builtins_callers` (xtask)
+  reads the linker's `--cref` table and fails the build if a C object would
+  call any other `compiler_builtins` function, except those whose arguments
+  o32 and o64 pass alike (one `float`/`double`).
 - If a future binutils hard-errors on the flag mix, the fallback is patching
   `e_flags` of the staticlib members to o64 inside the container (objcopy or
   a 4-byte patch at ELF offset 0x24) before linking.
+- The ROM's speed leans on LLVM using the VR4300's 64-bit registers inside
+  o32 code (64-bit loads/stores for copies and spills, `i64` in one
+  register). LLVM 23.1.6 (nightly-2026-11-19 on) stopped: the same source
+  compiles with no 64-bit instruction at all (about 30 000 in the Rust code
+  before, 71 KB more `.text` after), the football template's simulation
+  takes 75% longer and its match misses the 33.3 ms budget (31 → 36 ms a
+  frame); `+gp64` in the spec changes nothing. CI and the release build
+  therefore pin the console nightly to nightly-2026-11-18
+  (`TRINO_NIGHTLY`, or a project's `[toolchain] nightly`) until the target
+  gets its 64-bit registers back.
 - Nightly + `-Zbuild-std=core,alloc -Zjson-target-spec` are required; the
   JSON spec fields are validated exactly by rustc, so nightly bumps may need
   spec updates (the compiler error names the field and expected value).

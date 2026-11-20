@@ -364,14 +364,12 @@ fn pc_budget_reports_the_gpu_split() {
         .iter()
         .find(|p| p["name"] == "river/piece-0-8")
         .unwrap();
+    // Water is on the GPU path since ADR 0016 §13.
     assert_eq!(
         (&river["path"], &river["reason"]),
-        (&"cpu".into(), &"water surface".into())
+        (&"gpu".into(), &serde_json::Value::Null)
     );
-    assert_eq!(
-        b.path_of("river/piece-0-8"),
-        Some(RenderPath::Cpu("water surface"))
-    );
+    assert_eq!(b.path_of("river/piece-0-8"), Some(RenderPath::Hardware));
     let ground = paths
         .iter()
         .find(|p| p["name"] == "ground/tile-4-2-2")

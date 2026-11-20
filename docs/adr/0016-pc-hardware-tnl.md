@@ -341,7 +341,7 @@ a few blending textures. `Translucent` and `Water` are no longer reasons.
   had aliased into moiré rings, turned to noise by the Fresnel term; the
   far band's mean neighbour step fell from 16.8/255 to 0.02/255
   (`far_water_does_not_shimmer`). This changed the far band of the
-  `water_native` golden (re-blessed).
+  `water_native` and `showcase_river` goldens (re-blessed).
 - WebGL2: the water module is translated with the depth read as a float
   texture like the screen-space water; both new shaders pass the GLSL
   translation test.

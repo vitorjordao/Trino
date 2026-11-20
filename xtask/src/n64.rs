@@ -638,6 +638,18 @@ fn cargo_build(p: &Project) -> Result<(), String> {
 /// ran ~5x slower. Undefining them first makes the first `-lc` scan supply
 /// newlib's; [`check_mem_symbols`] fails the build if the map says
 /// otherwise.
+///
+/// `-u __ctzdi2 -u __clzdi2 -Wl,-lgcc` ahead of the staticlib, for
+/// correctness this time: `compiler_builtins` also defines (weakly) the
+/// libgcc helpers gcc emits for `__builtin_ctz`/`__builtin_clz` on a 64-bit
+/// word, but built for o32, which takes a 64-bit integer in a0:a1, while
+/// the o64 caller passes it whole in a0. Since nightly-2026-11-19 its
+/// `__ctzdi2` really reads a1, so the shim's `trino_log2` returned garbage
+/// (the detail texture's `invalid t shift -35`). Every C call that lands in
+/// `compiler_builtins` must be one o32 and o64 pass alike:
+/// [`check_builtins_callers`] reads the `--cref` table and fails the build
+/// otherwise.
+///
 /// `TRINO_N64_TEXT_PAD=<bytes>`: a layout experiment. Puts that many bytes
 /// of padding in `.text` ahead of all Rust code, so every function moves
 /// while the code stays the same. The N64's 16 KB direct-mapped I-cache
@@ -688,11 +700,12 @@ fn pack_rom(p: &Project) -> Result<(), String> {
          {pad_step}\
          mips64-elf-g++ -o target/n64/{name}.elf /engine/target/n64/{shim} /engine/target/n64/rsp_trino.o {pad_obj} \
          -Wl,-u,memcpy -Wl,-u,memset -Wl,-u,memmove -Wl,-u,memcmp -Wl,-lc \
+         -Wl,-u,__ctzdi2 -Wl,-u,__clzdi2 -Wl,-lgcc \
          {staticlib} {opus_obj} -lc -mabi=o64 -Wl,-g -Wl,-L$N64_INST/mips64-elf/lib \
          -Wl,-ldragon -Wl,-lm -Wl,-ldragonsys -Wl,-Tn64.ld \
          -Wl,--gc-sections -Wl,--no-warn-mismatch \
          -Wl,--wrap -Wl,__do_global_ctors \
-         -Wl,-Map=target/n64/{name}.map\n\
+         -Wl,--cref -Wl,-Map=target/n64/{name}.map\n\
          mips64-elf-size -G target/n64/{name}.elf\n\
          mips64-elf-nm -S -C target/n64/{name}.elf > target/n64/{name}.syms\n\
          cd target/n64\n\
@@ -713,6 +726,7 @@ fn pack_rom(p: &Project) -> Result<(), String> {
     let map =
         std::fs::read_to_string(&map_path).map_err(|e| format!("{}: {e}", map_path.display()))?;
     check_mem_symbols(&map)?;
+    check_builtins_callers(&map)?;
     let syms_path = p.root.join(format!("target/n64/{name}.syms"));
     let syms =
         std::fs::read_to_string(&syms_path).map_err(|e| format!("{}: {e}", syms_path.display()))?;
@@ -803,6 +817,55 @@ fn check_mem_symbols(map: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What C code may take from Rust's `compiler_builtins`: its copies are
+/// built for o32 and C calls them as o64, so only functions whose argument
+/// and result both ABIs pass alike — one `float`/`double` in $f12, the
+/// result in $f0 (`cpu=mips3` gives o32 the same 64-bit FPU registers).
+/// Integers wider than 32 bits, or a second `double` ($f14 in o32, $f13 in
+/// o64), must come from an o64 library (ADR 0002).
+const BUILTINS_SAFE_FOR_C: [&str; 4] = ["ceilf", "floor", "floorf", "sin"];
+
+/// The linker's `--cref` table: no C object (the shim, libdragon, newlib,
+/// opus) may call a function `compiler_builtins` defines, unless it is in
+/// [`BUILTINS_SAFE_FOR_C`] (see [`pack_rom`]). Rust objects are the
+/// staticlib's `*.rcgu.o` members.
+fn check_builtins_callers(map: &str) -> Result<(), String> {
+    let table = map
+        .split_once("Cross Reference Table")
+        .map(|(_, t)| t)
+        .ok_or("the linker map has no cross reference table (link with -Wl,--cref)")?;
+    let mut bad = Vec::new();
+    let mut entry: Option<(&str, bool)> = None; // (symbol, defined by compiler_builtins)
+    for line in table.lines() {
+        if line.trim().is_empty() || line.starts_with("Symbol ") {
+            continue;
+        }
+        if !line.starts_with(' ') {
+            // `symbol file`: the defining file, last (demangled names have spaces).
+            let (sym, file) = line.trim_end().rsplit_once(' ').unwrap_or((line, ""));
+            entry = Some((sym.trim_end(), file.contains("(compiler_builtins")));
+            continue;
+        }
+        // An indented line: a file that references the entry's symbol.
+        let caller = line.trim();
+        let Some((sym, true)) = entry else { continue };
+        if !caller.ends_with(".rcgu.o)") && !BUILTINS_SAFE_FOR_C.contains(&sym) {
+            let short = caller.rsplit('/').next().unwrap_or(caller);
+            bad.push(format!("{sym} (called from {short})"));
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "C code calls o32 copies from Rust's compiler_builtins: {}. o64 passes 64-bit \
+         integers and a second double differently, so the result is garbage — put \
+         `-Wl,-u,<symbol>` ahead of the staticlib with its o64 library (-lgcc, -lc, -lm), \
+         or list it in BUILTINS_SAFE_FOR_C if o32 and o64 pass its arguments alike",
+        bad.join(", ")
+    ))
 }
 
 pub fn build(p: &Project, test_mode: bool) -> ExitCode {
@@ -1659,5 +1722,41 @@ mod tests {
         let wrapped = "Linker script and memory map\n .text.memmove\n                \
                        0x80023000       0x40 libtrino.a(compiler_builtins-9.o)\n";
         assert!(check_mem_symbols(wrapped).unwrap_err().contains("memmove"));
+    }
+
+    /// A `--cref` table as GNU ld writes it (defining file first, callers
+    /// indented below; demangled names keep their spaces).
+    fn cref(rows: &str) -> String {
+        format!("Linker script and memory map\n\nCross Reference Table\n\nSymbol      File\n{rows}")
+    }
+
+    #[test]
+    fn c_never_calls_o32_integer_helpers_from_compiler_builtins() {
+        let cb = "libtrino.a(compiler_builtins-92e4.compiler_builtins.980c-cgu.15.rcgu.o)";
+        let rust = "libtrino.a(trino_app-3d9c.trino_core.2463-cgu.06.rcgu.o.rcgu.o)";
+        let gcc = "/opt/libdragon/lib/gcc/mips64-elf/16.2.0/libgcc.a(_ctzdi2.o)";
+        let lib = "/opt/libdragon/mips64-elf/lib/libdragon.a";
+        // The nightly-2026-11-19 failure: the shim's __builtin_ctz → o32 __ctzdi2.
+        let bad = cref(&format!(
+            "__ctzdi2 {cb}\n          /engine/target/n64/shim.o\n\
+             __clzdi2 {cb}\n          {lib}(libopus.o)\n"
+        ));
+        let err = check_builtins_callers(&bad).unwrap_err();
+        assert!(err.contains("__ctzdi2 (called from shim.o)"), "{err}");
+        assert!(
+            err.contains("__clzdi2 (called from libdragon.a(libopus.o))"),
+            "{err}"
+        );
+        // libgcc's o64 copy wins; Rust calling compiler_builtins is its own ABI;
+        // a one-float function is safe; long demangled names stay one entry.
+        let good = cref(&format!(
+            "__ctzdi2 {gcc}\n          /engine/target/n64/shim.o\n\
+             __divdi3 {cb}\n          {rust}\n\
+             floorf {cb}\n          {lib}(rdpq_tri.o)\n\
+             <&&str as core::fmt::Display>::fmt {rust}\n          {rust}\n"
+        ));
+        assert!(check_builtins_callers(&good).is_ok());
+        // A link without --cref is an error, not a silent pass.
+        assert!(check_builtins_callers("Linker script and memory map\n").is_err());
     }
 }

@@ -201,6 +201,15 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   paths), and give the consoles a Baked tier (bake-time data plus a cheap run-time
   stand-in, `Glow`) checked by the same self-test step on every target, with mutations
   for each tier's half (no LUT, an ungraded mesh, no halo sprite).
+- **A per-frame effect a game drives from gameplay** (the speed blur, ADR 0033 §7) gets
+  its own defaulted `Renderer` method cleared at `begin_frame`, not a field in a struct
+  scenes author (`PostSettings` is in scene RON, codegen, the inspector and every game's
+  literals). Put it in an existing full-screen pass rather than a new full-size target
+  (an iGPU pays a full-size target like the scene); a long blur is two steps, a
+  half-size gather of the longest sub-streak then a few taps of it, held to a one-pass
+  CPU reference over a whole frame (`speed_blur_streaks_toward_the_center_like_the_cpu_reference`,
+  with a mirrored-center reference that must miss). Measure its cost with the post
+  bench's paired blocks (`post_bench::speed_blur_cost_and_shots`).
 
 - **A feature whose output is a value the backends already consume needs no backend
   code** (issue #65, ADR 0034): an animation graph hands them an `AnimRef`, foot IK rides

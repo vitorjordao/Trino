@@ -248,7 +248,10 @@ bloom (a dual-filter chain) and one composite write the picture the HUD draws on
 grades the colors of the assets that name a LUT (`grading`) and a scene's environment
 (`bake_grading`), and `Glow` billboards stand in for bloom. The CPU math in
 `trino_core::post` is the shader's reference. The same CVD pass also draws the players'
-daltonization filter (`AccessSettings::cvd_filter`). Details in
+daltonization filter (`AccessSettings::cvd_filter`). `Renderer::set_speed_blur` (also
+cleared at `begin_frame`) adds a radial speed blur to the same composite on the Full tier:
+streaks toward a center past an inner radius, gathered at half size and read along the
+streak, with no full-size target; the Baked tier ignores it. Details in
 [ADR 0033](adr/0033-post-processing-stack.md).
 
 ### Animation: graphs, events, root motion, compression, foot IK (issue #65)

@@ -1,10 +1,11 @@
 # ADR 0033: Post-processing per tier, and the daltonization filter
 
-Status: accepted (October 2026, GitHub #64). Implemented in `trino-core`
-(`post`, `Caps::post_tier`, `Renderer::set_post`, `access::color::correction`,
+Status: accepted (October 2026, GitHub #64; the speed blur, §7, November
+2026). Implemented in `trino-core` (`post`, `Caps::post_tier`,
+`Renderer::set_post`, `Renderer::set_speed_blur`, `access::color::correction`,
 `AccessSettings::cvd_filter`, `SceneNode`/`Entity::glow`, TSCN v6),
-`trino-render-wgpu` (the HDR scene, bloom, the composite, the correction
-filter), `trino-asset-pipeline` (`[luts.*]`, `grading`, `bake_grading`, graded
+`trino-render-wgpu` (the HDR scene, bloom, the composite, the speed blur, the
+correction filter), `trino-asset-pipeline` (`[luts.*]`, `grading`, `bake_grading`, graded
 twins), `trino-scene` (`environment.post`, the `glow` component, codegen), the
 PC/Web hosts, the editor, xtask and castle64's self-test.
 
@@ -127,6 +128,54 @@ semantic palettes for `cvd` would be corrected twice. Hosts call
 `PcRenderer::apply_access` every frame. Grays stay gray; `Off` and `Grayscale`
 draw nothing; confused pairs end farther apart to their viewer (≥ 1.3× ΔE).
 
+### 7. Speed blur (November 2026)
+
+A racing game's feel of speed (Burnout's boost, Mario Kart 8's top speed): the
+3D past an inner radius smeared along the line to a vanishing point.
+
+- **API:** `trino_core::post::SpeedBlur { center, strength, inner_radius,
+  feather }` through its own `Renderer::set_speed_blur(Option<&SpeedBlur>)` (a
+  default no-op, cleared at `begin_frame`), not a `PostSettings` field. A game
+  drives it every frame from its speed, while `PostSettings` is a scene's look
+  (scene RON, codegen, the editor's inspector, 27 struct literals in this
+  repository and more in games): the separate method is additive and follows
+  `set_ambient_occlusion`/`set_shadows`. No `GAME_API_VERSION` bump.
+- **Units:** `center` in the 3D's screen UVs (y down); `strength` the streak's
+  length as a fraction of the pixel's distance to the center (0..=1; 0 is off);
+  `inner_radius` and `feather` in the vignette's measure (0 at the center, 1 in
+  a corner). `clamped()` fixes NaN and ranges; a strength of 0 keeps nothing, so
+  nothing runs and the frame is byte for byte the one without the call.
+- **Where:** in the composite, in linear light after exposure and before the
+  tonemap, the LUT, vignette and grain; the bloom is added unblurred. The HUD
+  after the last 3D draw is untouched. Without `set_post` the stack runs with
+  `PostSettings::DEFAULT`; the `off` post level drops it like the vignette; the
+  bloom view and the Baked tier never draw it.
+- **How:** two steps, no full-size target (on the integrated GPUs games target,
+  an extra full-size target costs as much as the scene). A gather at half the
+  picture's size takes `GATHER_TAPS` (12) jittered taps over the first
+  `1/COMPOSITE_TAPS` of a full-strength streak from each pixel; the composite
+  reads it `COMPOSITE_TAPS` (8) times along the pixel's own streak. The feather
+  grows the streak's length, not its opacity: only streaks under `FADE_PIXELS`
+  (4) fade in from the sharp pixel, which hides the half-size gather's softness.
+  Taps are spaced geometrically
+  (`center + (uv - center) * reach^t`), so the two steps tile a streak exactly:
+  96 samples for 20 taps. Light is averaged as the square of the display value
+  (gamma 2: one multiply a tap instead of three `pow`, within a few levels of
+  the sRGB blend), and the gather stores the square root (an 8-bit chain, WebGL2
+  without float targets, keeps the darks). Inside the inner radius the
+  composite runs the old code; where the blur covers the pixel fully it skips
+  the sharp pixel's tonemap and sharpening.
+- **Two traps:** the gather first used each pixel's own weight. In the feather
+  the sub-streaks of the pixels farther out were then too short and left gaps:
+  eight stepped copies at strength 0.8. Full strength everywhere overlaps them a
+  little instead. And the composite first cross-faded the sharp and the blurred
+  picture by the weight: through the feather every edge showed twice, a sharp
+  ghost over its blur. The weight now only sets the streak's length.
+- **Reference:** `SpeedBlur::gather` (one pass, any number of taps) and
+  `SpeedBlur::mix`. The GPU frame is held to it over a whole frame (mean under
+  1.5 levels, under 2% of pixels past 24; measured 0.5–0.8 and 0.5% on RADV and
+  lavapipe), and the CPU reference with a mirrored center must miss.
+
 ## Measurements
 
 castle64's hub with the runner's 4× MSAA and its SSAO, `PostSettings::FILMIC` with the `dusk`
@@ -144,6 +193,24 @@ wall-clock frame including update and `wait_gpu`, two runs):
 
 Most of the Off level's cost is the half-float multisampled scene (twice the bytes per sample),
 not the composite.
+
+The speed blur (§7) on the same hub, `FILMIC` + `dusk`, 4× MSAA, the dynamic resolution pinned
+at 1 so the renderer times each frame on the GPU (timestamp queries), center (0.5, 0.45), 40 pairs
+of 10-frame blocks, the median of the paired differences
+(`post_bench.rs::speed_blur_cost_and_shots`; a shared machine, load 5–10):
+
+| Size | `post` level | GPU frame with post | Δ GPU, strength 0.3 | Δ GPU, strength 0.8 |
+|---|---|---|---|---|
+| 1920×1080 | Low | 12.6–12.8 ms | +1.5 ms | +2.3 ms |
+| 1920×1080 | High | 15.4–16.6 ms | +1.6 ms | +1.8 ms |
+| 3840×2160 | Low | 54–56 ms | +8.3 ms | +11.2 ms |
+| 3840×2160 | High | 52–56 ms | +7.9 ms | +9.5 ms |
+
+Seven more 1080p High runs gave +1.5 to +2.1 ms, up to +3.4 while other builds loaded the
+machine. The taps are not the cost: 1 gather tap instead of 12, no jitter, or a quarter-size
+gather all measured within the noise of the full pass, while skipping the gather's draw took
+about 0.9 ms off. On this iGPU, which shares its memory with the CPU, the cost is one more read
+of the half-float scene and the composite's reads of the gather, not arithmetic.
 
 ## Deviations from the issue
 

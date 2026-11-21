@@ -732,18 +732,23 @@ pub fn estimate<'m>(
             {
                 Ok(()) => {
                     let texture = mesh.texture_for(&item.params).map_or(0, |t| t.0);
-                    web_call(if per_pixel { WEB_LIT } else { WEB_GPU }, id.0, texture);
+                    // Water takes its own pipelines and bind group (the
+                    // water sets, the depth copy).
+                    let pipe = if item.params.water.is_some() {
+                        WEB_WATER
+                    } else if per_pixel {
+                        WEB_LIT
+                    } else {
+                        WEB_GPU
+                    };
+                    web_call(pipe, id.0, texture);
                     b.pc_gpu_draws += 1;
                     b.pc_gpu_tris += (mesh.index_count / 3) as u32;
                     b.paths.push(path(item, RenderPath::Hardware));
                 }
                 Err(r) => {
                     let texture = mesh.texture_for(&item.params).map_or(0, |t| t.0);
-                    let pipe = match r {
-                        PcGpuReject::Water => WEB_WATER,
-                        _ => WEB_TRIS,
-                    };
-                    web_call(pipe, 0, texture);
+                    web_call(WEB_TRIS, 0, texture);
                     b.cpu_draws += 1;
                     b.cpu_tnl.add(&stats);
                     count(&mut pc_reasons, r);

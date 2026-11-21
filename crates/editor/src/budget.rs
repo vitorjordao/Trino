@@ -611,8 +611,8 @@ mod tests {
             pc_gpu_draws: 3,
             pc_gpu_tris: 240,
             off_pc_gpu: vec![
-                (trino_core::PcGpuReject::Translucent, 1),
-                (trino_core::PcGpuReject::Water, 1),
+                (trino_core::PcGpuReject::TextureAlpha, 1),
+                (trino_core::PcGpuReject::Offscreen, 1),
             ],
             target: Target::Pc,
             ..Default::default()
@@ -633,7 +633,7 @@ mod tests {
         assert!(text[0].starts_with("N64 ≈"), "{text:?}");
         assert_eq!(text[1], "RSP 2/5 draws · 2 fog needing splits");
         assert_eq!(text[2], "3DS 2 tris · GPU 4/5 draws · 1 flat shading");
-        assert_eq!(text[3], "PC GPU 3/5 draws · 240 tris · 1 translucent");
+        assert_eq!(text[3], "PC GPU 3/5 draws · 240 tris · 1 texture alpha");
         assert_eq!(text[4], "Web 4 calls · 2 pipelines · 3 switches");
         assert_eq!(lines[5], ("1 draws sent but unseen".into(), Level::Near));
         // Past a phone's budget the Web warns.

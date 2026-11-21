@@ -830,13 +830,21 @@ pub(crate) fn depth_sample_type(webgl2: bool) -> wgpu::TextureSampleType {
     }
 }
 
+/// The scene module's source: `shaders.wgsl` and the per-pixel water it
+/// shares with the GPU T&L path's water pipelines (`water.wgsl`).
+pub(crate) const SCENE_WGSL: &str =
+    concat!(include_str!("shaders.wgsl"), include_str!("water.wgsl"));
+
 /// The group 3 layout of the water pipelines: the sets and the scene's
-/// depth copy (multisampled with MSAA on).
+/// depth copy (multisampled with MSAA on). The GPU T&L path's water
+/// pipelines (`gpu_tnl::pipelines`) build an equal one.
 fn water_bgl(device: &wgpu::Device, multisampled: bool, webgl2: bool) -> wgpu::BindGroupLayout {
     let mut entries = vec![
+        // The sets: the GPU T&L path's water displaces its vertices from
+        // them too.
         wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -997,8 +1005,7 @@ impl WaterGpu {
         device: &wgpu::Device,
         groups: &[wgpu::BindGroupLayout; 3],
     ) -> (wgpu::BindGroupLayout, [wgpu::RenderPipeline; 2]) {
-        let source = include_str!("shaders.wgsl")
-            .replace("texture_depth_2d", "texture_depth_multisampled_2d");
+        let source = SCENE_WGSL.replace("texture_depth_2d", "texture_depth_multisampled_2d");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("trino-shaders-ms-water"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -1238,6 +1245,47 @@ fn lit_attributes() -> Vec<wgpu::VertexAttribute> {
 /// and stay opaque unless their tint blends.
 fn blends(tri: &ScreenTri, tex: Option<TexKey>, alpha_texture: impl Fn(u32) -> bool) -> bool {
     tri.colors.iter().any(|c| c.a < 255) || tex.is_some_and(|t| !t.clamp && alpha_texture(t.id))
+}
+
+/// A stretch of [`merge_back_to_front`]'s stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BlendRun {
+    /// CPU triangles (indices into its `cpu` slice).
+    Cpu(std::ops::Range<usize>),
+    /// GPU copies (indices into its `gpu` slice).
+    Gpu(std::ops::Range<usize>),
+}
+
+/// The batch's blended work in one back-to-front stream: `cpu` (the CPU
+/// path's blended triangles, `(group, painter key)` sorted) and `gpu` (the
+/// GPU path's translucent copies, `(painter key, draw)` sorted), both
+/// keyed by [`trino_core::render3d::painter_key`] (view depth, farther
+/// first). A triangle as far as a copy goes first.
+fn merge_back_to_front(cpu: &[(u64, u64)], gpu: &[(u64, u32)]) -> Vec<BlendRun> {
+    let depth = |key: u64| key >> 32;
+    let (mut c, mut g) = (0, 0);
+    let mut runs = Vec::new();
+    while c < cpu.len() || g < gpu.len() {
+        let next_gpu = gpu.get(g).map(|&(k, _)| depth(k));
+        let end = c + cpu[c..]
+            .iter()
+            .take_while(|&&(_, k)| next_gpu.is_none_or(|n| depth(k) <= n))
+            .count();
+        if end > c {
+            runs.push(BlendRun::Cpu(c..end));
+            c = end;
+        }
+        let next_cpu = cpu.get(c).map(|&(_, k)| depth(k));
+        let end = g + gpu[g..]
+            .iter()
+            .take_while(|&&(k, _)| next_cpu.is_none_or(|n| depth(k) < n))
+            .count();
+        if end > g {
+            runs.push(BlendRun::Gpu(g..end));
+            g = end;
+        }
+    }
+    runs
 }
 
 /// The batch's sort keys, `(group, painter key)` ascending:
@@ -2035,7 +2083,7 @@ impl PcRenderer {
             ..Default::default()
         });
 
-        let source = include_str!("shaders.wgsl");
+        let source = SCENE_WGSL;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shaders.wgsl"),
             source: wgpu::ShaderSource::Wgsl(if limits.webgl2 {
@@ -2658,6 +2706,7 @@ impl PcRenderer {
             gpu_tnl::GpuTnl::new(
                 &self.device,
                 [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+                self.webgl2,
             )
         });
         if samples > 1 {
@@ -4376,9 +4425,12 @@ impl PcRenderer {
     /// grouping the N64 needs to load TMEM once per texture.
     ///
     /// The native profile's batch also holds its CPU draws as jobs (run
-    /// here, [`cpu_tnl`]) and its GPU T&L draws, which become instanced
-    /// draw calls ahead of the CPU triangles: opaque and depth-tested, they
-    /// need no painter order.
+    /// here, [`cpu_tnl`]) and its GPU T&L draws. The opaque ones become
+    /// instanced draw calls ahead of the CPU triangles: depth-tested and
+    /// written, they need no painter order. The translucent ones (each copy
+    /// its own item) are merged back to front with the CPU path's blended
+    /// triangles, and the water surfaces go last, after the CPU path's
+    /// (ADR 0016 §13).
     fn flush_model_batch(&mut self) {
         let gpu = self.gpu.as_ref().is_some_and(|g| g.has_pending());
         if self.pending_tris.is_empty()
@@ -4391,17 +4443,38 @@ impl PcRenderer {
         trino_core::zone!("batch");
         self.run_cpu_jobs();
         let t0 = Instant::now();
-        if let Some(g) = self.gpu.as_mut().filter(|g| g.has_pending()) {
-            let r = g.flush_batch();
+        if let Some(g) = self.gpu.as_mut().filter(|g| g.has_opaque()) {
+            let r = g.flush_opaque();
             self.commands.push(Cmd::Meshes {
                 first: r.start,
                 count: r.end - r.start,
+                water: false,
             });
         }
-        if !self.pending_tris.is_empty() || !self.pending_shadow.is_empty() {
+        let sorted = self.gpu.as_ref().is_some_and(|g| g.has_sorted());
+        if !self.pending_tris.is_empty() || !self.pending_shadow.is_empty() || sorted {
             self.flush_model_batch_now();
         }
+        if let Some(g) = self.gpu.as_mut() {
+            g.end_batch();
+        }
         self.times.batch_us += micros(t0);
+    }
+
+    /// The GPU path's draws `ids` (sorted) as draw calls, in order
+    /// (`water`: water surfaces).
+    fn push_gpu_runs(&mut self, ids: &[u32], water: bool) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(g) = self.gpu.as_mut() {
+            let r = g.emit(ids);
+            self.commands.push(Cmd::Meshes {
+                first: r.start,
+                count: r.end - r.start,
+                water,
+            });
+        }
     }
 
     /// Tessellate the batch's CPU jobs (over the workers when there is
@@ -4483,9 +4556,36 @@ impl PcRenderer {
             .iter()
             .position(|&(k, _)| k >> 62 != 0)
             .unwrap_or(keys.len());
+        let water_at = keys
+            .iter()
+            .position(|&(k, _)| k >> 63 != 0)
+            .unwrap_or(keys.len());
         self.push_tri_runs(&order[..blend_at]);
         self.push_shadow_runs();
-        self.push_tri_runs(&order[blend_at..]);
+        // The blended triangles and the GPU path's translucent copies, back
+        // to front: one stream, cut wherever the other is farther.
+        let (gpu_blend, gpu_water) = match &self.gpu {
+            Some(g) => (
+                g.sorted(gpu_tnl::MeshPass::Blend),
+                g.sorted(gpu_tnl::MeshPass::Water),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        for run in merge_back_to_front(&keys[blend_at..water_at], &gpu_blend) {
+            match run {
+                BlendRun::Cpu(r) => {
+                    self.push_tri_runs(&order[blend_at + r.start..blend_at + r.end])
+                }
+                BlendRun::Gpu(r) => {
+                    let ids: Vec<u32> = gpu_blend[r].iter().map(|&(_, i)| i).collect();
+                    self.push_gpu_runs(&ids, false);
+                }
+            }
+        }
+        // The water: the CPU path's, then the GPU path's, far to near.
+        self.push_tri_runs(&order[water_at..]);
+        let ids: Vec<u32> = gpu_water.iter().map(|&(_, i)| i).collect();
+        self.push_gpu_runs(&ids, true);
         self.pending_tris.clear();
         self.pending_tex.clear();
         self.pending_surf.clear();
@@ -5081,7 +5181,7 @@ impl PcRenderer {
                 Segment::Tris {
                     texture: Some(t), ..
                 } => textures.push(*t),
-                Segment::Meshes { first, count } => {
+                Segment::Meshes { first, count, .. } => {
                     if let Some(g) = &self.gpu {
                         textures.extend(
                             g.batches(*first..first + count)
@@ -5141,7 +5241,7 @@ impl PcRenderer {
             Segment::Tris { kind, .. } => {
                 matches!(kind, TriKind::Lit | TriKind::LitBlend | TriKind::Water)
             }
-            Segment::Meshes { first, count } => gpu_lit(*first, *count),
+            Segment::Meshes { first, count, .. } => gpu_lit(*first, *count),
             Segment::Sprites { .. } => false,
         }) {
             let lights = self.light_sets.bytes();
@@ -5156,7 +5256,7 @@ impl PcRenderer {
                 Segment::Tris {
                     kind: TriKind::Water,
                     ..
-                }
+                } | Segment::Meshes { water: true, .. }
             )
         });
         if first_water.is_some() {
@@ -5840,10 +5940,16 @@ impl PcRenderer {
                     pass.draw(*first..*first + *count, 0..1);
                     draws += 1;
                 }
-                Segment::Meshes { first, count } => {
+                Segment::Meshes { first, count, .. } => {
                     if let Some(g) = &self.gpu {
                         let texture = |t: Option<TexKey>| {
                             t.and_then(|t| self.tex3d.get(&t)).unwrap_or(&self.white_bg)
+                        };
+                        // The water sets and the depth copy of this pass's
+                        // sample count (the screen-space water's).
+                        let water_bg = match (&self.water.ms, ms.is_some()) {
+                            (Some(w), true) => &w.bg,
+                            _ => &self.water.bg,
                         };
                         bind(5);
                         draws += g.record(
@@ -5853,6 +5959,7 @@ impl PcRenderer {
                             hdr,
                             &texture,
                             &self.lights_bg,
+                            water_bg,
                         );
                     }
                 }
@@ -5918,6 +6025,7 @@ impl PcRenderer {
             gpu_tnl::GpuTnl::new(
                 &self.device,
                 [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+                self.webgl2,
             )
         });
         if !gpu.has_mesh(model.0) {
@@ -5940,6 +6048,11 @@ impl PcRenderer {
                 texture: accepted[0].1,
                 lit: accepted[0].2,
                 cutout,
+                pass: if accepted[0].3 {
+                    gpu_tnl::MeshPass::Blend
+                } else {
+                    gpu_tnl::MeshPass::Opaque
+                },
             },
             &insts,
         );
@@ -6103,10 +6216,9 @@ fn push_ctx(ctxs: &mut Vec<TnlContext>, ctx: TnlContext) -> u32 {
     ctxs.len() as u32 - 1
 }
 
-/// A copy the GPU T&L path accepted, with its texture state.
-/// A copy the GPU path accepted: its instance, texture and whether it is
-/// shaded per pixel.
-type GpuInstanceOf = (gpu_tnl::GpuInstance, Option<TexKey>, bool);
+/// A copy the GPU path accepted: its instance, texture, whether it is
+/// shaded per pixel and whether it blends.
+type GpuInstanceOf = (gpu_tnl::GpuInstance, Option<TexKey>, bool, bool);
 
 /// [`PcRenderer::n64_estimate`]: the frame's 3D on the N64.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -6597,6 +6709,7 @@ impl Renderer for PcRenderer {
                 water: w,
                 state: self.water_state,
                 gloss: params.gloss,
+                emissive: params.emissive,
                 detail_scale: match (texture, params.detail) {
                     (Some(_), Some(d)) if self.sprites.contains_key(&d.sprite.0) => d.scale(),
                     _ => 0.0,
@@ -6606,15 +6719,66 @@ impl Renderer for PcRenderer {
             });
             let gloss = params.gloss as f32 / 255.0;
             let per_pixel = self.caps.water_tier == WaterTier::PerPixel;
-            if native {
-                self.pc_gpu_off[PcGpuReject::Water.index()] += 1;
-                self.draw_report.cpu(
-                    model.0,
-                    1,
-                    1,
-                    (mesh.index_count / 3) as u32,
-                    PcGpuReject::Water,
+            if native && trino_core::render3d::pc_offscreen(&ctx, &mesh, matrix) {
+                // Wholly outside the view, as for any draw.
+                self.pc_gpu_off[PcGpuReject::Offscreen.index()] += 1;
+                self.draw_report
+                    .cpu(model.0, 1, 1, 0, PcGpuReject::Offscreen);
+                return;
+            }
+            let decided = if native {
+                pc_gpu_decide((&ctx, &mesh, matrix, params), false, self.gpu_tnl_active())
+            } else {
+                Err(PcGpuReject::Disabled)
+            };
+            if native && decided.is_ok() {
+                // The GPU path (ADR 0016 §13): the vertex stage displaces
+                // the mesh from the same water set, the CPU path's per-pixel
+                // water shades it, last in the batch.
+                let detail = detail_scale(&self.sprites, texture, params);
+                let inst = gpu_tnl::water_instance(
+                    gpu_tnl::instance(&ctx, &mesh, matrix, params, false, detail, None),
+                    set,
                 );
+                let _pipes = pipes::scope(&self.pipe_entry);
+                let gpu = self.gpu.get_or_insert_with(|| {
+                    gpu_tnl::GpuTnl::new(
+                        &self.device,
+                        [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+                        self.webgl2,
+                    )
+                });
+                if !gpu.has_mesh(model.0) {
+                    gpu.upload_mesh(&self.device, &self.queue, model.0, &mesh);
+                }
+                if self.msaa > 1 {
+                    gpu.ensure_ms(&self.device, self.msaa);
+                }
+                gpu.draw(
+                    &ctx,
+                    gpu_tnl::DrawKey {
+                        model: model.0,
+                        mesh: &mesh,
+                        params,
+                        texture: texkey,
+                        lit: false,
+                        cutout: false,
+                        pass: gpu_tnl::MeshPass::Water,
+                    },
+                    &[inst],
+                );
+                self.frame_stats.tnl.pc_gpu_draws += 1;
+                self.frame_stats.tnl.pc_gpu_tris += (mesh.index_count / 3) as u32;
+                self.draw_report
+                    .gpu(model.0, 1, (mesh.index_count / 3) as u32);
+                return;
+            }
+            if native {
+                if let Err(r) = decided {
+                    self.pc_gpu_off[r.index()] += 1;
+                    self.draw_report
+                        .cpu(model.0, 1, 1, (mesh.index_count / 3) as u32, r);
+                }
                 let job_ctx = push_ctx(&mut self.job_ctxs, ctx);
                 self.cpu_jobs.push(cpu_tnl::CpuJob {
                     kind: cpu_tnl::JobKind::Water {
@@ -6746,6 +6910,7 @@ impl Renderer for PcRenderer {
                     gpu_tnl::GpuTnl::new(
                         &self.device,
                         [&self.globals_bgl, &self.tex3d_bgl, &self.water.groups[2]],
+                        self.webgl2,
                     )
                 });
                 if !gpu.has_mesh(model.0) {
@@ -6754,6 +6919,10 @@ impl Renderer for PcRenderer {
                 if self.msaa > 1 {
                     gpu.ensure_ms(&self.device, self.msaa);
                 }
+                // A translucent draw blends after the batch's opaque ones,
+                // sorted back to front with the CPU path's blended
+                // triangles (it was a CPU reason until ADR 0016 §13).
+                let blend = trino_core::render3d::pc_translucent(&mesh, params);
                 gpu.draw(
                     &ctx,
                     gpu_tnl::DrawKey {
@@ -6763,6 +6932,11 @@ impl Renderer for PcRenderer {
                         texture: texkey,
                         lit,
                         cutout,
+                        pass: if blend {
+                            gpu_tnl::MeshPass::Blend
+                        } else {
+                            gpu_tnl::MeshPass::Opaque
+                        },
                     },
                     &[inst],
                 );
@@ -6959,6 +7133,7 @@ impl Renderer for PcRenderer {
                         gpu_tnl::instance(&ctx, &mesh, &i.matrix, &p, affine, detail, lit_draw),
                         texture.map(|t| TexKey::model(t.0, &p, self.tex_filter)),
                         lit,
+                        trino_core::render3d::pc_translucent(&mesh, &p),
                     ));
                 } else {
                     rest.push((i.matrix, p));
@@ -6968,13 +7143,16 @@ impl Renderer for PcRenderer {
         for m in &cast {
             self.cast_shadow(model, m, params);
         }
-        // The plain copies and the lit ones take different pipelines: one
-        // instanced call each.
-        let (lit, plain): (Vec<GpuInstanceOf>, Vec<GpuInstanceOf>) =
-            accepted.into_iter().partition(|a| a.2);
-        for group in [plain, lit] {
+        // The plain copies and the lit ones take different pipelines, and
+        // the translucent ones another pass (each copy sorted on its own):
+        // one call each.
+        let mut groups: [Vec<GpuInstanceOf>; 4] = Default::default();
+        for a in accepted {
+            groups[a.2 as usize + 2 * a.3 as usize].push(a);
+        }
+        for group in &groups {
             if !group.is_empty() {
-                self.draw_gpu_instances(model, params, &group);
+                self.draw_gpu_instances(model, params, group);
             }
         }
         for (m, p) in rest {
@@ -7695,9 +7873,10 @@ mod webgl2_tests {
     #[test]
     fn webgl2_shaders_translate_to_glsl_es_300() {
         for (name, source) in [
-            ("shaders.wgsl", include_str!("shaders.wgsl")),
+            ("shaders.wgsl", SCENE_WGSL),
             ("ao.wgsl", include_str!("ao.wgsl")),
-            ("shaders_tnl.wgsl", include_str!("shaders_tnl.wgsl")),
+            ("shaders_tnl.wgsl", gpu_tnl::MESH_WGSL),
+            ("shaders_tnl water", gpu_tnl::MESH_WATER_WGSL),
             ("depth_blit", depth_blit::SHADER),
             ("upscale.wgsl", upscale::SHADER),
             (
@@ -7714,8 +7893,11 @@ mod webgl2_tests {
             let n = glsl_es_300(&depth_as_float(source)).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(n > 0, "{name}");
         }
-        let raw = glsl_es_300(include_str!("shaders.wgsl")).unwrap_err();
+        let raw = glsl_es_300(SCENE_WGSL).unwrap_err();
         assert!(raw.contains("fs_water"), "{raw}");
+        // The GPU T&L path's water reads the same depth copy: the same.
+        let raw = glsl_es_300(gpu_tnl::MESH_WATER_WGSL).unwrap_err();
+        assert!(raw.contains("fs_mesh_water"), "{raw}");
         // The shadow map's composite as `MapPass::new` builds it for
         // WebGL2: the scene depth and the blocker search's map read
         // through nearest samplers (#86).
@@ -7734,7 +7916,7 @@ mod webgl2_tests {
     /// binding the bind groups give it, and reads the red channel.
     #[test]
     fn depth_reads_go_through_the_nearest_sampler() {
-        let water = depth_as_float(include_str!("shaders.wgsl"));
+        let water = depth_as_float(SCENE_WGSL);
         assert!(!water.contains("texture_depth_2d"));
         let (water_slot, ao_slot) = NEAREST_DEPTH_BINDING;
         assert!(
@@ -7749,7 +7931,7 @@ mod webgl2_tests {
             "@group(0) @binding({ao_slot}) var s_t_depth: sampler;"
         )));
         // A shader without a depth read is left as it was.
-        let tnl = include_str!("shaders_tnl.wgsl");
+        let tnl = gpu_tnl::MESH_WGSL;
         assert_eq!(
             depth_as_float(tnl),
             tnl.replace("texture_depth_2d", "texture_2d<f32>")

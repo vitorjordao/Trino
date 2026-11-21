@@ -60,7 +60,7 @@ at exit (smoke runs, `TRINO_SMOKE_FRAMES=N`, or closing the window while one is 
 | `TRINO_FRAME_LIMIT=unlimited` (or `vsync`, `60`, `144`…) | overrides the saved frame limit for this run: measure what the machine can do, not the display's rate |
 | `TRINO_MSAA=0` | MSAA off for this run (A/B the multisampled pass) |
 | `TRINO_FRAME_LOG=frames.csv` | one CSV row per frame: `frame,frame_us,update_us,render_us,tnl_us,batch_us,submit_us,gpu_us,draws,tris,cpu_draws,pipelines` (plot it, find the frame) |
-| `TRINO_DRAW_REPORT=1` (or a row count, default 20) | `TRINO_DRAWS:` lines: per model and per frame, draws, copies, GPU and CPU triangles, the CPU path's T&L µs and why it left the GPU path (`why=texture_alpha`, `translucent`, `offscreen`…), costliest first |
+| `TRINO_DRAW_REPORT=1` (or a row count, default 20) | `TRINO_DRAWS:` lines: per model and per frame, draws, copies, GPU and CPU triangles, the CPU path's T&L µs and why it left the GPU path (`why=texture_alpha`, `flat_skinned`, `offscreen`…; translucent draws and water stay on the GPU since ADR 0016 §13), costliest first |
 
 `TRINO_FRAME` then adds `p50_us= p95_us= p99_us= spikes=`, and a `TRINO_SPIKES:` line
 lists the worst frames (`frame:µs`), each over 1.5× the median and 4 ms past it, with
@@ -75,7 +75,8 @@ TRINO_DRAWS: models/fence draws=58.7 copies=58.7 gpu_tris=0 cpu_copies=58.7 cpu_
 ```
 
 Read it top-down: a model with a large `cpu_us` is the fix (an alpha texture that
-should be a mask, a lamp that reaches everything, a translucent shell); `gpu_us` near
+should be a mask, a blending texture on a big mesh: a tint or vertex alpha below 255 is
+no longer a reason, only a texture whose alpha really blends); `gpu_us` near
 the frame means the GPU (resolution, MSAA, post); `batch`/`tnl` spikes mean CPU-path
 draws; `update` spikes are the game's own. `scene budget` predicts the same split
 offline.

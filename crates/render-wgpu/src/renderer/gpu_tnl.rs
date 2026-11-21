@@ -21,6 +21,16 @@
 //! ([`LitDraw`]). Draws whose texture's alpha is a mask
 //! ([`super::SpriteAlpha::Cutout`]) take the cutout pipelines: cut at half
 //! alpha, opaque and depth-written.
+//!
+//! Two more passes since ADR 0016 §13 ([`MeshPass`]). **Translucent**
+//! draws (a tint or vertex alpha below 255) blend without writing depth,
+//! after the batch's opaque draws: each copy is its own item, sorted back
+//! to front by [`trino_core::render3d::pc_sort_depth`] and interleaved by
+//! the renderer with the CPU path's blended triangles; runs of the same
+//! mesh still become one instanced call, and a double-sided run draws its
+//! back faces first. **Water** surfaces are displaced in the vertex stage
+//! (`shaders_tnl_water.wgsl`) and shaded by the CPU path's own per-pixel
+//! water (`water.wgsl`), last in the batch.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -30,6 +40,20 @@ use trino_core::{Color, Mat34, ModelParams, Shading};
 
 use super::OFFSCREEN_FORMAT;
 use super::batch::TexKey;
+
+/// The opaque, cutout, lit and translucent pipelines' module.
+pub(crate) const MESH_WGSL: &str = concat!(
+    include_str!("shaders_tnl.wgsl"),
+    include_str!("shaders_tnl_lit.wgsl")
+);
+
+/// The water pipelines' module: the vertex stage, the per-pixel water the
+/// screen-space pass shares (`water.wgsl`) and its entry points.
+pub(crate) const MESH_WATER_WGSL: &str = concat!(
+    include_str!("shaders_tnl.wgsl"),
+    include_str!("water.wgsl"),
+    include_str!("shaders_tnl_water.wgsl")
+);
 
 /// A mesh vertex as the vertex stage reads it (`MeshIn`): one per triangle
 /// corner, so a corner carries its triangle's face normal (flat shading).
@@ -74,6 +98,7 @@ struct MeshCtx {
     ambient: [f32; 4],
     fog_color: [f32; 4],
     fog_range: [f32; 4],
+    view_up: [f32; 4],
 }
 
 /// Joint matrices of one draw: 32 joints × 3 rows (`Joints`).
@@ -190,9 +215,16 @@ pub fn instance(
     }
 }
 
+/// A water draw's copy: [`instance`] naming its water set (`water.rs`,
+/// 0..8) in the bits a lit draw uses for its light set.
+pub fn water_instance(mut inst: GpuInstance, set: u32) -> GpuInstance {
+    inst.misc[2] = (inst.misc[2] & !(7 << 16)) | (set & 7) << 16;
+    inst
+}
+
 /// The light, fog and projection of `ctx` as the shader reads them.
 fn mesh_ctx(ctx: &TnlContext) -> MeshCtx {
-    let (_, focal, screen) = ctx.projection();
+    let (view, focal, screen) = ctx.projection();
     let light = ctx.light();
     let ldir = light.dir.normalized();
     let f = |c: Color| [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
@@ -216,6 +248,7 @@ fn mesh_ctx(ctx: &TnlContext) -> MeshCtx {
             fog.enabled() as u32 as f32,
         ],
         fog_range: [fog.near, fog.far, 0.0, 0.0],
+        view_up: [view.m[0][1], view.m[1][1], view.m[2][1], 0.0],
     }
 }
 
@@ -225,8 +258,23 @@ struct GpuMesh {
     verts: u32,
 }
 
+/// Which of a batch's passes a draw belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MeshPass {
+    /// Depth-tested and written, in any order (ahead of the CPU path's
+    /// triangles).
+    Opaque,
+    /// Blended, depth-tested, never written: after the batch's opaque
+    /// triangles and shadows, back to front with the CPU path's blended
+    /// triangles ([`trino_core::render3d::pc_translucent`]).
+    Blend,
+    /// A water surface: displaced here, shaded per pixel, blended last.
+    Water,
+}
+
 /// A recorded draw of the current batch: `count` instances from `first`
-/// in the batch's instance list.
+/// in the batch's instance list. Blended and water draws hold one copy
+/// each, with the view depth they sort by.
 #[derive(Clone, Copy, Debug)]
 struct GpuDraw {
     model: u32,
@@ -236,8 +284,25 @@ struct GpuDraw {
     double_sided: bool,
     lit: bool,
     cutout: bool,
+    pass: MeshPass,
+    depth: f32,
     first: u32,
     count: u32,
+}
+
+impl GpuDraw {
+    /// Whether two draws can share one instanced call (same pipeline set,
+    /// texture, mesh, context and pose).
+    fn joins(&self, o: &GpuDraw) -> bool {
+        self.model == o.model
+            && self.ctx == o.ctx
+            && self.joints == o.joints
+            && self.texture == o.texture
+            && self.double_sided == o.double_sided
+            && self.lit == o.lit
+            && self.cutout == o.cutout
+            && self.pass == o.pass
+    }
 }
 
 /// One instanced draw call of the frame.
@@ -247,11 +312,13 @@ pub struct GpuBatch {
     ctx: u32,
     joints: u32,
     pub texture: Option<TexKey>,
-    double_sided: bool,
+    /// Its pipeline in a [`pipelines`] set ([`pipe_index`]).
+    pipe: u8,
     /// The lit pipelines (the light sets bound).
     pub lit: bool,
     /// The cutout pipelines.
     pub cutout: bool,
+    pub pass: MeshPass,
     pub instances: Range<u32>,
 }
 
@@ -266,18 +333,16 @@ pub struct DrawKey<'a> {
     pub lit: bool,
     /// The texture's alpha is a mask: cut at half alpha.
     pub cutout: bool,
+    /// Opaque, translucent (every copy sorted on its own) or water (the
+    /// instance names its set, [`water_instance`]).
+    pub pass: MeshPass,
 }
 
 /// The GPU T&L path's pipelines, resident meshes and per-frame streams.
 pub struct GpuTnl {
     bgl: wgpu::BindGroupLayout,
-    layout: wgpu::PipelineLayout,
-    /// `layout` plus the light sets (group 3).
-    lit_layout: wgpu::PipelineLayout,
-    shader: wgpu::ShaderModule,
-    /// Back faces culled, double-sided, then the same two lit, then those
-    /// four cutting their texture's alpha; single- and (built on demand)
-    /// multisampled ([`pipelines`]).
+    /// The opaque, translucent and water pipelines ([`pipe_index`]);
+    /// single- and (built on demand) multisampled ([`pipelines`]).
     pipelines: [wgpu::RenderPipeline; MESH_PIPES],
     ms_pipelines: Option<[wgpu::RenderPipeline; MESH_PIPES]>,
     /// The same into the post stack's HDR target (issue #64): single
@@ -303,6 +368,11 @@ pub struct GpuTnl {
     /// The current batch (between two flushes of the renderer's batch).
     pending: Vec<GpuDraw>,
     pending_inst: Vec<GpuInstance>,
+    /// The batch's opaque draws are flushed ([`GpuTnl::flush_opaque`]):
+    /// its translucent and water ones wait for [`GpuTnl::emit`].
+    opaque_done: bool,
+    /// The groups 0..2 and WebGL2 flag the pipelines were built with.
+    source: MeshSource,
     /// Posing scratch.
     skin: Box<[Mat34; trino_core::render3d::MAX_JOINTS]>,
 }
@@ -317,30 +387,89 @@ fn identity_block() -> JointBlock {
     b
 }
 
-/// The pipelines of one target: plain (back faces culled, double-sided),
-/// lit (the same two), then the four cutting their texture's alpha
-/// ([`pipe_index`]).
-pub const MESH_PIPES: usize = 8;
+/// The pipelines of one target ([`pipe_index`]): opaque (plain, lit,
+/// whole and cut; back faces culled or double-sided), translucent (plain,
+/// lit; front faces, or back faces for a double-sided draw's first pass)
+/// and water (culled, double-sided).
+pub const MESH_PIPES: usize = 14;
+
+/// Which faces a pipeline rasterizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Faces {
+    Front,
+    /// A double-sided translucent draw's first pass: the far side of a
+    /// convex shape, under its near side.
+    Back,
+    Both,
+}
 
 /// The pipeline of a draw call in a [`pipelines`] set.
-fn pipe_index(double_sided: bool, lit: bool, cutout: bool) -> usize {
-    cutout as usize * 4 + lit as usize * 2 + double_sided as usize
+fn pipe_index(pass: MeshPass, faces: Faces, lit: bool, cutout: bool) -> usize {
+    match pass {
+        MeshPass::Opaque => {
+            cutout as usize * 4 + lit as usize * 2 + (faces == Faces::Both) as usize
+        }
+        MeshPass::Blend => 8 + lit as usize * 2 + (faces == Faces::Back) as usize,
+        MeshPass::Water => 12 + (faces == Faces::Both) as usize,
+    }
+}
+
+/// A [`pipe_index`]'s pipeline: pass, faces, lit, cutout.
+fn pipe_kind(i: usize) -> (MeshPass, Faces, bool, bool) {
+    match i {
+        0..8 => (
+            MeshPass::Opaque,
+            if i & 1 != 0 {
+                Faces::Both
+            } else {
+                Faces::Front
+            },
+            i & 2 != 0,
+            i & 4 != 0,
+        ),
+        8..12 => (
+            MeshPass::Blend,
+            if i & 1 != 0 {
+                Faces::Back
+            } else {
+                Faces::Front
+            },
+            i & 2 != 0,
+            false,
+        ),
+        _ => (
+            MeshPass::Water,
+            if i & 1 != 0 {
+                Faces::Both
+            } else {
+                Faces::Front
+            },
+            false,
+            false,
+        ),
+    }
 }
 
 /// What building the pipelines takes ([`pipelines`]): the plain and the lit
-/// layouts and the shader.
+/// layouts and the shader, and for the water pipelines (whose group 3, the
+/// water sets and the scene's depth, depends on the sample count) the
+/// first three groups and whether the device is WebGL2.
 #[derive(Clone)]
 pub struct MeshSource {
     pub layout: wgpu::PipelineLayout,
     pub lit_layout: wgpu::PipelineLayout,
     pub shader: wgpu::ShaderModule,
+    pub groups: [wgpu::BindGroupLayout; 3],
+    pub webgl2: bool,
 }
 
 impl GpuTnl {
     /// `groups`: the globals and the 3D texture layouts (groups 0 and 1,
     /// shared with the screen-space triangle pipelines) and the light sets'
     /// (the lit pipelines' group 3, the screen-space lit pipeline's 2).
-    pub fn new(device: &wgpu::Device, groups: [&wgpu::BindGroupLayout; 3]) -> GpuTnl {
+    /// `webgl2`: the water pipelines read the depth copy as a float texture
+    /// (`depth_as_float`).
+    pub fn new(device: &wgpu::Device, groups: [&wgpu::BindGroupLayout; 3], webgl2: bool) -> GpuTnl {
         let dynamic = |binding: u32, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -372,18 +501,18 @@ impl GpuTnl {
             ],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders_tnl.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shaders_tnl.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MESH_WGSL.into()),
+        });
         let src = MeshSource {
             layout,
             lit_layout,
             shader,
+            groups: [groups[0].clone(), groups[1].clone(), bgl.clone()],
+            webgl2,
         };
         let pipelines = pipelines(device, &src, 1, OFFSCREEN_FORMAT);
-        let MeshSource {
-            layout,
-            lit_layout,
-            shader,
-        } = src;
         let a = device.limits().min_uniform_buffer_offset_alignment as u64;
         let (ctx_stride, joint_stride) = (align(ctx_size, a), align(joint_size, a));
         let ctx_buf = uniform(device, "trino-tnl-ctx", ctx_stride * 16);
@@ -397,9 +526,6 @@ impl GpuTnl {
         let bg = bind_group(device, &bgl, &ctx_buf, &joint_buf);
         GpuTnl {
             bgl,
-            layout,
-            lit_layout,
-            shader,
             pipelines,
             ms_pipelines: None,
             hdr_pipelines: [None, None],
@@ -417,6 +543,8 @@ impl GpuTnl {
             batches: Vec::new(),
             pending: Vec::new(),
             pending_inst: Vec::new(),
+            opaque_done: false,
+            source: src,
             skin: Box::new([Mat34::IDENTITY; trino_core::render3d::MAX_JOINTS]),
         }
     }
@@ -440,11 +568,7 @@ impl GpuTnl {
     /// What a precompile job needs to build the multisampled pipelines on
     /// a worker ([`pipelines`]).
     pub fn ms_source(&self) -> MeshSource {
-        MeshSource {
-            layout: self.layout.clone(),
-            lit_layout: self.lit_layout.clone(),
-            shader: self.shader.clone(),
-        }
+        self.source.clone()
     }
 
     /// Multisampled pipelines a precompile job built (kept if already set).
@@ -524,9 +648,12 @@ impl GpuTnl {
         self.batches.clear();
         self.pending.clear();
         self.pending_inst.clear();
+        self.opaque_done = false;
     }
 
-    /// Record a draw of `instances` copies of `key.mesh` with `ctx`.
+    /// Record a draw of `instances` copies of `key.mesh` with `ctx`. A
+    /// translucent or water draw becomes one item per copy, each with the
+    /// view depth it sorts by.
     pub fn draw(&mut self, ctx: &TnlContext, key: DrawKey<'_>, instances: &[GpuInstance]) {
         if instances.is_empty() {
             return;
@@ -547,32 +674,65 @@ impl GpuTnl {
             self.joints.push(block);
             self.joints.len() as u32 - 1
         };
-        self.pending.push(GpuDraw {
+        let draw = GpuDraw {
             model: key.model,
             ctx: self.ctxs.len() as u32 - 1,
             joints,
             texture: key.texture,
             double_sided: key.params.double_sided,
             lit: key.lit,
-            cutout: key.cutout,
+            cutout: key.cutout && key.pass == MeshPass::Opaque,
+            pass: key.pass,
+            depth: 0.0,
             first: self.pending_inst.len() as u32,
             count: instances.len() as u32,
-        });
-        self.pending_inst.extend_from_slice(instances);
+        };
+        if key.pass == MeshPass::Opaque {
+            self.pending.push(draw);
+            self.pending_inst.extend_from_slice(instances);
+            return;
+        }
+        for inst in instances {
+            let mv = Mat34 { m: inst.model_view };
+            self.pending.push(GpuDraw {
+                depth: trino_core::render3d::pc_sort_depth(key.mesh, &mv),
+                first: self.pending_inst.len() as u32,
+                count: 1,
+                ..draw
+            });
+            self.pending_inst.push(*inst);
+        }
     }
 
-    /// Any draw since the last [`GpuTnl::flush_batch`]?
+    /// Any draw since the last [`GpuTnl::end_batch`]?
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
 
-    /// Close the current batch: sort its draws by pipeline, texture, mesh,
-    /// context and joints, merge the runs into instanced draw calls and
-    /// return the frame's draw calls it added.
-    pub fn flush_batch(&mut self) -> Range<u32> {
+    /// Any opaque draw not yet flushed?
+    pub fn has_opaque(&self) -> bool {
+        !self.opaque_done && self.pending.iter().any(|d| d.pass == MeshPass::Opaque)
+    }
+
+    /// Any translucent or water draw waiting for [`GpuTnl::emit`]?
+    pub fn has_sorted(&self) -> bool {
+        self.pending.iter().any(|d| d.pass != MeshPass::Opaque)
+    }
+
+    /// Close the current batch's opaque draws: sort them by pipeline,
+    /// texture, mesh, context and joints, merge the runs into instanced
+    /// draw calls and return the frame's draw calls it added. The batch's
+    /// translucent and water draws wait for [`GpuTnl::emit`].
+    pub fn flush_opaque(&mut self) -> Range<u32> {
         let start = self.batches.len() as u32;
-        let mut order: Vec<usize> = (0..self.pending.len()).collect();
+        if self.opaque_done {
+            return start..start;
+        }
+        self.opaque_done = true;
         let pending = &self.pending;
+        let mut order: Vec<usize> = (0..pending.len())
+            .filter(|&i| pending[i].pass == MeshPass::Opaque)
+            .collect();
         order.sort_by_key(|&i| {
             let d = &pending[i];
             (
@@ -586,42 +746,88 @@ impl GpuTnl {
                 i,
             )
         });
-        for i in order {
-            let d = self.pending[i];
-            let first = self.instances.len() as u32;
-            let src = &self.pending_inst[d.first as usize..(d.first + d.count) as usize];
-            self.instances.extend_from_slice(src);
-            let end = self.instances.len() as u32;
-            let in_batch = self.batches.len() as u32 > start;
-            match self.batches.last_mut() {
-                Some(b)
-                    if in_batch
-                        && b.model == d.model
-                        && b.ctx == d.ctx
-                        && b.joints == d.joints
-                        && b.texture == d.texture
-                        && b.double_sided == d.double_sided
-                        && b.lit == d.lit
-                        && b.cutout == d.cutout
-                        && b.instances.end == first =>
-                {
-                    b.instances.end = end;
-                }
-                _ => self.batches.push(GpuBatch {
-                    model: d.model,
-                    ctx: d.ctx,
-                    joints: d.joints,
-                    texture: d.texture,
-                    double_sided: d.double_sided,
-                    lit: d.lit,
-                    cutout: d.cutout,
-                    instances: first..end,
-                }),
-            }
-        }
+        let order: Vec<u32> = order.into_iter().map(|i| i as u32).collect();
+        self.push_runs(&order);
+        start..self.batches.len() as u32
+    }
+
+    /// The batch's `pass` draws (translucent or water), back to front:
+    /// `(painter key, draw)`, the key ordered like the CPU path's
+    /// [`trino_core::render3d::painter_key`]s (farther first, then in
+    /// submission order) so the renderer can merge both streams.
+    pub fn sorted(&self, pass: MeshPass) -> Vec<(u64, u32)> {
+        let mut keys: Vec<(u64, u32)> = self
+            .pending
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.pass == pass)
+            .map(|(i, d)| (trino_core::render3d::painter_key(d.depth, i), i as u32))
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// Draw calls for the batch's draws `ids` (from [`GpuTnl::sorted`]) in
+    /// that order: consecutive copies of one mesh, context, pose, texture
+    /// and pipeline share an instanced call (instances rasterize in order,
+    /// so the blending order holds). A double-sided translucent run draws
+    /// its back faces, then its front faces. Returns the frame's draw calls
+    /// it added.
+    pub fn emit(&mut self, ids: &[u32]) -> Range<u32> {
+        let start = self.batches.len() as u32;
+        self.push_runs(ids);
+        start..self.batches.len() as u32
+    }
+
+    /// Forget the batch's draws (every pass emitted).
+    pub fn end_batch(&mut self) {
         self.pending.clear();
         self.pending_inst.clear();
-        start..self.batches.len() as u32
+        self.opaque_done = false;
+    }
+
+    /// Copy the draws `ids`' instances to the frame's stream in that order
+    /// and add their draw calls, merging consecutive draws that
+    /// [`GpuDraw::joins`].
+    fn push_runs(&mut self, ids: &[u32]) {
+        let mut at = 0;
+        while at < ids.len() {
+            let head = self.pending[ids[at] as usize];
+            let mut end = at + 1;
+            // A double-sided translucent copy draws its back faces, then its
+            // front faces: copies in one call would lay a far copy's front
+            // over a near copy's back, so each is its own pair of calls.
+            let alone = head.pass == MeshPass::Blend && head.double_sided;
+            while !alone && end < ids.len() && self.pending[ids[end] as usize].joins(&head) {
+                end += 1;
+            }
+            let first = self.instances.len() as u32;
+            for &i in &ids[at..end] {
+                let d = self.pending[i as usize];
+                let src = &self.pending_inst[d.first as usize..(d.first + d.count) as usize];
+                self.instances.extend_from_slice(src);
+            }
+            let instances = first..self.instances.len() as u32;
+            let faces: &[Faces] = match (head.pass, head.double_sided) {
+                (MeshPass::Blend, true) => &[Faces::Back, Faces::Front],
+                (_, true) => &[Faces::Both],
+                (_, false) => &[Faces::Front],
+            };
+            for &f in faces {
+                self.batches.push(GpuBatch {
+                    model: head.model,
+                    ctx: head.ctx,
+                    joints: head.joints,
+                    texture: head.texture,
+                    pipe: pipe_index(head.pass, f, head.lit, head.cutout) as u8,
+                    lit: head.lit,
+                    cutout: head.cutout,
+                    pass: head.pass,
+                    instances: instances.clone(),
+                });
+            }
+            at = end;
+        }
     }
 
     /// The frame's draw calls (textures to bind before a pass).
@@ -680,7 +886,8 @@ impl GpuTnl {
 
     /// Record the draw calls `range` into `pass` (`ms`: the multisampled
     /// pipelines). `texture` gives a draw's group 1, `lights` the lit
-    /// draws' group 3. Returns the calls.
+    /// draws' group 3, `water` the water draws'. Returns the calls.
+    #[allow(clippy::too_many_arguments)]
     pub fn record<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -689,6 +896,7 @@ impl GpuTnl {
         hdr: bool,
         texture: &dyn Fn(Option<TexKey>) -> &'a wgpu::BindGroup,
         lights: &wgpu::BindGroup,
+        water: &wgpu::BindGroup,
     ) -> u32 {
         let pipes = match (
             &self.ms_pipelines,
@@ -706,8 +914,10 @@ impl GpuTnl {
             let Some(mesh) = self.meshes.get(&b.model) else {
                 continue;
             };
-            pass.set_pipeline(&pipes[pipe_index(b.double_sided, b.lit, b.cutout)]);
-            if b.lit {
+            pass.set_pipeline(&pipes[b.pipe as usize]);
+            if b.pass == MeshPass::Water {
+                pass.set_bind_group(3, water, &[]);
+            } else if b.lit {
                 pass.set_bind_group(3, lights, &[]);
             }
             pass.set_bind_group(1, texture(b.texture), &[]);
@@ -850,9 +1060,11 @@ fn bind_group(
     })
 }
 
-/// The eight pipelines for `samples` ([`pipe_index`]): back faces culled
-/// and double-sided, plain and shaded per pixel, whole and cut at half
-/// alpha.
+/// The [`MESH_PIPES`] pipelines for `samples` ([`pipe_index`]): opaque
+/// (back faces culled and double-sided, plain and shaded per pixel, whole
+/// and cut at half alpha), translucent (blended, depth tested but never
+/// written: front or back faces, plain or lit) and water (`vs_mesh_water`
+/// over the water sets and the scene's depth copy, blended, never written).
 pub(super) fn pipelines(
     device: &wgpu::Device,
     src: &MeshSource,
@@ -860,6 +1072,28 @@ pub(super) fn pipelines(
     format: wgpu::TextureFormat,
 ) -> [wgpu::RenderPipeline; MESH_PIPES] {
     let shader = &src.shader;
+    // The water's module and layout: its group 3 binds the depth copy as
+    // the scene's own (multisampled with MSAA, a float texture on WebGL2).
+    let ms = samples > 1;
+    let webgl2 = src.webgl2 && !ms;
+    let water_source = if ms {
+        MESH_WATER_WGSL.replace("texture_depth_2d", "texture_depth_multisampled_2d")
+    } else if webgl2 {
+        super::depth_as_float(MESH_WATER_WGSL)
+    } else {
+        MESH_WATER_WGSL.to_string()
+    };
+    let water_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("trino-tnl-water"),
+        source: wgpu::ShaderSource::Wgsl(water_source.into()),
+    });
+    let water_bgl = super::water_bgl(device, ms, webgl2);
+    let [g0, g1, g2] = &src.groups;
+    let water_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("trino-tnl-water-layout"),
+        bind_group_layouts: &[Some(g0), Some(g1), Some(g2), Some(&water_bgl)],
+        immediate_size: 0,
+    });
     let vertex_attrs = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
@@ -879,19 +1113,33 @@ pub(super) fn pipelines(
         13 => Uint32x4,
         14 => Uint32x4,
     ];
-    let make = |cull: Option<wgpu::Face>, lit: bool, cut: bool| {
+    let make = |i: usize| {
+        let (pass, faces, lit, cut) = pipe_kind(i);
+        let (module, layout, vs, fs) = match (pass, lit, cut) {
+            (MeshPass::Water, _, _) => (
+                &water_shader,
+                &water_layout,
+                "vs_mesh_water",
+                "fs_mesh_water",
+            ),
+            (_, false, false) => (shader, &src.layout, "vs_mesh", "fs_mesh"),
+            (_, true, false) => (shader, &src.lit_layout, "vs_mesh_lit", "fs_mesh_lit"),
+            (_, false, true) => (shader, &src.layout, "vs_mesh", "fs_mesh_cut"),
+            (_, true, true) => (shader, &src.lit_layout, "vs_mesh_lit", "fs_mesh_lit_cut"),
+        };
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
-                label: Some(if lit {
-                    "trino-tnl-lit-pipeline"
-                } else {
-                    "trino-tnl-pipeline"
+                label: Some(match pass {
+                    MeshPass::Opaque if lit => "trino-tnl-lit-pipeline",
+                    MeshPass::Opaque => "trino-tnl-pipeline",
+                    MeshPass::Blend => "trino-tnl-blend-pipeline",
+                    MeshPass::Water => "trino-tnl-water-pipeline",
                 }),
-                layout: Some(if lit { &src.lit_layout } else { &src.layout }),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
-                    module: shader,
-                    entry_point: Some(if lit { "vs_mesh_lit" } else { "vs_mesh" }),
+                    module,
+                    entry_point: Some(vs),
                     compilation_options: Default::default(),
                     buffers: &[
                         wgpu::VertexBufferLayout {
@@ -907,13 +1155,8 @@ pub(super) fn pipelines(
                     ],
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: shader,
-                    entry_point: Some(match (lit, cut) {
-                        (false, false) => "fs_mesh",
-                        (true, false) => "fs_mesh_lit",
-                        (false, true) => "fs_mesh_cut",
-                        (true, true) => "fs_mesh_lit_cut",
-                    }),
+                    module,
+                    entry_point: Some(fs),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -926,12 +1169,19 @@ pub(super) fn pipelines(
                 // clockwise in Y-up clip space.
                 primitive: wgpu::PrimitiveState {
                     front_face: wgpu::FrontFace::Cw,
-                    cull_mode: cull,
+                    cull_mode: match faces {
+                        Faces::Front => Some(wgpu::Face::Back),
+                        Faces::Back => Some(wgpu::Face::Front),
+                        Faces::Both => None,
+                    },
                     ..Default::default()
                 },
+                // What blends (translucent copies, water) is tested
+                // against the depth but never writes it: what is drawn
+                // after it and lies behind it still shows.
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(pass == MeshPass::Opaque),
                     depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -945,11 +1195,7 @@ pub(super) fn pipelines(
             },
         )
     };
-    core::array::from_fn(|i| {
-        let (double_sided, lit, cut) = (i & 1 != 0, i & 2 != 0, i & 4 != 0);
-        debug_assert_eq!(pipe_index(double_sided, lit, cut), i);
-        make((!double_sided).then_some(wgpu::Face::Back), lit, cut)
-    })
+    core::array::from_fn(make)
 }
 
 #[cfg(test)]
@@ -1023,11 +1269,15 @@ mod tests {
 
     #[test]
     fn pipeline_indices_cover_the_set() {
-        let mut seen = [false; MESH_PIPES];
-        for i in 0..8 {
-            seen[pipe_index(i & 1 != 0, i & 2 != 0, i & 4 != 0)] = true;
+        // Every index names a kind that maps back to it: no gap, no alias.
+        for i in 0..MESH_PIPES {
+            let (pass, faces, lit, cut) = pipe_kind(i);
+            assert_eq!(pipe_index(pass, faces, lit, cut), i);
         }
-        assert!(seen.iter().all(|&s| s));
+        // The opaque ones kept #153's indices.
+        assert_eq!(pipe_index(MeshPass::Opaque, Faces::Both, true, true), 7);
+        assert_eq!(pipe_index(MeshPass::Blend, Faces::Back, true, false), 11);
+        assert_eq!(pipe_index(MeshPass::Water, Faces::Both, false, false), 13);
     }
 
     #[test]
@@ -1036,7 +1286,7 @@ mod tests {
         assert_eq!(MESH_VERTEX_STRIDE, 56);
         // InstIn: two 3x4 matrices and two uvec4.
         assert_eq!(INSTANCE_STRIDE, 128);
-        assert_eq!(core::mem::size_of::<MeshCtx>(), 96);
+        assert_eq!(core::mem::size_of::<MeshCtx>(), 112);
         assert_eq!(core::mem::size_of::<JointBlock>(), 1536);
         assert_eq!(identity_block()[..3], Mat34::IDENTITY.m);
     }

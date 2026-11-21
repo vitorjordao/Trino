@@ -161,7 +161,7 @@ pub(crate) fn build(kind: JobKind, i: &Inputs) -> Built {
         }
         JobKind::GpuTnl => {
             let [g0, g1, g2] = &i.tnl_groups;
-            let mut gpu = gpu_tnl::GpuTnl::new(d, [g0, g1, g2]);
+            let mut gpu = gpu_tnl::GpuTnl::new(d, [g0, g1, g2], i.webgl2);
             if i.gpu_ms {
                 gpu.ensure_ms(d, MSAA_SAMPLES);
             }

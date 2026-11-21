@@ -8,13 +8,14 @@
 
 use trino_core::render3d::{Camera3, Light};
 use trino_core::water::{MAX_RIPPLES, WaveSet};
-use trino_core::{Water, WaterState};
+use trino_core::{Color, Water, WaterState};
 
 /// Water sets per frame. A frame with more distinct surfaces draws the
 /// rest with the last set.
 pub const MAX_SETS: usize = 8;
 
-/// One water surface. Must match `water.wgsl` (`WaterSet`).
+/// One water surface. Must match `water.wgsl` (`WaterSet`), which both the
+/// screen-space water and the GPU T&L path's water read.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuWaterSet {
@@ -42,6 +43,12 @@ pub struct GpuWaterSet {
     pub eye: [f32; 4],
     /// The view's forward axis (unit, world): view depth = (p - eye) · fwd.
     pub fwd: [f32; 4],
+    /// The texture's scroll (u v): the GPU path adds it to the mesh's UVs
+    /// (the CPU path's vertices already carry it).
+    pub scroll: [f32; 4],
+    /// The draw's emissive (0..1): added to the lit color, under the
+    /// flowing layers.
+    pub emissive: [f32; 4],
 }
 
 pub const SET_BYTES: usize = core::mem::size_of::<GpuWaterSet>();
@@ -52,6 +59,8 @@ pub struct SetKey {
     pub water: Water,
     pub state: WaterState,
     pub gloss: u8,
+    /// `ModelParams::emissive` (a glowing surface: lava).
+    pub emissive: Color,
     /// The detail layer's UV scale (0 = none).
     pub detail_scale: f32,
     pub camera: Camera3,
@@ -76,6 +85,8 @@ impl SetKey {
         let sky = if fog { l.fog.color } else { l.ambient_color };
         let fwd = (self.camera.target - self.camera.eye).normalized();
         let eye = self.camera.eye;
+        let (scroll, _) = self.water.scroll(self.state.time);
+        let e = self.emissive;
         GpuWaterSet {
             dirs: [w.dir[0].x, w.dir[0].y, w.dir[1].x, w.dir[1].y],
             k_phase: [w.k[0], w.k[1], w.phase[0], w.phase[1]],
@@ -99,6 +110,8 @@ impl SetKey {
             fog: [l.fog.near, l.fog.far, trino_core::render3d::NEAR_PLANE, 0.0],
             eye: [eye.x, eye.y, eye.z, 0.0],
             fwd: [fwd.x, fwd.y, fwd.z, 0.0],
+            scroll: [scroll.x, scroll.y, 0.0, 0.0],
+            emissive: [c(e.r), c(e.g), c(e.b), 0.0],
         }
     }
 }
@@ -144,8 +157,9 @@ mod tests {
 
     #[test]
     fn layout_matches_the_shader() {
-        // 15 vec4s, 16-byte aligned (WGSL uniform layout).
-        assert_eq!(SET_BYTES, 15 * 16);
+        // 17 vec4s, 16-byte aligned (WGSL uniform layout).
+        assert_eq!(SET_BYTES, 17 * 16);
+        assert_eq!(core::mem::offset_of!(GpuWaterSet, scroll), 15 * 16);
         assert_eq!(core::mem::offset_of!(GpuWaterSet, ripples), 64);
         assert_eq!(core::mem::offset_of!(GpuWaterSet, sun_dir), 128);
     }
@@ -161,6 +175,7 @@ mod tests {
             water: Water::DEFAULT,
             state: WaterState::new(2.0, &[r], 4),
             gloss: 255,
+            emissive: Color::rgb(255, 0, 51),
             detail_scale: 2.0,
             camera: Camera3::default(),
             light: DEFAULT_LIGHT,
@@ -170,6 +185,9 @@ mod tests {
         assert_eq!(g.detail[0], 2.0);
         assert_eq!(g.detail[3], 1.0);
         assert_eq!(g.amp[3], 1.0);
+        assert_eq!(g.emissive, [1.0, 0.0, 0.2, 0.0]);
+        let (b, _) = Water::DEFAULT.scroll(2.0);
+        assert_eq!([g.scroll[0], g.scroll[1]], [b.x, b.y]);
         let (b, d) = Water::DEFAULT.scroll(2.0);
         let f = trino_core::water::frac;
         assert_eq!(

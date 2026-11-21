@@ -458,8 +458,10 @@ since #122.
     ripple rings, `water::sin_turns`) in a `WATER` copy of `render3d/lit.rs`. Water is
     never on the 3DS's static GPU path or the memo; on the N64 it has its own RSP
     overlay since #69 (ADR 0018).
-  - **PC native:** `fs_water` per pixel (normals, Fresnel, glint, ripple crests, depth
-    foam from a depth copy).
+  - **PC native:** `water_shade` per pixel (`renderer/water.wgsl`: normals faded by the
+    pixel's footprint so far water doesn't alias, Fresnel, glint, ripple crests, depth
+    foam from a depth copy, the draw's emissive), shared by the CPU path's `fs_water`
+    and the GPU path's `fs_mesh_water` (ADR 0016 §13).
   - **3DS:** `water.v.pica` on the PICA200 (`gpu_water`; a CPU fallback for draws
     crossing the near plane) and a TexEnv 50/50 layer blend.
   - **N64 and the PC's console profiles:** per-vertex shading and the RDP's 2-cycle
@@ -487,8 +489,13 @@ since #122.
     step holds one call to the separate draws' pixels and counters on PC, in ares and in
     Azahar.
   - **The rule:** `render3d::pc_gpu_check`/`pc_gpu_mesh_check` → `PcGpuReject` (empty,
-    water, translucent, flat-shaded skeleton, offscreen; the renderer adds per-pixel lit,
-    texture alpha and disabled). The console profiles never call it.
+    flat-shaded skeleton, offscreen; the renderer adds texture alpha and disabled). The
+    console profiles never call it.
+  - **Translucent and water draws (ADR 0016 §13):** blend pipelines without depth
+    writes, each copy keyed by `pc_sort_depth` and merged back to front with the batch's
+    blended CPU triangles; water pipelines displace with `water_height` (the core's
+    `sin_turns`) and shade with `water_shade`, after the CPU water. Oracles in
+    `gpu_tnl.rs` (`translucent_*`) and `water.rs` (`the_gpu_path_draws_the_water_*`).
   - **The GPU path** (`renderer/gpu_tnl.rs`, `shaders_tnl.wgsl`): meshes resident from
     `upload_mesh`; per vertex the CPU path's transform, rigid and `SKW2` joints, Gouraud /
     Flat / Unlit, palette, tint, emissive and fog; the CPU path's depth and near plane;

@@ -96,6 +96,14 @@ pub fn engine_checks(
     if instancing(renderer)? {
         platform.log("TRINO_STEP:instancing probed\n");
     }
+    platform.log("TRINO_STEP:dynamic mesh\n");
+    match dynamic_mesh(renderer)? {
+        DynamicProbe::Probed => {
+            platform.log("TRINO_STEP:dynamic mesh probed two quads and a rewrite\n")
+        }
+        DynamicProbe::Skipped => platform.log("TRINO_STEP:dynamic mesh skipped (no read_pixel)\n"),
+        DynamicProbe::NoneHere => platform.log("TRINO_STEP:dynamic mesh none on this target\n"),
+    }
     platform.log("TRINO_STEP:local lights\n");
     if local_lights(renderer)? {
         platform.log("TRINO_STEP:local lights probed\n");
@@ -2471,6 +2479,123 @@ pub fn instancing(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         return Err("instancing: the first copy does not show its own tint");
     }
     Ok(true)
+}
+
+/// What the `dynamic mesh` step saw.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DynamicProbe {
+    /// The quads drew and every probe showed its color.
+    Probed,
+    /// They drew (the counters say so); no `read_pixel` here (the
+    /// browsers).
+    Skipped,
+    /// The target draws no dynamic meshes (`Caps::max_dynamic_vertices`
+    /// 0): a game doesn't send it any (strict mode would stop it).
+    NoneHere,
+}
+
+/// Dynamic meshes ([`Renderer::draw_mesh`]): a red quad on the left and a
+/// green one on the right written in one frame, then only the left one,
+/// rewritten blue, in the next. Where the target draws them (the PC, the
+/// Web), each probe shows its quad's color of that frame (the right one
+/// black once it's gone), and the counters say two draws, then one, none
+/// refused. The consoles and the PC's console profiles draw none
+/// (`Caps::max_dynamic_vertices` 0): the step only reads the caps there.
+#[inline(never)]
+pub fn dynamic_mesh(renderer: &mut dyn Renderer) -> Result<DynamicProbe, &'static str> {
+    use trino_core::{DynVertex, DynamicMesh};
+    let caps = *renderer.caps();
+    if caps.max_dynamic_vertices == 0 {
+        return Ok(DynamicProbe::NoneHere);
+    }
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -2.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let project = |x: f32| {
+        let v = view.transform_point(Vec3::new(x, 0.0, 0.0));
+        (
+            (screen.x * 0.5 + v.x * focal / v.z) as u32,
+            (screen.y * 0.5 - v.y * focal / v.z) as u32,
+        )
+    };
+    let quad = |x: f32, c: Color| {
+        let n = Vec3::new(0.0, 0.0, -1.0);
+        [(0.0, -0.3), (0.5, -0.3), (0.5, 0.3), (0.0, 0.3)]
+            .map(|(dx, y)| DynVertex::new(Vec3::new(x + dx, y, 0.0), n, c))
+    };
+    let tris = [0u16, 2, 1, 0, 3, 2];
+    let params = ModelParams {
+        shading: Shading::Unlit,
+        double_sided: true,
+        ..ModelParams::DEFAULT
+    };
+    let (red, green, blue) = (
+        Color::rgb(230, 30, 30),
+        Color::rgb(30, 230, 30),
+        Color::rgb(30, 30, 230),
+    );
+    let probes = [project(-0.45), project(0.45)];
+    let mut seen = [[Color::BLACK; 2]; 2];
+    let mut stats = [trino_core::FrameStats::default(); 2];
+    let mut read = true;
+    for pass in 0..2 {
+        // Several identical frames: the 3DS LCD is double-buffered.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            let left = quad(-0.7, if pass == 0 { red } else { blue });
+            renderer.draw_mesh(
+                &DynamicMesh::new(&left, &tris),
+                &trino_core::Mat34::IDENTITY,
+                &params,
+            );
+            if pass == 0 {
+                let right = quad(0.2, green);
+                renderer.draw_mesh(
+                    &DynamicMesh::new(&right, &tris),
+                    &trino_core::Mat34::IDENTITY,
+                    &params,
+                );
+            }
+            renderer.end_frame();
+        }
+        stats[pass] = renderer.stats();
+        for (c, &(x, y)) in seen[pass].iter_mut().zip(&probes) {
+            match renderer.read_pixel(x, y) {
+                Some(got) => *c = got,
+                None => read = false,
+            }
+        }
+    }
+    let lit = |c: Color| c.r as u32 + c.g as u32 + c.b as u32 > 60;
+    let counts = stats.map(|s| (s.dynamic_meshes, s.models, s.dynamic_rejected));
+    if counts != [(2, 2, 0), (1, 1, 0)] {
+        return Err("dynamic mesh: not two draws, then one");
+    }
+    if !read {
+        return Ok(DynamicProbe::Skipped);
+    }
+    let is = |c: Color, want: Color| {
+        let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
+        close(c.r, want.r) && close(c.g, want.g) && close(c.b, want.b)
+    };
+    if !is(seen[0][0], red) || !is(seen[0][1], green) {
+        return Err("dynamic mesh: a quad doesn't show its vertex color");
+    }
+    if !is(seen[1][0], blue) {
+        return Err("dynamic mesh: the rewritten quad shows last frame's colors");
+    }
+    if lit(seen[1][1]) {
+        return Err("dynamic mesh: last frame's quad still shows");
+    }
+    Ok(DynamicProbe::Probed)
 }
 
 /// The AO probe panel, with ambient occlusion baked into its vertex colors.

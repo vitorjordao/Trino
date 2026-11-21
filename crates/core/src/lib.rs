@@ -27,6 +27,7 @@ pub mod bundle;
 pub mod caps;
 pub mod collide;
 pub mod determinism;
+pub mod dynamic_mesh;
 pub mod entity;
 pub mod game;
 pub mod group;
@@ -85,6 +86,7 @@ pub use audio::{
 };
 pub use caps::{Caps, CapsError, Family, HwTier, TexelFormat};
 pub use collide::{MoveResult, move_and_collide};
+pub use dynamic_mesh::{DynVertex, DynamicMesh, DynamicMeshError, smooth_normals};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use group::{GroupId, GroupTable, LoadState, MemoryReport};

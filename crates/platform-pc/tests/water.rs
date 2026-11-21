@@ -325,6 +325,9 @@ fn each_tier_matches_its_golden() {
             });
             // The riverbed, the post and (ADR 0016 §13) the water itself.
             assert_eq!(gpu, 3, "every draw on the GPU path");
+            // The oracle restores the switch: CI also runs with
+            // `TRINO_PC_TNL=cpu`, which starts the GPU path off.
+            r.set_hw_tnl(true);
             frame(&mut r, Some((1.25, &[RIPPLE])), &water_params());
             assert_eq!(r.pc_gpu_rejects().iter().sum::<u32>(), 0);
             assert_eq!(r.stats().tnl.verts, 0, "no CPU T&L");
@@ -647,6 +650,9 @@ fn the_gpu_path_draws_the_water_the_cpu_path_draws() {
             let name = format!("{name}{}", if msaa { "_msaa" } else { "" });
             let gpu = tnl_oracle(&mut r, &name, |r| frame(r, Some((0.75, &ripples)), params));
             assert_eq!(gpu, 3, "{name}");
+            // On even under `TRINO_PC_TNL=cpu` (a CI step): the oracle
+            // restores the switch it found.
+            r.set_hw_tnl(true);
             frame(&mut r, Some((0.75, &ripples)), params);
             assert_eq!(r.pc_gpu_rejects().iter().sum::<u32>(), 0, "{name}");
             assert_eq!(r.stats().tnl.verts, 0, "{name}: no CPU T&L");

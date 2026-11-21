@@ -87,7 +87,13 @@ pub fn section(app: &mut App, ui: &mut egui::Ui, logical: &str) {
             }
             waveform(ui, insp, preview);
             ui.add_space(4.0);
-            play_row(ui, insp, &playing, &mut cmds);
+            // An explicit id: the spinner above comes and goes with a
+            // re-measure, and the buttons' automatic ids would move with
+            // it, losing a click that lands in that frame.
+            let id = ui.id().with("audio-play-row");
+            ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+                play_row(ui, insp, &playing, &mut cmds)
+            });
         },
     );
     theme::component(

@@ -70,6 +70,13 @@ fn provided_renderer_methods_are_harmless_defaults() {
         }],
     );
     dyn_r.draw_billboard(SpriteId(1), Vec3::ZERO, &BillboardParams::DEFAULT);
+    // Dynamic meshes: the consoles' tier (none drawn) is the default.
+    let quad = [trino_core::DynVertex::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Color::WHITE); 3];
+    dyn_r.draw_mesh(
+        &trino_core::DynamicMesh::new(&quad, &[0, 1, 2]),
+        &Mat34::IDENTITY,
+        &ModelParams::DEFAULT,
+    );
     dyn_r.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::WHITE);
     dyn_r.draw_text(FontId(3), Vec2::ZERO, "hello", &TextParams::DEFAULT);
     assert_eq!(dyn_r.measure_text(FontId(3), "hello", 2.0), Vec2::ZERO);

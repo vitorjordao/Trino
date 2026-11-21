@@ -91,6 +91,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0039](adr/0039-animation-layers-2d-blend-inertialization.md) | Animation layers: joint masks, additive layers, 2D blend spaces, inertialized transitions, tiered per platform |
 | [0040](adr/0040-graph-tables-and-crowd-instances.md) | Animation graphs for crowds: tables decoded once, instances sized by the game, synced layers, one graph per rig family |
 | [0041](adr/0041-netplay-follow-ups.md) | Netplay follow-ups: local seats, spectators, NAT traversal and a relay, the consoles' lockstep over the 3DS's local wireless, snapshot recordings |
+| [0042](adr/0042-dynamic-meshes.md) | Dynamic meshes: geometry the game rewrites every frame (`Renderer::draw_mesh`), drawn through the model path from a TMDL blob in a per-frame slot; the PC and the Web now, the consoles later |
 
 ## Plans and history
 

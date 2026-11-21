@@ -132,7 +132,10 @@ in scene playback, the glows. `TRINO_POST=off|on|bloom` overrides what shows (`o
 bloom chain (Off: no bloom, vignette or grain; Low: a quarter, 3 levels; Medium: half,
 4; High: half, 6). `TRINO_FRAME` adds `post_frames= bloom=`. The players' daltonization
 filter (`AccessSettings::cvd_filter`, `cvd_filter=on` in `TRINO_ACCESS`) corrects the
-whole picture for their mode. Measured costs are in the ADR.
+whole picture for their mode. `Renderer::set_speed_blur` (`SpeedBlur`: center, strength,
+inner radius, feather) streaks the 3D toward a center in the same composite, over the
+neutral stack when the game sets no post; the `off` post level drops it. Measured costs
+are in the ADR.
 
 ### Quality presets
 
@@ -265,7 +268,7 @@ Things to know:
 - Troubleshooting: the [build-n64](../.agents/skills/build-n64/SKILL.md) and
   [run-emulator](../.agents/skills/run-emulator/SKILL.md) skills.
 - **Post-processing** ([ADR 0033](adr/0033-post-processing-stack.md)): the Baked tier.
-  `set_post` is ignored; a model's or sprite's `grading` LUT is baked into its colors
+  `set_post` and `set_speed_blur` are ignored; a model's or sprite's `grading` LUT is baked into its colors
   and a `bake_grading` scene's environment colors into its TSCN, at no run-time cost.
   Bloom is a `Glow` halo: one billboard of the I4 `sprites/glow`. The `post` self-test
   step probes both in ares.

@@ -190,6 +190,18 @@ fn the_post_step_grades_and_glows_on_every_profile_and_catches_its_breakages() {
         };
         assert_eq!(post(&mut renderer), Ok(true), "{profile:?}");
         if profile == SimProfile::Native {
+            // The preset's post level Off keeps the grading and drops the
+            // speed blur (and the bloom, checked after it).
+            let mut q = trino_core::PresetTable::BUILT_IN.get(trino_core::QualityPreset::High);
+            q.post = trino_core::PostSetting::Off;
+            renderer.apply_quality(&q);
+            assert_eq!(
+                post(&mut renderer),
+                Err("post: no speed blur beside the card")
+            );
+            q.post = trino_core::PostSetting::High;
+            renderer.apply_quality(&q);
+            assert_eq!(post(&mut renderer), Ok(true), "back to High");
             renderer.remove_lut(POST_LUT);
             assert!(post(&mut renderer).unwrap_err().contains("not graded"));
         } else {

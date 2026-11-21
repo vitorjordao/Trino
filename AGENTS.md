@@ -852,12 +852,20 @@ since #122.
   - **Daltonization (from #60):** `access::color::correction`, `AccessSettings::
     cvd_filter` (opt-in, packed bit), drawn by the CVD pass over the whole picture; hosts
     call `PcRenderer::apply_access`.
+  - **Speed blur (2026-11, ADR 0033 §7):** `SpeedBlur` (center, strength, inner radius,
+    feather) through its own `Renderer::set_speed_blur` (a default, cleared at
+    `begin_frame`, not a `PostSettings` field): a radial blur in the composite, linear
+    light before the tonemap; a half-size gather (12 taps) read 8 times along the streak,
+    no full-size target; strength 0 is the old frame byte for byte. Full tier only; the
+    `off` post level drops it. `PcFrameTimes::speed_blurs`; cost in `post_bench`.
   - **Tools:** `cargo xtask lut neutral|inspect`, `post check`, `scene shot --post`,
     `scene export --bake-grading`; editor Inspector › Post-processing, Add component ›
     Glow, View › Post-processing view, the Accessibility tab's Daltonize, `TRINO_EDITOR_POST`.
-  - **Tests:** `crates/platform-pc/tests/post.rs` (goldens `post_native`, `cvd_filter_*`),
-    the `post` self-test step (graded card + bloom or glow) on PC, ares, Azahar and the
-    browsers, the reference scene `scenes/post-reference.scene.ron` (PC vs N64/3DS).
+  - **Tests:** `crates/platform-pc/tests/post.rs` (goldens `post_native`, `cvd_filter_*`;
+    the speed blur against `SpeedBlur::gather` over a whole frame), the `post` self-test
+    step (graded card + bloom or glow + the speed blur's streak on the Full tier) on PC,
+    ares, Azahar and the browsers, the reference scene `scenes/post-reference.scene.ron`
+    (PC vs N64/3DS).
 - **Console hardware paths and N64 timing (2026-10-16, ADR 0012, part of #31):**
   the 3DS transforms and lights static meshes on the PICA200 (`render3d::gpu_check`,
   `tnl3d.v.pica`, `gpu tnl` self-test step, `castle64_work_3ds.toml`); text goes to the
@@ -1715,6 +1723,11 @@ cargo test --workspace
   draws the 3D into `Rgba16Float`, and a pipeline built for `Rgba8Unorm` fails wgpu
   validation there. Add the twin to `renderer/post.rs::HdrSet` (or `GpuTnl::install_hdr`)
   and pick it in `record_segments` when the scene target's format is HDR.
+- **A two-pass blur along a varying streak must gather the longest streak** (the speed
+  blur, ADR 0033 §7): a half-size gather that used each pixel's own (shorter, feathered)
+  streak left gaps between the composite's taps, eight stepped copies at strength 0.8.
+  Gather the full-strength sub-streak everywhere and let the composite's taps overlap;
+  hold the frame to a one-pass CPU reference (`SpeedBlur::gather`), not to the eye.
 - **Trino's vertex colors are 8-bit, so "HDR" is only per-pixel light** (local lights,
   highlights, the wet floor, issue #64): bloom thresholds in linear light with a soft
   knee and defaults to 0.8 so an unlit white glows; a threshold of 1.0 blooms almost

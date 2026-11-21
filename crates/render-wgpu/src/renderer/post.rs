@@ -16,8 +16,20 @@
 //! `EXT_color_buffer_float`) the scene stays 8-bit and the same pass runs
 //! over it: grading, vignette, grain and an LDR bloom still apply, only the
 //! range past 1 is lost.
+//!
+//! The speed blur (`Renderer::set_speed_blur`, [`SpeedBlur`]) is two more
+//! steps of the same pass, no full-size target: a gather at half the
+//! picture's size (each pixel's mean light over the first
+//! `1/COMPOSITE_TAPS` of a full-strength streak from it,
+//! [`SpeedBlur::GATHER_TAPS`] taps with a fixed per-pixel jitter), then the
+//! composite reads that
+//! [`SpeedBlur::COMPOSITE_TAPS`] times along the whole streak; the weight
+//! sets the streak's length, and only its first [`SpeedBlur::FADE_PIXELS`]
+//! fade in from the sharp pixel. Light is the square of the display value
+//! (gamma 2) and the gather stores its root, so an 8-bit chain keeps the
+//! darks. Inside the inner radius the composite runs exactly the old code.
 
-use trino_core::post::{Lut, PostSettings};
+use trino_core::post::{Lut, PostSettings, SpeedBlur};
 
 use super::upscale::SceneTargets;
 use super::{
@@ -193,6 +205,10 @@ pub(super) const SHADER: &str = include_str!("post.wgsl");
 const SLOT: u64 = 256;
 /// The composite, the prefilter, then the down and up passes.
 const SLOTS: u64 = 2 + 2 * MAX_LEVELS as u64;
+/// The speed blur's gather, after them.
+const SPEED_SLOT: u64 = SLOTS;
+/// The composite's uniform block (`Comp` in `post.wgsl`).
+const COMP_BYTES: u64 = 96;
 /// The bloom chain's deepest level count.
 pub(super) const MAX_LEVELS: u32 = 6;
 
@@ -210,6 +226,8 @@ pub(super) struct PostFrame<'a> {
     /// The upscale's sharpening (a scaled scene smaller than the picture).
     pub sharpen: f32,
     pub seed: u32,
+    /// The speed blur (clamped and on), or `None`.
+    pub speed: Option<SpeedBlur>,
 }
 
 /// What the pass did ([`super::PcFrameTimes`]).
@@ -217,6 +235,7 @@ pub(super) struct PostFrame<'a> {
 pub(super) struct PostWork {
     pub bloom_levels: u32,
     pub upload: u32,
+    pub speed_blur: bool,
 }
 
 struct Level {
@@ -234,6 +253,8 @@ pub(super) struct PostPass {
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
+    /// The speed blur's half-size gather.
+    gather: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
     /// A black 1×1 bloom and a neutral 2³ LUT for frames without them.
@@ -242,6 +263,9 @@ pub(super) struct PostPass {
     /// The chain, for the base size it was made for.
     chain: Vec<Level>,
     chain_base: (u32, u32),
+    /// The speed blur's gather target (half the picture), made on its
+    /// first frame.
+    speed: Option<Level>,
 }
 
 fn tex_entry(binding: u32, dim: wgpu::TextureViewDimension) -> wgpu::BindGroupLayoutEntry {
@@ -335,6 +359,7 @@ impl PostPass {
                 tex_entry(2, wgpu::TextureViewDimension::D3),
                 sampler_entry(3),
                 uniform_entry(4),
+                tex_entry(5, wgpu::TextureViewDimension::D2),
             ],
         });
         let layout = |bgl: &wgpu::BindGroupLayout, label: &str| {
@@ -392,6 +417,7 @@ impl PostPass {
         let down = make(&blur_layout, "fs_down", chain_format, None);
         let up = make(&blur_layout, "fs_up", chain_format, Some(additive));
         let composite = make(&comp_layout, "fs_post", super::OFFSCREEN_FORMAT, None);
+        let gather = make(&blur_layout, "fs_speed_gather", chain_format, None);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("trino-post-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -400,7 +426,7 @@ impl PostPass {
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trino-post-params"),
-            size: SLOT * SLOTS,
+            size: SLOT * (SPEED_SLOT + 1),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -430,13 +456,34 @@ impl PostPass {
             down,
             up,
             composite,
+            gather,
             sampler,
             params,
             no_bloom,
             no_lut,
             chain: Vec::new(),
             chain_base: (0, 0),
+            speed: None,
         }
+    }
+
+    /// The speed blur's gather target for a `size` picture.
+    fn ensure_speed(&mut self, device: &wgpu::Device, size: (u32, u32)) {
+        let half = ((size.0 / 2).max(1), (size.1 / 2).max(1));
+        if self.speed.as_ref().is_some_and(|l| l.size == half) {
+            return;
+        }
+        let tex = texture(
+            device,
+            "trino-post-speed",
+            half,
+            self.chain_format,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        self.speed = Some(Level {
+            size: half,
+            view: tex.create_view(&wgpu::TextureViewDescriptor::default()),
+        });
     }
 
     /// The chain for a `base`-sized first level with `levels` levels.
@@ -642,10 +689,52 @@ impl PostPass {
             queue.write_buffer(&self.params, 0, b);
             work.upload = b.len() as u32;
         }
+        // The speed blur's gather: the scene's drawn corner into half the
+        // picture.
+        if let Some(b) = frame.speed {
+            self.ensure_speed(device, out);
+            let words = [
+                f(1.0 / ew),
+                f(1.0 / eh),
+                f(sw / ew),
+                f(sh / eh),
+                f((sw - 0.5) / ew),
+                f((sh - 0.5) / eh),
+                f(b.center.x),
+                f(b.center.y),
+                f(b.strength),
+                f(SpeedBlur::GATHER_TAPS as f32),
+                f(1.0 / SpeedBlur::COMPOSITE_TAPS as f32),
+                0,
+                0,
+                0,
+                0,
+                0,
+            ];
+            let bytes = words_to_bytes(&words);
+            queue.write_buffer(&self.params, SPEED_SLOT * SLOT, &bytes);
+            work.upload += bytes.len() as u32;
+            work.speed_blur = true;
+            let g = self.blur_group(device, &scene.color_view, SPEED_SLOT);
+            if let Some(target) = &self.speed {
+                Self::draw(
+                    encoder,
+                    "trino-post-speed-gather",
+                    &target.view,
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    &self.gather,
+                    &g,
+                );
+            }
+        }
         let bloom_view = if bloom.is_some() {
             &self.chain[0].view
         } else {
             &self.no_bloom
+        };
+        let speed_view = match (&self.speed, frame.speed) {
+            (Some(l), Some(_)) => &l.view,
+            _ => &self.no_bloom,
         };
         let lut_view = frame.lut.map_or(&self.no_lut, |l| &l.view);
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -673,8 +762,12 @@ impl PostPass {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.params,
                         offset: 0,
-                        size: wgpu::BufferSize::new(64),
+                        size: wgpu::BufferSize::new(COMP_BYTES),
                     }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(speed_view),
                 },
             ],
         });
@@ -689,7 +782,7 @@ impl PostPass {
         work
     }
 
-    fn comp_words(&self, frame: &PostFrame<'_>, bloom: f32) -> [u32; 16] {
+    fn comp_words(&self, frame: &PostFrame<'_>, bloom: f32) -> [u32; 24] {
         let s = frame.settings;
         let scene = frame.scene;
         let (ew, eh) = (scene.extent.0 as f32, scene.extent.1 as f32);
@@ -700,6 +793,7 @@ impl PostPass {
         } else {
             0.0
         };
+        let speed = frame.speed.unwrap_or(SpeedBlur::DEFAULT);
         [
             f(1.0 / ew),
             f(1.0 / eh),
@@ -716,7 +810,16 @@ impl PostPass {
             f(frame.lut.map_or(0.0, |l| l.size as f32)),
             f(sharpen),
             frame.bloom_only as u32,
-            0,
+            // The speed blur: 0 strength skips it.
+            f(speed.strength),
+            f(speed.center.x),
+            f(speed.center.y),
+            f(speed.inner_radius),
+            f(speed.feather),
+            f(SpeedBlur::COMPOSITE_TAPS as f32),
+            f(1.0 / SpeedBlur::FADE_PIXELS),
+            f(frame.dst.1.0 as f32),
+            f(frame.dst.1.1 as f32),
         ]
     }
 }
@@ -744,5 +847,27 @@ mod tests {
             assert_eq!(PostView::parse(v.key()), Some(v));
         }
         assert_eq!(PostView::parse("sideways"), None);
+    }
+
+    /// The uniform blocks the pass writes have the sizes the shader reads:
+    /// the composite's `COMP_BYTES` (the 24 words of `comp_words`), and
+    /// the blur and gather blocks inside the 64 bytes their bind group
+    /// gives them.
+    #[test]
+    fn the_uniforms_match_the_shader_layout() {
+        let module = naga::front::wgsl::parse_str(SHADER).expect("post.wgsl parses");
+        let size = |name: &str| {
+            module
+                .types
+                .iter()
+                .find(|(_, t)| t.name.as_deref() == Some(name))
+                .map(|(_, t)| t.inner.size(module.to_ctx()) as u64)
+                .unwrap_or_else(|| panic!("no struct {name}"))
+        };
+        assert_eq!(size("Comp"), COMP_BYTES);
+        assert_eq!(COMP_BYTES, 24 * 4, "comp_words' length");
+        assert!(size("Blur") <= 64);
+        assert_eq!(size("Speed"), 64);
+        const { assert!(COMP_BYTES <= SLOT && SPEED_SLOT >= SLOTS) };
     }
 }

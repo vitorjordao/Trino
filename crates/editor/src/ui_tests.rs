@@ -3733,6 +3733,9 @@ fn audio_inspector_and_mixer_write_the_text_files() {
         playing(&mut h),
         Some((THEME.to_string(), Some(Platform::N64)))
     );
+    // A re-measure starting between the query and the click (the file
+    // watcher's reload, on a slow runner) must not move the button.
+    h.state_mut().project.generation += 1;
     press(&mut h, Role::Button, "Stop");
     assert_eq!(playing(&mut h), None);
 

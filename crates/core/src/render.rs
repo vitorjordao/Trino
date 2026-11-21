@@ -202,6 +202,14 @@ pub struct FrameStats {
     /// ([`crate::stereo::StereoStats`], issue #63). The other counters sum
     /// both eyes' work.
     pub stereo: crate::stereo::StereoStats,
+    /// [`Renderer::draw_mesh`] calls that reached the T&L (also counted in
+    /// `models`).
+    pub dynamic_meshes: u32,
+    /// [`Renderer::draw_mesh`] calls that drew nothing: the target takes
+    /// no dynamic meshes ([`Caps::max_dynamic_vertices`]), or the mesh
+    /// failed [`crate::DynamicMesh::check`] (a NaN, an index out of range,
+    /// too many vertices), or the frame had too many of them.
+    pub dynamic_rejected: u32,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's
@@ -773,6 +781,28 @@ pub trait Renderer {
             let p = i.params(params, palettes);
             self.draw_model_matrix(model, &i.matrix, Material::VertexLit, &p);
         }
+    }
+
+    /// Draw a mesh the game wrote this frame ([`crate::dynamic_mesh`]):
+    /// its vertices (position, normal, color with alpha, UVs) and
+    /// triangles, placed by `matrix`, with `params` as for a model
+    /// ([`ModelParams::anim`] is ignored: a dynamic mesh has no skeleton).
+    /// The same pixels as [`draw_model_matrix`](Self::draw_model_matrix) of
+    /// a baked model with these vertices: backends draw it through the
+    /// model path (translucent, water, lit, shadows). The data is read
+    /// during the call; the game may reuse its buffers right after.
+    ///
+    /// A target draws up to [`Caps::max_dynamic_vertices`] vertices per
+    /// mesh, 0 meaning none: the consoles, for now, where this default
+    /// draws nothing. A mesh that fails [`crate::DynamicMesh::check`] draws
+    /// nothing either; a backend that draws them counts both cases in
+    /// [`FrameStats::dynamic_rejected`].
+    fn draw_mesh(
+        &mut self,
+        _mesh: &crate::dynamic_mesh::DynamicMesh<'_>,
+        _matrix: &Mat34,
+        _params: &ModelParams,
+    ) {
     }
 
     fn end_frame(&mut self);

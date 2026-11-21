@@ -175,6 +175,32 @@ fn the_shader_precompile_step_warms_the_pc_and_skips_the_consoles() {
     }
 }
 
+/// The `dynamic mesh` step on the PC's profiles: the native one draws the
+/// two quads and the rewrite on both T&L paths; the console profiles take
+/// none.
+#[test]
+fn the_dynamic_mesh_step_draws_on_the_native_profile_only() {
+    use castle64::selftest::{DynamicProbe, dynamic_mesh};
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        if profile != SimProfile::Native {
+            assert_eq!(dynamic_mesh(&mut renderer), Ok(DynamicProbe::NoneHere));
+            continue;
+        }
+        for gpu in [true, false] {
+            renderer.set_hw_tnl(gpu);
+            assert_eq!(
+                dynamic_mesh(&mut renderer),
+                Ok(DynamicProbe::Probed),
+                "GPU path {gpu}"
+            );
+        }
+    }
+}
+
 /// The `post` step (issue #64) on the native profile and each console
 /// profile: the card is graded alike (the PC's LUT at run time, the
 /// consoles' graded bake) and blooms or glows. Breaking each tier's half

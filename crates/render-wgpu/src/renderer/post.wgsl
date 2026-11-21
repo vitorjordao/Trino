@@ -8,6 +8,10 @@
 // The scene holds display values (the shaders write sRGB-encoded color),
 // extended past 1 by per-pixel lights and highlights: they are decoded to
 // linear light here, exposed, tonemapped and encoded again.
+//
+// The speed blur (`trino_core::post::SpeedBlur`) is a radial blur toward a
+// center in two steps: `fs_speed_gather` at half size, then the composite's
+// taps of it (see `SpeedBlur::along` for the geometry both follow).
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -106,6 +110,67 @@ fn fs_up(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(sum / 12.0, 1.0);
 }
 
+// --- the speed blur's gather ---------------------------------------------------
+
+struct Speed {
+    // The scene's texel and drawn corner, as the prefilter's.
+    texel: vec2<f32>,
+    uv_scale: vec2<f32>,
+    uv_max: vec2<f32>,
+    center: vec2<f32>,
+    strength: f32,
+    // `SpeedBlur::GATHER_TAPS`, and 1 / `SpeedBlur::COMPOSITE_TAPS`.
+    taps: f32,
+    sub: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+};
+
+@group(0) @binding(2) var<uniform> speed: Speed;
+
+// `SpeedBlur::weight`: 0 inside the inner radius, 1 past the feather.
+fn speed_weight(uv: vec2<f32>, center: vec2<f32>, inner: f32, feather: f32) -> f32 {
+    let d = (uv - center) * 2.0;
+    let r = sqrt(dot(d, d) * 0.5);
+    let t = clamp((r - inner) / feather, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Interleaved gradient noise (Jimenez 2014): a fixed 0..1 per pixel, so the
+// taps' jitter never crawls on a still picture.
+fn ign(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// The light over the first `sub` of a full-length streak from this pixel
+// (in the picture's UVs): the mean of the display values' squares (gamma 2,
+// close to sRGB's light and a multiply instead of three `pow` a tap),
+// stored as its square root, a display value (an 8-bit chain keeps the
+// darks). Full length everywhere, not this pixel's: the composite reads it
+// for pixels farther out, whose streaks pass here.
+@fragment
+fn fs_speed_gather(in: VsOut) -> @location(0) vec4<f32> {
+    let reach = max(1.0 - speed.strength, 0.05);
+    // The scale from one tap to the next, and the first tap's (jittered).
+    let step = log2(reach) * speed.sub / speed.taps;
+    let ratio = exp2(step);
+    var scale = exp2(step * ign(floor(in.clip.xy)));
+    let d = in.uv - speed.center;
+    let lo = speed.texel * 0.5;
+    var sum = vec3<f32>(0.0);
+    let n = u32(speed.taps);
+    for (var j = 0u; j < n; j = j + 1u) {
+        let uv = (speed.center + d * scale) * speed.uv_scale;
+        let x = max(textureSampleLevel(t_src, s_src, clamp(uv, lo, speed.uv_max), 0.0).rgb, vec3<f32>(0.0));
+        sum += x * x;
+        scale *= ratio;
+    }
+    return vec4<f32>(sqrt(sum / speed.taps), 1.0);
+}
+
 // --- the composite ------------------------------------------------------------
 
 struct Comp {
@@ -125,7 +190,16 @@ struct Comp {
     sharpen: f32,
     // 0 = the picture, 1 = the bloom alone.
     view: u32,
-    _pad: f32,
+    // The speed blur's strength (0 = none), center, inner radius, feather
+    // and `SpeedBlur::COMPOSITE_TAPS`.
+    speed: f32,
+    speed_center: vec2<f32>,
+    speed_inner: f32,
+    speed_feather: f32,
+    speed_taps: f32,
+    // 1 / `SpeedBlur::FADE_PIXELS` and the picture's size in pixels.
+    speed_fade: f32,
+    speed_size: vec2<f32>,
 };
 
 @group(0) @binding(0) var t_scene: texture_2d<f32>;
@@ -133,6 +207,7 @@ struct Comp {
 @group(0) @binding(2) var t_lut: texture_3d<f32>;
 @group(0) @binding(3) var s_lin: sampler;
 @group(0) @binding(4) var<uniform> comp: Comp;
+@group(0) @binding(5) var t_speed: texture_2d<f32>;
 
 fn rows(r0: vec3<f32>, r1: vec3<f32>, r2: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(r0, v), dot(r1, v), dot(r2, v));
@@ -189,6 +264,7 @@ fn toned(display: vec3<f32>, bloom: vec3<f32>) -> vec3<f32> {
     return clamp(encode3(tonemap(l)), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+
 fn pcg(v: u32) -> u32 {
     let s = v * 747796405u + 2891336453u;
     let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
@@ -203,19 +279,48 @@ fn fs_post(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(clamp(encode3(bloom), vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
     }
     let center = textureSampleLevel(t_scene, s_lin, clamp(uv, comp.texel * 0.5, comp.uv_max), 0.0);
-    var c = toned(center.rgb, bloom);
-    if comp.sharpen > 0.0 {
-        // The upscale's contrast-adaptive sharpening, on toned values.
-        let t = comp.texel;
-        let n = toned(scene_at(uv + vec2<f32>(0.0, -t.y)), bloom);
-        let w = toned(scene_at(uv + vec2<f32>(-t.x, 0.0)), bloom);
-        let e = toned(scene_at(uv + vec2<f32>(t.x, 0.0)), bloom);
-        let s = toned(scene_at(uv + vec2<f32>(0.0, t.y)), bloom);
-        let lo = min(min(min(n, w), min(e, s)), c);
-        let hi = max(max(max(n, w), max(e, s)), c);
-        let amp = sqrt(clamp(min(lo, vec3<f32>(1.0) - hi) / max(hi, vec3<f32>(1.0 / 255.0)), vec3<f32>(0.0), vec3<f32>(1.0)));
-        let k = amp * (-1.0 / mix(8.0, 5.0, clamp(comp.sharpen, 0.0, 1.0)));
-        c = clamp((c + (n + w + e + s) * k) / (vec3<f32>(1.0) + 4.0 * k), vec3<f32>(0.0), vec3<f32>(1.0));
+    // The speed blur's share of this pixel (`SpeedBlur::fade`): 0 inside
+    // the inner radius and without it (the sharp pixel alone), 1 once the
+    // streak is a few pixels long (the blur alone).
+    var fade = 0.0;
+    var reach = 1.0;
+    let sd = in.uv - comp.speed_center;
+    if comp.speed > 0.0 {
+        let w = speed_weight(in.uv, comp.speed_center, comp.speed_inner, comp.speed_feather);
+        reach = max(1.0 - comp.speed * w, 0.05);
+        fade = clamp((1.0 - reach) * length(sd * comp.speed_size) * comp.speed_fade, 0.0, 1.0);
+    }
+    var c = vec3<f32>(0.0);
+    if fade < 1.0 {
+        c = toned(center.rgb, bloom);
+        if comp.sharpen > 0.0 {
+            // The upscale's contrast-adaptive sharpening, on toned values.
+            let t = comp.texel;
+            let n = toned(scene_at(uv + vec2<f32>(0.0, -t.y)), bloom);
+            let w = toned(scene_at(uv + vec2<f32>(-t.x, 0.0)), bloom);
+            let e = toned(scene_at(uv + vec2<f32>(t.x, 0.0)), bloom);
+            let s = toned(scene_at(uv + vec2<f32>(0.0, t.y)), bloom);
+            let lo = min(min(min(n, w), min(e, s)), c);
+            let hi = max(max(max(n, w), max(e, s)), c);
+            let amp = sqrt(clamp(min(lo, vec3<f32>(1.0) - hi) / max(hi, vec3<f32>(1.0 / 255.0)), vec3<f32>(0.0), vec3<f32>(1.0)));
+            let k = amp * (-1.0 / mix(8.0, 5.0, clamp(comp.sharpen, 0.0, 1.0)));
+            c = clamp((c + (n + w + e + s) * k) / (vec3<f32>(1.0) + 4.0 * k), vec3<f32>(0.0), vec3<f32>(1.0));
+        }
+    }
+    if fade > 0.0 {
+        // The gather read along the whole streak, one tap per gathered
+        // sub-streak, geometrically (`SpeedBlur::along`); light averaged
+        // as squares, like the gather.
+        let ratio = exp2(log2(reach) / comp.speed_taps);
+        var scale = 1.0;
+        var sum = vec3<f32>(0.0);
+        let n = u32(comp.speed_taps);
+        for (var k = 0u; k < n; k = k + 1u) {
+            let a = textureSampleLevel(t_speed, s_lin, comp.speed_center + sd * scale, 0.0).rgb;
+            sum += a * a;
+            scale *= ratio;
+        }
+        c = mix(c, toned(sqrt(sum / comp.speed_taps), bloom), fade);
     }
     if comp.lut_n > 0.0 {
         let n = comp.lut_n;

@@ -2558,6 +2558,10 @@ pub const POST_GRADED: Color = Color::rgb(60, 20, 200);
 ///    `set_post(bloom)` plus a [`trino_core::Glow`] halo than without: the
 ///    Full tier blooms (the halo, `GlowMode::Baked`, draws nothing there),
 ///    the Baked tier draws the halo.
+/// 3. **Speed blur.** With `set_speed_blur` streaking toward the screen's
+///    edge behind the small card, the same spot beside it catches the
+///    card's color on the Full tier; the Baked tier ignores the call and
+///    draws the frame without it.
 ///
 /// `Ok(false)` where `read_pixel` is unsupported (after drawing both).
 #[inline(never)]
@@ -2635,9 +2639,32 @@ pub fn post(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         }
         seen[k] = renderer.read_pixel(beside.0, beside.1);
     }
+    // 3. The small card again, its streaks running from `beside` across
+    // it, toward the screen's edge on the card's side.
+    let card = at(Vec3::ZERO);
+    let streak = trino_core::SpeedBlur {
+        center: Vec2::new(if beside.0 > card.0 { 0.0 } else { 1.0 }, 0.5),
+        strength: 0.6,
+        inner_radius: 0.0,
+        feather: 0.05,
+    };
+    let mut blurred = [None; 2];
+    for (k, on) in [false, true].into_iter().enumerate() {
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            renderer.set_post(Some(&grade));
+            renderer.set_speed_blur(on.then_some(&streak));
+            renderer.draw_model(POST_CARD, &small, Material::VertexLit, &unlit);
+            renderer.end_frame();
+        }
+        blurred[k] = renderer.read_pixel(beside.0, beside.1);
+    }
     renderer.begin_frame(Color::BLACK);
     renderer.end_frame();
-    let (Some(c), [Some(dark), Some(lit)]) = (graded, seen) else {
+    let (Some(c), [Some(dark), Some(lit)], [Some(sharp), Some(streaked)]) = (graded, seen, blurred)
+    else {
         return Ok(false);
     };
     let near = |a: Color, b: Color, tol: u8| {
@@ -2655,6 +2682,13 @@ pub fn post(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
     }
     // The card is blue once graded: weigh the channels alike.
     let level = |c: Color| (c.r as i32 + c.g as i32 + c.b as i32) / 3;
+    if caps.post_tier == PostTier::Full {
+        if level(streaked) < level(sharp) + 12 {
+            return Err("post: no speed blur beside the card");
+        }
+    } else if !near(streaked, sharp, 2) {
+        return Err("post: a console drew the speed blur");
+    }
     if level(lit) < level(dark) + 12 {
         return Err(if caps.post_tier == PostTier::Full {
             "post: no bloom beside the card"

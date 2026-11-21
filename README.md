@@ -12,5 +12,12 @@ Branch `feat/dynamic-mesh`. Files:
   difference ×8. This is `tnl_oracle::compare`, held to the same tolerance as every native
   golden.
 - `bongo-kart/`: the game that asked for it (Bongo Kart, branch `wt/onda-malha`).
-  Before: the wave water as model strips. After: one dynamic mesh per body of water and
-  per wet patch. Same camera, same simulation frame, 1920×1080.
+  Before: the wave and flush water and the wet road as model strips, each in its own plane
+  of the road. After: one dynamic mesh per body of water and per wet patch. Same fixed
+  camera, same frame after the event's warning, 1920×1080 crops.
+  - `wave_beach.jpg` and `wave_beach.gif`: the beach wave rising, running back, and the
+    wet road it leaves.
+  - `wet_drying.jpg`: the wet road drying. Before, in bands where the strips overlap;
+    after, as a gradient from the border in.
+  - `flush_sewer.jpg`: the acid flush on the sewer track.
+  - `wave_moat.jpg`: the moat wave, which spills up to the wall.

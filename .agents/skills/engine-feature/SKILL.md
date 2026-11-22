@@ -110,6 +110,14 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   Its self-test step compares one call with the separate draws (pixels on a probe
   grid, `models`/`tris`/`tnl`), and the mutations to try are the ones an override
   can get wrong: a copy dropped, a per-copy field ignored.
+- **A draw call that takes the game's data instead of a model** (dynamic meshes, ADR
+  0042) writes it in the format the model path already reads (`DynamicMesh::write_tmdl`
+  into a renderer-owned slot) and draws that with `draw_model_matrix`: GPU and CPU T&L,
+  translucency, water, light and shadows apply with no T&L change. Give each call of a
+  frame its own slot (the CPU jobs read the blob at the batch flush, the GPU reads its
+  stream at submit), rewrite the GPU copy with the blob or drop it, and prove the call
+  byte for byte against a baked model with the same vertices on both PC paths
+  (`crates/platform-pc/tests/dynamic_mesh.rs`), with a mutation that skips the GPU rewrite.
 - **A tiered surface (water, ADR 0015) keeps the geometry in the core** and lets each
   tier add what its hardware can: the PC per pixel, the 3DS a vertex program
   (`gpu_water` builds its uniforms and `crates/core/tests/gpu_water.rs` emulates the

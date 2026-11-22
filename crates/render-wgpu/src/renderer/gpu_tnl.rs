@@ -139,8 +139,16 @@ fn pack(c: Color) -> u32 {
 /// The vertex stream of `mesh` for the GPU path: three vertices per
 /// triangle, in index order.
 pub fn mesh_vertices(mesh: &Mesh) -> Vec<MeshVertex> {
+    let mut out = Vec::new();
+    mesh_vertices_into(mesh, &mut out);
+    out
+}
+
+/// [`mesh_vertices`] into `out` (cleared first; its capacity reused).
+pub fn mesh_vertices_into(mesh: &Mesh, out: &mut Vec<MeshVertex>) {
     let tris = mesh.index_count / 3;
-    let mut out = Vec::with_capacity(tris * 3);
+    out.clear();
+    out.reserve(tris * 3);
     let textured = mesh.has_uvs();
     let skinned = mesh.joint_count() != 0;
     for t in 0..tris {
@@ -168,7 +176,6 @@ pub fn mesh_vertices(mesh: &Mesh) -> Vec<MeshVertex> {
             });
         }
     }
-    out
 }
 
 /// The copy of a draw ([`GpuInstance`]): matrices, surface and flags.
@@ -349,6 +356,13 @@ pub struct GpuTnl {
     /// sampled, then multisampled; built when post first runs.
     hdr_pipelines: [Option<[wgpu::RenderPipeline; MESH_PIPES]>; 2],
     meshes: HashMap<u32, GpuMesh>,
+    /// Vertex buffers created for meshes so far (uploads, and a dynamic
+    /// mesh growing past its buffer): a mesh rewritten every frame in
+    /// place adds none.
+    buffers_created: u64,
+    /// [`write_mesh`](Self::write_mesh)'s vertex stream, kept between
+    /// calls.
+    stream: Vec<MeshVertex>,
     /// Bytes between two context / joint blocks (the device's uniform
     /// offset alignment).
     ctx_stride: u64,
@@ -530,6 +544,8 @@ impl GpuTnl {
             ms_pipelines: None,
             hdr_pipelines: [None, None],
             meshes: HashMap::new(),
+            buffers_created: 0,
+            stream: Vec::new(),
             ctx_stride,
             joint_stride,
             ctx_buf,
@@ -612,6 +628,7 @@ impl GpuTnl {
             mapped_at_creation: false,
         });
         queue.write_buffer(&buf, 0, bytes);
+        self.buffers_created += 1;
         self.meshes.insert(
             model,
             GpuMesh {
@@ -619,6 +636,48 @@ impl GpuTnl {
                 verts: verts.len() as u32,
             },
         );
+    }
+
+    /// Rewrite mesh `model`'s resident vertex stream in place (a dynamic
+    /// mesh, `Renderer::draw_mesh`): its buffer is reused while the stream
+    /// fits and replaced by one of the next power of two when it doesn't,
+    /// so a mesh redrawn every frame creates no buffer in steady state.
+    /// The queue writes before the next submit: one content per frame.
+    pub fn write_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: u32,
+        mesh: &Mesh,
+    ) {
+        let mut stream = core::mem::take(&mut self.stream);
+        mesh_vertices_into(mesh, &mut stream);
+        if stream.is_empty() {
+            self.meshes.remove(&model);
+        } else {
+            let bytes: &[u8] = bytemuck::cast_slice(&stream);
+            let need = bytes.len() as u64;
+            if self.meshes.get(&model).is_none_or(|m| m.buf.size() < need) {
+                let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("trino-tnl-dynamic-mesh"),
+                    size: need.next_power_of_two().max(4096),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.buffers_created += 1;
+                self.meshes.insert(model, GpuMesh { buf, verts: 0 });
+            }
+            if let Some(m) = self.meshes.get_mut(&model) {
+                queue.write_buffer(&m.buf, 0, bytes);
+                m.verts = stream.len() as u32;
+            }
+        }
+        self.stream = stream;
+    }
+
+    /// Vertex buffers created for meshes so far.
+    pub fn buffers_created(&self) -> u64 {
+        self.buffers_created
     }
 
     /// Drop mesh `model`'s stream (its blob changed: re-uploaded on the

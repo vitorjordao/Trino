@@ -517,6 +517,17 @@ since #122.
   - **Measurements:** `cargo test --release -p xtask --test pc_tnl_bench -- --ignored
     --nocapture` (castle64 hub, Solid Eleven match, 2000 instanced robots; 1080p/4K; CPU vs
     GPU path); numbers in ADR 0016 §10.
+- **Dynamic meshes (2026-11-21, ADR 0042):** `Renderer::draw_mesh(&DynamicMesh, &Mat34,
+  &ModelParams)` draws vertices the game wrote this frame (`DynVertex`: position, normal,
+  color with alpha, UV; `u16` indices; `smooth_normals` for shared-vertex normals). The
+  core writes it as a TMDL blob (`DynamicMesh::write_tmdl`, after `check`: NaN, indices,
+  sizes) and the PC/Web renderer draws it through `draw_model_matrix` from a per-frame
+  slot (`trino/dynamic-mesh/<k>`), so every path and pass applies; the slot's blob and GPU
+  stream (`GpuTnl::write_mesh`) are rewritten in place. `Caps::max_dynamic_vertices`:
+  65 536 on the PC and the Web, 0 on the consoles (the trait's default draws nothing) and
+  the PC's console profiles (counted in `FrameStats::dynamic_rejected`). Tests:
+  `crates/core/tests/dynamic_mesh.rs`, `crates/platform-pc/tests/dynamic_mesh.rs`
+  (byte for byte the baked model's frame on both paths), the `dynamic mesh` step.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -1567,6 +1578,13 @@ cargo test --workspace
 
 ## Pitfalls
 
+- **A GPU copy keyed by model id must follow every rewrite of its blob.** The PC
+  renderer uploads a model's GPU stream at its first GPU draw and keeps it; a blob
+  rewritten while the GPU path is off (`TRINO_PC_TNL=cpu`, `set_hw_tnl(false)`) and drawn
+  later on the GPU path draws the old stream. Dynamic meshes rewrite the stream with the
+  blob, or drop it when the path is off (`PcRenderer::write_dynamic`); the test that
+  catches it compares a rewritten slot with the baked model's frame
+  (`a_rewritten_mesh_shows_only_this_frames_vertices`).
 - **A ggrs batch's last advance is not always a new frame.** A rollback can re-simulate
   up to the current frame and add none; `trino_net::run_requests` decides by ggrs's
   frame numbers (`FrameClock`). Effects keyed on "the newest advance" doubled a sound.

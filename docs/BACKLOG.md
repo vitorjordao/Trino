@@ -219,6 +219,17 @@ shipping a 3D game first**, then by cost:
 
 ### P2 — when a game asks for it
 
+- **Dynamic meshes on the consoles** (M, ADR 0042 §4). `Renderer::draw_mesh` draws on the PC
+  and the Web; the N64 and the 3DS take the trait's default (nothing) and
+  `Caps::max_dynamic_vertices` is 0 there. The way in: the console renderers' CPU T&L over a
+  blob that lives until the batch is drawn (the RSP and the 3DS GPU path read meshes after
+  the call), a vertex cap per tier, the `dynamic mesh` self-test step probing on ares and
+  Azahar, and the N64's I-cache, code-size and heap checks.
+- **Dynamic meshes, cheaper GPU stream** (S, ADR 0042). The GPU path's stream is three
+  vertices per triangle (flat shading reads a face normal per vertex); a 64 × 64 sheet
+  uploads 1.4 MB a frame. An indexed stream for Gouraud draws, or writing straight into the
+  queue's staging memory (`write_buffer_with`), would cut the 0.5 ms call.
+
 10. **Editor UI test coverage** (incremental). The kittest harness exists
     (`crates/editor/src/ui_tests.rs`). Grow it alongside panel changes:
     - inspector edits;
@@ -328,6 +339,16 @@ shipping a 3D game first**, then by cost:
 
 Not done: a per-object velocity buffer (this is a screen-space zoom blur only); the consoles
 (a full-screen gather does not fit their fill rate; a game can fake it with sprites).
+
+## Done — dynamic meshes: geometry the game rewrites every frame, drawn as a model (2026-11-21, branch `feat/dynamic-mesh`, ADR 0042)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::dynamic_mesh` (`DynVertex`, `DynamicMesh`, `check`, `write_tmdl`, `smooth_normals`), `Renderer::draw_mesh` (default: nothing), `Caps::max_dynamic_vertices`, `FrameStats::{dynamic_meshes, dynamic_rejected}` | `crates/core/tests/dynamic_mesh.rs`: the blob reads back as the mesh and tessellates as the baked blob with the same vertices; every broken mesh refused before a byte is written; 2 000 garbage meshes refused or written valid; `renderer_defaults` |
+| `PcRenderer::draw_mesh` (PC and Web): a slot per draw of the frame, blob and GPU stream rewritten in place (`GpuTnl::write_mesh`) | `crates/platform-pc/tests/dynamic_mesh.rs`: byte for byte the baked model's frame on the GPU and the CPU path (lit, flat, translucent, textured, water); the GPU × CPU oracle; a rewritten slot shows only this frame's vertices (a mutation that skips the GPU rewrite fails it); 120 rippling frames create no buffer; broken meshes and the console profiles draw nothing, counted; `dynamic_mesh_cost` |
+| castle64's `dynamic mesh` self-test step | `engine_checks`: probed on the native profile on both paths, none on the console profiles; the browsers run it (counters), ares and Azahar read the caps |
+
+Not done (ADR 0042 §4): the consoles draw no dynamic meshes yet (P2 above).
 
 ## Done — netplay follow-ups: local seats, spectators, NAT traversal, console lockstep over local wireless, snapshot recordings (2026-11-03, branch `feat/117-netplay-followups`, GitHub #117, ADR 0041)
 

@@ -215,6 +215,12 @@ pub struct Caps {
     /// construction. Capsules and spheres are exact in shape casts and
     /// overlaps on every tier.
     pub capsule_bodies: bool,
+    /// Most vertices one [`crate::Renderer::draw_mesh`] draws (a mesh the
+    /// game writes every frame, [`crate::dynamic_mesh`]); 0 = the target
+    /// draws none. 65 536 on the PC and the Web; 0 on the consoles for now
+    /// (and on the PC's console profiles, which draw what the consoles
+    /// draw).
+    pub max_dynamic_vertices: u32,
 }
 
 /// How a texture's texels sit in texture memory: the N64 formats the
@@ -343,6 +349,7 @@ impl Caps {
         max_ui_draws: 384,
         max_collision_tris: 4096,
         capsule_bodies: false,
+        max_dynamic_vertices: 0,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -401,6 +408,7 @@ impl Caps {
         max_ui_draws: 2048,
         max_collision_tris: 16_384,
         capsule_bodies: false,
+        max_dynamic_vertices: 0,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -458,6 +466,7 @@ impl Caps {
         max_ui_draws: 16_384,
         max_collision_tris: 1_000_000,
         capsule_bodies: false,
+        max_dynamic_vertices: 65_536,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -505,6 +514,7 @@ impl Caps {
         max_ui_draws: 16_384,
         max_collision_tris: 1_000_000,
         capsule_bodies: false,
+        max_dynamic_vertices: 65_536,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔

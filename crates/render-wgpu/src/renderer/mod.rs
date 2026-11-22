@@ -40,14 +40,19 @@ use trino_core::render3d::{
     SurfaceVert, TnlContext, TnlScratch,
 };
 use trino_core::{
-    AmbientOcclusion, AoSetting, AoTier, Caps, Color, FontId, FrameLimit, FrameStats, Instance,
-    LightList, LightTier, LocalLight, Mat34, Material, ModelId, ModelParams, Palette,
+    AmbientOcclusion, AoSetting, AoTier, Caps, Color, DynamicMesh, FontId, FrameLimit, FrameStats,
+    Instance, LightList, LightTier, LocalLight, Mat34, Material, ModelId, ModelParams, Palette,
     QualitySettings, Renderer, Ripple, Screen, ShadowFrame, ShadowPlane, ShadowSetting,
     ShadowSettings, ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
     WaterState, WaterTier,
 };
 
 use crate::sim::SimProfile;
+
+/// Most [`Renderer::draw_mesh`] calls one frame draws (the rest are
+/// counted in `FrameStats::dynamic_rejected`): each holds a slot, its blob
+/// and its GPU stream, for the rest of the renderer's life.
+pub const MAX_DYNAMIC_DRAWS: usize = 256;
 pub use ao::AoView;
 use batch::{
     Cmd, INSTANCE_STRIDE, Segment, TRI_VERTEX_STRIDE, TexKey, TriKind, TriVertex, build_segments,
@@ -455,6 +460,11 @@ pub struct PcRenderer {
     tex_filter: TexFilter,
     /// TMDL blobs with their validated layout (parsed once, at register).
     meshes: HashMap<u32, (Vec<u8>, MeshLayout)>,
+    /// [`Renderer::draw_mesh`]'s slots: the `meshes` keys the frame's
+    /// dynamic meshes take (the k-th of a frame takes slot k, its blob and
+    /// GPU stream rewritten in place), and how many this frame used.
+    dyn_keys: Vec<u32>,
+    dyn_used: usize,
     /// Glyph tables (`TFNT`) by font handle; the atlas is the sprite with
     /// the same handle. `Arc` so `draw_text` can lay out while drawing.
     fonts: HashMap<u32, Arc<FontEntry>>,
@@ -2489,6 +2499,8 @@ impl PcRenderer {
             white_bg,
             tex_filter,
             meshes: HashMap::new(),
+            dyn_keys: Vec::new(),
+            dyn_used: 0,
             fonts: HashMap::new(),
             commands: Vec::new(),
             frame_stats: FrameStats::default(),
@@ -2695,6 +2707,53 @@ impl PcRenderer {
 
     fn gpu_tnl_active(&self) -> bool {
         self.hw_tnl && self.profile.is_native() && !self.n64_look
+    }
+
+    /// Vertex buffers the GPU path created for meshes so far (uploads, and
+    /// a dynamic mesh growing past its buffer): drawing the same dynamic
+    /// meshes frame after frame adds none.
+    pub fn mesh_buffers_created(&self) -> u64 {
+        self.gpu.as_ref().map_or(0, |g| g.buffers_created())
+    }
+
+    /// Write a checked dynamic mesh into the frame's next slot (its TMDL
+    /// blob in `meshes`, and its GPU stream when the slot is resident
+    /// there) and return the slot's key. Nothing allocates once a slot has
+    /// held a mesh this big.
+    fn write_dynamic(&mut self, mesh: &DynamicMesh<'_>) -> Option<u32> {
+        let k = self.dyn_used;
+        if k == self.dyn_keys.len() {
+            let key = ModelId::from_path(&format!("trino/dynamic-mesh/{k}")).0;
+            self.dyn_keys.push(key);
+            self.draw_report.name(key, &format!("dynamic mesh {k}"));
+        }
+        let key = self.dyn_keys[k];
+        let len = mesh.tmdl_len()?;
+        let mut blob = self.meshes.remove(&key).map(|(b, _)| b).unwrap_or_default();
+        blob.clear();
+        blob.resize(len, 0);
+        let layout = mesh
+            .write_tmdl(&mut blob)
+            .ok()
+            .and_then(|_| Mesh::from_tmdl(&blob).ok())
+            .map(|m| m.layout(&blob))?;
+        // The GPU stream follows the blob: rewritten in place where the
+        // GPU path is on (or uploaded at the slot's first GPU draw), else
+        // dropped, so a later GPU draw never finds an old frame's.
+        let active = self.gpu_tnl_active();
+        if let Some(gpu) = &mut self.gpu
+            && gpu.has_mesh(key)
+        {
+            if active {
+                let m = Mesh::from_layout(&blob, &layout);
+                gpu.write_mesh(&self.device, &self.queue, key, &m);
+            } else {
+                gpu.forget_mesh(key);
+            }
+        }
+        self.meshes.insert(key, (blob, layout));
+        self.dyn_used += 1;
+        Some(key)
     }
 
     /// Build the GPU T&L path's pipelines and buffers (on first use).
@@ -6384,6 +6443,7 @@ impl Renderer for PcRenderer {
         self.times = PcFrameTimes::default();
         self.cpu_jobs.clear();
         self.job_ctxs.clear();
+        self.dyn_used = 0;
         if let Some(gpu) = &mut self.gpu {
             gpu.begin_frame();
         }
@@ -7074,6 +7134,43 @@ impl Renderer for PcRenderer {
         }
         let added = self.pending_tris.len() - before;
         self.tag_pending(before, added, texkey);
+    }
+
+    fn draw_mesh(&mut self, mesh: &DynamicMesh<'_>, matrix: &Mat34, params: &ModelParams) {
+        let max = self.caps.max_dynamic_vertices as usize;
+        if max == 0 || mesh.vertices.len() > max {
+            if self.strict {
+                panic!(
+                    "strict mode: a dynamic mesh of {} vertices on the {:?} profile, which \
+                     draws up to {max} (Caps::max_dynamic_vertices; the consoles draw none \
+                     yet). Draw it as a baked model there, or split it.",
+                    mesh.vertices.len(),
+                    self.profile
+                );
+            }
+            self.frame_stats.dynamic_rejected += 1;
+            return;
+        }
+        let finite = matrix.m.iter().flatten().all(|v| v.is_finite());
+        if !finite || mesh.check(max).is_err() || self.dyn_used >= MAX_DYNAMIC_DRAWS {
+            self.frame_stats.dynamic_rejected += 1;
+            return;
+        }
+        if mesh.is_empty() {
+            return;
+        }
+        let Some(key) = self.write_dynamic(mesh) else {
+            self.frame_stats.dynamic_rejected += 1;
+            return;
+        };
+        self.frame_stats.dynamic_meshes += 1;
+        // A baked model's draw from here on: every path (GPU or CPU,
+        // translucent, water, lit, shadows) and the stereo recording.
+        let params = ModelParams {
+            anim: None,
+            ..*params
+        };
+        self.draw_model_matrix(ModelId(key), matrix, Material::VertexLit, &params);
     }
 
     fn draw_model_instances_with(

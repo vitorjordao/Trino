@@ -324,6 +324,9 @@ pub struct PcFrameTimes {
     /// post stack, issue #64), and the levels of its bloom chain.
     pub post_passes: u32,
     pub bloom_levels: u32,
+    /// Speed blur passes run (0 or 1: the post stack's radial blur,
+    /// `Renderer::set_speed_blur`).
+    pub speed_blurs: u32,
     /// Render pipelines the render thread compiled during this frame
     /// (lazy first uses; 0 once a full [`PcRenderer::precompile`] ran:
     /// `TRINO_FRAME`'s `pipes=`, issue #101).
@@ -563,8 +566,11 @@ pub struct PcRenderer {
     /// targets exist for it, the HDR twins of the scene pipelines (single,
     /// multisampled), the bloom + composite pass (all built on first use),
     /// the grading LUTs uploaded, whether a frame used it (precompile) and
-    /// the grain's frame counter.
+    /// the grain's frame counter. The speed blur is this frame's
+    /// (`Renderer::set_speed_blur`, cleared at `begin_frame`; `None` when
+    /// off), drawn by the same composite.
     post: Option<trino_core::PostSettings>,
+    speed_blur: Option<trino_core::SpeedBlur>,
     post_view: PostView,
     post_targets: bool,
     hdr_sets: [Option<Box<post::HdrSet>>; 2],
@@ -2538,6 +2544,7 @@ impl PcRenderer {
             cvd: None,
             cvd_filter: trino_core::CvdMode::Off,
             post: None,
+            speed_blur: None,
             post_view: std::env::var("TRINO_POST")
                 .ok()
                 .and_then(|v| PostView::parse(&v))
@@ -3862,13 +3869,26 @@ impl PcRenderer {
         if self.caps.post_tier != trino_core::PostTier::Full {
             return None;
         }
-        let (mut p, mask) = self.post_view.resolve(self.post)?;
+        // A speed blur without post settings runs over the neutral stack.
+        let blur_only = (self.post_view == PostView::Game
+            && self.frame_speed_blur(false).is_some())
+        .then_some((trino_core::PostSettings::DEFAULT, false));
+        let (mut p, mask) = self.post_view.resolve(self.post).or(blur_only)?;
         if self.quality.post == Some(trino_core::PostSetting::Off) && !mask {
             p.bloom = None;
             p.vignette = 0.0;
             p.grain = 0.0;
         }
         Some((p, mask))
+    }
+
+    /// The speed blur this frame draws (`mask`: the frame shows the bloom
+    /// alone): the game's, unless the quality preset's post level is Off.
+    fn frame_speed_blur(&self, mask: bool) -> Option<trino_core::SpeedBlur> {
+        if mask || self.quality.post == Some(trino_core::PostSetting::Off) {
+            return None;
+        }
+        self.speed_blur
     }
 
     /// The preset's bloom: its most levels and whether the chain starts at
@@ -5564,6 +5584,7 @@ impl PcRenderer {
             // The post stack: bloom, then the composite onto the picture
             // (it upscales a scaled scene too).
             let bloom_cap = self.bloom_cap();
+            let speed = self.frame_speed_blur(bloom_only);
             let lut = settings.grading.and_then(|id| self.luts.get(&id));
             let pass = self
                 .post_pass
@@ -5582,11 +5603,13 @@ impl PcRenderer {
                         lut,
                         sharpen: self.quality.sharpen,
                         seed: self.post_seed,
+                        speed,
                     },
                 );
                 self.post_seed = self.post_seed.wrapping_add(1);
                 self.times.post_passes += 1;
                 self.times.bloom_levels = work.bloom_levels;
+                self.times.speed_blurs += work.speed_blur as u32;
                 self.times.upload_bytes += work.upload;
             }
         } else if scene_pass {
@@ -6346,6 +6369,7 @@ impl Renderer for PcRenderer {
         self.wetness = 0.0;
         self.ao = None;
         self.post = None;
+        self.speed_blur = None;
         self.light_sets.clear();
         self.water_state = WaterState::NONE;
         self.water_sets.clear();
@@ -6530,6 +6554,12 @@ impl Renderer for PcRenderer {
         // Like the AO, never recorded for stereo: only the Full tier (no
         // stereo screen) reads it.
         self.post = post.map(|p| p.clamped());
+    }
+
+    fn set_speed_blur(&mut self, blur: Option<&trino_core::SpeedBlur>) {
+        // Like the post settings: the Full tier only, never recorded. Off
+        // (no strength) keeps nothing, so the frame is the one without it.
+        self.speed_blur = blur.map(|b| b.clamped()).filter(|b| b.is_on());
     }
 
     fn set_ambient_occlusion(&mut self, ao: Option<&AmbientOcclusion>) {

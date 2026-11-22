@@ -1,6 +1,8 @@
 //! Post-processing (issue #64, ADR 0033): what happens to the finished 3D
 //! before the HUD draws over it — exposure and a tonemapper over an HDR
-//! target, bloom, color grading through a 3D LUT, vignette and film grain.
+//! target, bloom, color grading through a 3D LUT, vignette and film grain;
+//! and, set apart because a game drives it every frame from its speed, a
+//! radial [`SpeedBlur`] ([`crate::Renderer::set_speed_blur`]).
 //!
 //! Each target gets it the way its hardware affords ([`PostTier`], from
 //! [`crate::Caps::post_tier`]):
@@ -22,8 +24,9 @@
 //! Off by default: without `set_post` nothing is allocated and every frame
 //! is drawn exactly as before.
 //!
-//! The math here is the reference: the PC shader is held to [`tone`] and
-//! [`Lut::apply`], and the console bake calls [`Lut::apply_color`].
+//! The math here is the reference: the PC shader is held to [`tone`],
+//! [`Lut::apply`] and [`SpeedBlur::gather`], and the console bake calls
+//! [`Lut::apply_color`].
 
 use crate::math::{Color, Vec2, Vec3};
 use crate::render::{BillboardParams, Renderer, SpriteId};
@@ -323,6 +326,192 @@ pub fn vignette(amount: f32, uv: Vec2) -> f32 {
     let r = crate::math3d::sqrt((dx * dx + dy * dy) * 0.5);
     let t = ((r - 0.35) / 0.6).clamp(0.0, 1.0);
     1.0 - amount * t * t * (3.0 - 2.0 * t)
+}
+
+// --- speed blur -------------------------------------------------------------
+
+/// A radial (zoom) blur out of a point on the screen: the feel of speed
+/// (a racer's boost, the top speed), as Burnout and Mario Kart 8 do it.
+/// Each pixel past [`inner_radius`](Self::inner_radius) is smeared along
+/// the line to [`center`](Self::center), over [`strength`](Self::strength)
+/// of its distance to it; the middle, where the player looks, stays sharp.
+/// Set it each frame with [`crate::Renderer::set_speed_blur`].
+///
+/// Only the [`PostTier::Full`] tier draws it (the PC's native profile, the
+/// Web), in the post stack's composite: in linear light before the
+/// tonemap, the HUD untouched. The consoles and the PC's console profiles
+/// ignore it.
+///
+/// The streak is sampled geometrically: the point a fraction `t` along it
+/// is `center + (uv - center) * reach^t` ([`SpeedBlur::along`]), so the
+/// renderer's two passes tile it exactly: a half-resolution gather over
+/// the first `1/COMPOSITE_TAPS` of a full-strength streak from every
+/// pixel ([`SpeedBlur::gather_reach`]), then the composite's taps of that,
+/// one per sub-streak. In the feather, where streaks are shorter, the
+/// sub-streaks overlap a little instead of leaving gaps.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SpeedBlur {
+    /// The vanishing point, in screen UVs of the 3D (0..1; x right, y
+    /// down): streaks point at it. Usually the middle, or the horizon
+    /// ahead of the player.
+    pub center: Vec2,
+    /// How long a streak is, as a fraction of the pixel's distance to the
+    /// center, 0..=1 (0: off, nothing runs; 1: almost to the center).
+    pub strength: f32,
+    /// The sharp zone around the center, in the vignette's measure: 0 at
+    /// the center, 1 in a corner of the screen when the center is the
+    /// middle (an ellipse with the screen's aspect).
+    pub inner_radius: f32,
+    /// The width of the soft edge past `inner_radius` over which the
+    /// streaks grow from nothing to their full length (same measure).
+    pub feather: f32,
+}
+
+impl SpeedBlur {
+    /// Off (strength 0), centered, sharp out to a quarter of the way to
+    /// the corners, full streaks past 0.6.
+    pub const DEFAULT: SpeedBlur = SpeedBlur {
+        center: Vec2::new(0.5, 0.5),
+        strength: 0.0,
+        inner_radius: 0.25,
+        feather: 0.35,
+    };
+
+    /// Taps per pixel of the half-resolution gather (each covers one
+    /// `1/COMPOSITE_TAPS` of a streak).
+    pub const GATHER_TAPS: u32 = 12;
+    /// Taps per pixel of the composite (each one gathered sub-streak):
+    /// `GATHER_TAPS * COMPOSITE_TAPS` samples per streak in all.
+    pub const COMPOSITE_TAPS: u32 = 8;
+    /// The shortest [`reach`](Self::reach): a streak stops short of the
+    /// center, where every pixel's streak would meet.
+    pub const MIN_REACH: f32 = 0.05;
+    /// Streaks shorter than this (pixels of the picture) fade from the
+    /// sharp pixel into the blurred one ([`Self::fade`]): the half-size
+    /// gather is a little soft, and a streak of a pixel or two must not
+    /// show it as a step. Longer streaks are all blur: the feather grows
+    /// the streak's length, never its opacity (a cross-fade of a sharp
+    /// and a blurred picture reads as a ghost of every edge).
+    pub const FADE_PIXELS: f32 = 4.0;
+
+    /// [`SpeedBlur::DEFAULT`] at `strength`.
+    pub const fn new(strength: f32) -> SpeedBlur {
+        SpeedBlur {
+            strength,
+            ..SpeedBlur::DEFAULT
+        }
+    }
+
+    /// Every field in its valid range: the center within a screen of the
+    /// picture, strength 0..=1, the radius 0..=2, the feather 0.01..=2
+    /// (NaN takes the default; a NaN strength is off).
+    pub fn clamped(&self) -> SpeedBlur {
+        let fix = |v: f32, lo: f32, hi: f32, def: f32| {
+            if v.is_nan() { def } else { v.clamp(lo, hi) }
+        };
+        let d = SpeedBlur::DEFAULT;
+        SpeedBlur {
+            center: Vec2::new(
+                fix(self.center.x, -1.0, 2.0, d.center.x),
+                fix(self.center.y, -1.0, 2.0, d.center.y),
+            ),
+            strength: fix(self.strength, 0.0, 1.0, 0.0),
+            inner_radius: fix(self.inner_radius, 0.0, 2.0, d.inner_radius),
+            feather: fix(self.feather, 0.01, 2.0, d.feather),
+        }
+    }
+
+    /// Whether it changes the picture (a strength above 0).
+    pub fn is_on(&self) -> bool {
+        self.strength > 0.0
+    }
+
+    /// How much of its streak the pixel at `uv` gets, 0..=1: 0 inside the
+    /// inner radius, 1 past the feather, smoothstep between.
+    pub fn weight(&self, uv: Vec2) -> f32 {
+        let dx = (uv.x - self.center.x) * 2.0;
+        let dy = (uv.y - self.center.y) * 2.0;
+        let r = crate::math3d::sqrt((dx * dx + dy * dy) * 0.5);
+        let t = ((r - self.inner_radius) / self.feather).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// Where the streak of the pixel at `uv` ends, as a scale toward the
+    /// center: `1 - strength * weight`, never under [`Self::MIN_REACH`].
+    pub fn reach(&self, uv: Vec2) -> f32 {
+        (1.0 - self.strength * self.weight(uv)).max(SpeedBlur::MIN_REACH)
+    }
+
+    /// The reach of the renderer's gather: the first `1/COMPOSITE_TAPS`
+    /// (in scale) of a full-strength streak, the same for every pixel.
+    pub fn gather_reach(&self) -> f32 {
+        pow(
+            (1.0 - self.strength).max(SpeedBlur::MIN_REACH),
+            1.0 / SpeedBlur::COMPOSITE_TAPS as f32,
+        )
+    }
+
+    /// The point a fraction `t` (0..=1) along the streak of the pixel at
+    /// `uv`, which ends at `reach` ([`Self::reach`]).
+    pub fn along(&self, uv: Vec2, reach: f32, t: f32) -> Vec2 {
+        let s = pow(reach, t);
+        Vec2::new(
+            self.center.x + (uv.x - self.center.x) * s,
+            self.center.y + (uv.y - self.center.y) * s,
+        )
+    }
+
+    /// The reference blur of one pixel: the mean light of `taps` points
+    /// spread evenly along its streak (the middle of each step), read
+    /// through `sample` (a display value at a UV), returned as a display
+    /// value. Inside the inner radius, the pixel itself. Light is the
+    /// square of the display value (gamma 2, within a few levels of sRGB's
+    /// decode on a blend and exact on a flat color): the GPU pays one
+    /// multiply a tap for it instead of three `pow`.
+    pub fn gather(
+        &self,
+        uv: Vec2,
+        taps: u32,
+        mut sample: impl FnMut(Vec2) -> [f32; 3],
+    ) -> [f32; 3] {
+        let reach = self.reach(uv);
+        if reach >= 1.0 || taps == 0 {
+            return sample(uv);
+        }
+        let mut sum = [0.0f32; 3];
+        for i in 0..taps {
+            let t = (i as f32 + 0.5) / taps as f32;
+            let c = sample(self.along(uv, reach, t));
+            for k in 0..3 {
+                let v = c[k].max(0.0);
+                sum[k] += v * v;
+            }
+        }
+        sum.map(|l| crate::math3d::sqrt(l / taps as f32))
+    }
+
+    /// How much of the blurred value the pixel at `uv` takes in a
+    /// `size`-pixel picture: its streak's length over
+    /// [`Self::FADE_PIXELS`], at most 1 (0 inside the inner radius).
+    pub fn fade(&self, uv: Vec2, size: Vec2) -> f32 {
+        let dx = (uv.x - self.center.x) * size.x;
+        let dy = (uv.y - self.center.y) * size.y;
+        let len = (1.0 - self.reach(uv)) * crate::math3d::sqrt(dx * dx + dy * dy);
+        (len / SpeedBlur::FADE_PIXELS).clamp(0.0, 1.0)
+    }
+
+    /// The pixel the composite writes: the sharp value faded into the
+    /// blurred one by [`Self::fade`] (both display values).
+    pub fn mix(&self, uv: Vec2, size: Vec2, sharp: [f32; 3], blurred: [f32; 3]) -> [f32; 3] {
+        let m = self.fade(uv, size);
+        [0, 1, 2].map(|k| sharp[k] + (blurred[k] - sharp[k]) * m)
+    }
+}
+
+impl Default for SpeedBlur {
+    fn default() -> Self {
+        SpeedBlur::DEFAULT
+    }
 }
 
 // --- LUTs -----------------------------------------------------------------
@@ -719,6 +908,238 @@ mod tests {
         assert!((vignette(0.4, Vec2::new(0.0, 0.0)) - 0.6).abs() < 1e-3);
         assert_eq!(vignette(0.0, Vec2::new(0.0, 1.0)), 1.0);
         assert!(vignette(0.5, Vec2::new(0.1, 0.5)) > vignette(0.5, Vec2::new(0.0, 0.0)));
+    }
+
+    #[test]
+    fn speed_blur_is_off_by_default_and_clamps_every_field() {
+        assert!(!SpeedBlur::DEFAULT.is_on());
+        assert!(!SpeedBlur::default().clamped().is_on());
+        assert!(SpeedBlur::new(0.3).is_on());
+        let wild = SpeedBlur {
+            center: Vec2::new(f32::NAN, 9.0),
+            strength: 3.0,
+            inner_radius: -1.0,
+            feather: 0.0,
+        }
+        .clamped();
+        assert_eq!(wild.center, Vec2::new(0.5, 2.0));
+        assert_eq!(wild.strength, 1.0);
+        assert_eq!(wild.inner_radius, 0.0);
+        assert_eq!(wild.feather, 0.01);
+        let nan = SpeedBlur {
+            strength: f32::NAN,
+            inner_radius: f32::NAN,
+            feather: f32::NAN,
+            ..SpeedBlur::DEFAULT
+        }
+        .clamped();
+        assert!(!nan.is_on(), "a NaN strength is off");
+        assert_eq!(nan.inner_radius, SpeedBlur::DEFAULT.inner_radius);
+        assert_eq!(nan.feather, SpeedBlur::DEFAULT.feather);
+        // Valid settings pass unchanged.
+        let ok = SpeedBlur {
+            center: Vec2::new(0.5, 0.4),
+            strength: 0.3,
+            inner_radius: 0.2,
+            feather: 0.5,
+        };
+        assert_eq!(ok.clamped(), ok);
+        assert!((ok.reach(Vec2::new(0.5, 0.4)) - 1.0).abs() < 1e-6);
+        // Even a full strength stops short of the center.
+        assert_eq!(
+            SpeedBlur::new(1.0).reach(Vec2::new(0.0, 0.0)),
+            SpeedBlur::MIN_REACH
+        );
+    }
+
+    #[test]
+    fn speed_blur_spares_the_inner_radius_and_grows_to_full_past_the_feather() {
+        let b = SpeedBlur {
+            center: Vec2::new(0.5, 0.45),
+            ..SpeedBlur::new(0.4)
+        };
+        assert_eq!(b.weight(b.center), 0.0);
+        // Out along a ray to the right: 0 inside the radius, rising, then 1.
+        let mut last = 0.0;
+        for i in 0..=50 {
+            let uv = Vec2::new(0.5 + i as f32 * 0.01, 0.45);
+            let w = b.weight(uv);
+            // r = |2 dx| / sqrt(2).
+            let r = (uv.x - 0.5) * 2.0 / core::f32::consts::SQRT_2;
+            if r <= b.inner_radius {
+                assert_eq!(w, 0.0, "inside the radius at {r}");
+                assert_eq!(b.reach(uv), 1.0);
+            }
+            if r >= b.inner_radius + b.feather {
+                assert_eq!(w, 1.0, "past the feather at {r}");
+            }
+            assert!(w >= last, "monotonic");
+            last = w;
+        }
+        // The ellipse has the screen's aspect: a corner is r = 1.
+        let c = SpeedBlur {
+            inner_radius: 0.98,
+            feather: 0.01,
+            ..SpeedBlur::new(0.5)
+        };
+        assert_eq!(c.weight(Vec2::new(0.0, 0.0)), 1.0);
+        assert_eq!(c.weight(Vec2::new(0.0, 0.5)), 0.0);
+    }
+
+    #[test]
+    fn a_streak_runs_from_the_pixel_toward_the_center_over_strength_of_the_way() {
+        let b = SpeedBlur {
+            center: Vec2::new(0.4, 0.6),
+            inner_radius: 0.0,
+            feather: 0.01,
+            ..SpeedBlur::new(0.3)
+        };
+        for uv in [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.2),
+            Vec2::new(0.9, 0.95),
+        ] {
+            let reach = b.reach(uv);
+            assert!((reach - 0.7).abs() < 1e-6);
+            let start = b.along(uv, reach, 0.0);
+            let end = b.along(uv, reach, 1.0);
+            assert!((start.x - uv.x).abs() < 1e-6 && (start.y - uv.y).abs() < 1e-6);
+            // 30% of the way to the center, on the line through it.
+            let want = Vec2::new(
+                uv.x + (b.center.x - uv.x) * 0.3,
+                uv.y + (b.center.y - uv.y) * 0.3,
+            );
+            assert!(
+                (end.x - want.x).abs() < 1e-5 && (end.y - want.y).abs() < 1e-5,
+                "{uv:?}: {end:?} vs {want:?}"
+            );
+            for t in [0.25f32, 0.5, 0.75] {
+                let p = b.along(uv, reach, t);
+                let cross = (p.x - b.center.x) * (uv.y - b.center.y)
+                    - (p.y - b.center.y) * (uv.x - b.center.x);
+                assert!(cross.abs() < 1e-6, "on the line to the center");
+            }
+        }
+    }
+
+    /// The renderer's two passes: the composite's tap `k` reads the
+    /// gather at the point `k / COMPOSITE_TAPS` along the streak, which
+    /// gathered the first `1 / COMPOSITE_TAPS` of a full-strength streak.
+    /// Where the streaks are full length, the taps are exactly the
+    /// one-pass reference's `GATHER_TAPS * COMPOSITE_TAPS`, at every
+    /// strength; in the feather they overlap past the shorter streak's
+    /// end, by less than one sub-streak, and never cross the center.
+    #[test]
+    fn the_two_passes_tile_the_streak_like_one_long_gather() {
+        let (n1, n2) = (SpeedBlur::GATHER_TAPS, SpeedBlur::COMPOSITE_TAPS);
+        let two_pass = |b: &SpeedBlur, uv: Vec2| {
+            let reach = b.reach(uv);
+            let mut taps = std::vec::Vec::new();
+            for k in 0..n2 {
+                let q = b.along(uv, reach, k as f32 / n2 as f32);
+                let sub = b.gather_reach();
+                for j in 0..n1 {
+                    taps.push(b.along(q, sub, (j as f32 + 0.5) / n1 as f32));
+                }
+            }
+            taps
+        };
+        let dist = |p: Vec2, c: Vec2| ((p.x - c.x).powi(2) + (p.y - c.y).powi(2)).sqrt();
+        for strength in [0.1f32, 0.3, 0.8, 1.0] {
+            let b = SpeedBlur {
+                center: Vec2::new(0.5, 0.42),
+                inner_radius: 0.05,
+                feather: 0.1,
+                ..SpeedBlur::new(strength)
+            };
+            // From a corner, past the feather: the very taps of one long
+            // gather.
+            let uv = Vec2::new(0.02, 0.97);
+            let reach = b.reach(uv);
+            assert_eq!(b.weight(uv), 1.0);
+            let n = n1 * n2;
+            for (i, p) in two_pass(&b, uv).into_iter().enumerate() {
+                let k = i as u32 / n1;
+                let j = i as u32 % n1;
+                let t = (k as f32 + (j as f32 + 0.5) / n1 as f32) / n2 as f32;
+                let want = b.along(uv, reach, t);
+                assert!(
+                    dist(p, want) < 2e-5,
+                    "strength {strength}, tap {i} of {n}: {p:?} vs {want:?}"
+                );
+            }
+            // In the feather: from the pixel to less than a sub-streak past
+            // its streak's end, on the pixel's side of the center.
+            for x in [0.54f32, 0.56, 0.58, 0.6] {
+                let uv = Vec2::new(x, 0.42);
+                assert!(b.weight(uv) > 0.0 && b.weight(uv) < 1.0);
+                let reach = b.reach(uv);
+                let end = b.along(uv, reach, 1.0);
+                let past = b.along(end, b.gather_reach(), 1.0);
+                for p in two_pass(&b, uv) {
+                    assert!(p.x > b.center.x, "the center not crossed");
+                    assert!(dist(p, b.center) <= dist(uv, b.center) + 1e-6);
+                    assert!(dist(p, b.center) >= dist(past, b.center) - 1e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_reference_gather_averages_light_along_the_streak() {
+        let b = SpeedBlur {
+            inner_radius: 0.2,
+            feather: 0.1,
+            ..SpeedBlur::new(0.5)
+        };
+        // A flat picture stays flat.
+        let flat = b.gather(Vec2::new(0.9, 0.9), 64, |_| [0.3, 0.6, 0.9]);
+        for (got, want) in flat.iter().zip([0.3, 0.6, 0.9]) {
+            assert!((got - want).abs() < 1e-4, "{flat:?}");
+        }
+        // Inside the radius: the pixel itself, whatever is around it.
+        let inside = b.gather(Vec2::new(0.55, 0.5), 64, |p| {
+            if p.x == 0.55 { [0.2; 3] } else { [1.0; 3] }
+        });
+        assert_eq!(inside, [0.2; 3]);
+        // A white half toward the center and black outside: the pixel just
+        // outside the edge (its streak half in the white) mixes them in
+        // linear light, and one whose streak never reaches it stays black.
+        let edge = |p: Vec2| if p.x < 0.8 { [1.0; 3] } else { [0.0; 3] };
+        let near = b.gather(Vec2::new(0.9, 0.5), 256, edge)[0];
+        // The streak runs 0.9 → 0.7 (reach 0.5); x = 0.5 + 0.4 · 0.5^t
+        // passes 0.8 at t = log2(0.75) / log2(0.5): the rest is white
+        // (light, the square of the display value).
+        let lit = crate::math3d::sqrt(1.0 - log2(0.75) / log2(0.5));
+        // Within a few levels of the sRGB blend.
+        assert!((lit - encode(1.0 - log2(0.75) / log2(0.5))).abs() < 0.03);
+        assert!((near - lit).abs() < 0.01, "{near} vs {lit}");
+        let short = SpeedBlur { strength: 0.2, ..b };
+        assert_eq!(
+            short.gather(Vec2::new(0.99, 0.5), 256, edge),
+            [0.0; 3],
+            "the streak 0.99 → 0.89 never reaches the white"
+        );
+        // The composite takes the blurred value once the streak is a few
+        // pixels long, fading in from the sharp one over the first ones.
+        let sharp = [0.1; 3];
+        let blurred = [0.9; 3];
+        let size = Vec2::new(640.0, 480.0);
+        assert_eq!(b.mix(Vec2::new(0.5, 0.5), size, sharp, blurred), sharp);
+        assert_eq!(b.mix(Vec2::new(0.0, 0.0), size, sharp, blurred), blurred);
+        let mut last = 0.0;
+        for i in 0..200 {
+            let uv = Vec2::new(0.5 + i as f32 * 0.0025, 0.5);
+            let m = b.fade(uv, size);
+            assert!(m >= last && m <= 1.0);
+            if m > 0.0 && m < 1.0 {
+                // Partly blurred only while the streak is under 4 pixels.
+                let len = (1.0 - b.reach(uv)) * (uv.x - 0.5) * size.x;
+                assert!(len < SpeedBlur::FADE_PIXELS + 1e-3, "{len}");
+            }
+            last = m;
+        }
+        assert_eq!(last, 1.0);
     }
 
     #[test]

@@ -114,7 +114,8 @@ pub use players::{
     PlayerSetup, PlayersInput, PlayersRequest, Seats, first_seat,
 };
 pub use post::{
-    Bloom, Glow, GlowMode, Lut, LutError, LutId, PostSettings, PostTier, Tonemap, draw_glow,
+    Bloom, Glow, GlowMode, Lut, LutError, LutId, PostSettings, PostTier, SpeedBlur, Tonemap,
+    draw_glow,
 };
 pub use precompile::{PrecompileMode, PrecompileRequest, PrecompileStatus};
 pub use quality::{

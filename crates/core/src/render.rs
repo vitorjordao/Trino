@@ -642,6 +642,19 @@ pub trait Renderer {
     /// `begin_frame`**, like the AO: set it every frame.
     fn set_post(&mut self, _post: Option<&crate::post::PostSettings>) {}
 
+    /// A radial speed blur for this frame ([`crate::post::SpeedBlur`]): on
+    /// the [`crate::post::PostTier::Full`] tier the 3D outside its inner
+    /// radius streaks toward its center, in the post stack's composite (a
+    /// frame without [`Renderer::set_post`] runs the stack with
+    /// [`crate::post::PostSettings::DEFAULT`]); 2D drawn after the frame's
+    /// last 3D draw is untouched. The quality preset's post level `off`
+    /// drops it, like the vignette. Baked-tier targets (the consoles, the
+    /// PC's console profiles) ignore it. `None` or a strength of 0 turns
+    /// it off: nothing runs and the frame is the one without the call,
+    /// byte for byte. **Cleared at `begin_frame`**: set it every frame,
+    /// with the strength the game's speed gives.
+    fn set_speed_blur(&mut self, _blur: Option<&crate::post::SpeedBlur>) {}
+
     /// Shadows for this frame ([`crate::shadow`], ADR 0025): the draws
     /// whose [`ModelParams::shadow`] casts one get it at the tier
     /// [`Caps::shadow_tier`] gives (capped by `tier_max` and, on the PC, the

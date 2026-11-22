@@ -5,7 +5,9 @@
 //! range past 1 kept in HDR, every pass combination (MSAA, render scale,
 //! AO, the shadow map, water, both T&L paths), the console profiles
 //! unaffected, and the daltonization filter per mode against its CPU
-//! reference. Goldens `tests/golden/pc/post_*` and `cvd_filter_*`.
+//! reference. Goldens `tests/golden/pc/post_*` and `cvd_filter_*`. The
+//! speed blur: off is the frame without it byte for byte, the inner radius
+//! untouched, the rest held to `SpeedBlur::gather` on the CPU.
 //!
 //! `TRINO_POST_SHOTS=<dir>` also writes every frame, for review.
 
@@ -16,8 +18,8 @@ use trino_core::post::{Lut, tone};
 use trino_core::render3d::{Camera3, Light};
 use trino_core::{
     AmbientOcclusion, Bloom, Color, CvdMode, Fog, LocalLight, LutId, Material, ModelId,
-    ModelParams, PostSettings, Renderer, Shading, ShadowCast, ShadowSettings, Tonemap, Transform3,
-    Vec3,
+    ModelParams, PostSettings, Renderer, Shading, ShadowCast, ShadowSettings, SpeedBlur, Tonemap,
+    Transform3, Vec2, Vec3,
 };
 use trino_platform_pc::{PcRenderer, PostView, SimProfile};
 
@@ -159,6 +161,8 @@ struct Extra {
     shadows: bool,
     lights: bool,
     hud: bool,
+    /// `set_speed_blur`'s argument (`None`: not called).
+    blur: Option<Option<SpeedBlur>>,
 }
 
 /// The test frame: the unlit wall and swatches, the emissive lamp, then
@@ -169,6 +173,9 @@ fn frame(r: &mut PcRenderer, post: Option<Option<PostSettings>>, extra: Extra) -
     r.set_light(&SUN);
     if let Some(p) = post {
         r.set_post(p.as_ref());
+    }
+    if let Some(b) = extra.blur {
+        r.set_speed_blur(b.as_ref());
     }
     if extra.ao {
         r.set_ambient_occlusion(Some(&AmbientOcclusion::DEFAULT));
@@ -539,6 +546,7 @@ fn post_runs_with_msaa_render_scale_ao_shadows_and_both_tnl_paths() {
         shadows: true,
         lights: true,
         hud: true,
+        ..Extra::default()
     };
     let post = PostSettings {
         grading: Some(LUT),
@@ -707,4 +715,309 @@ fn the_correction_filter_matches_its_cpu_reference_per_mode() {
     }
     r.set_cvd_filter(CvdMode::Off);
     assert_eq!(frame(&mut r, None, Extra::default()), plain);
+}
+
+// --- the speed blur -------------------------------------------------------------
+
+/// Strong enough to cross the swatches, sharp in the middle.
+const BLUR: SpeedBlur = SpeedBlur {
+    center: Vec2::new(0.5, 0.45),
+    strength: 0.3,
+    inner_radius: 0.15,
+    feather: 0.25,
+};
+
+fn blurred(b: SpeedBlur) -> Extra {
+    Extra {
+        blur: Some(Some(b)),
+        ..Extra::default()
+    }
+}
+
+/// The UV of pixel `(x, y)`'s center.
+fn uv_of(r: &PcRenderer, x: u32, y: u32) -> Vec2 {
+    let (w, h) = r.internal_size();
+    Vec2::new((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32)
+}
+
+/// `img` read bilinearly at `uv`, 0..1 display values (what the GPU's
+/// linear sampler does with the scene).
+fn bilinear(r: &PcRenderer, img: &[u8], uv: Vec2) -> [f32; 3] {
+    let (w, h) = r.internal_size();
+    let x = (uv.x * w as f32 - 0.5).clamp(0.0, w as f32 - 1.0);
+    let y = (uv.y * h as f32 - 0.5).clamp(0.0, h as f32 - 1.0);
+    let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let p = |x, y| at(r, img, x, y).map(|v| v as f32 / 255.0);
+    let (a, b, c, d) = (p(x0, y0), p(x1, y0), p(x0, y1), p(x1, y1));
+    [0, 1, 2].map(|k| {
+        let top = a[k] + (b[k] - a[k]) * fx;
+        let bottom = c[k] + (d[k] - c[k]) * fx;
+        top + (bottom - top) * fy
+    })
+}
+
+/// The CPU reference of a whole frame: every pixel of `sharp` through
+/// `SpeedBlur::gather` (256 taps) and `SpeedBlur::mix`.
+fn reference_blur(r: &PcRenderer, sharp: &[u8], b: &SpeedBlur) -> Vec<u8> {
+    let (w, h) = r.internal_size();
+    let mut out = sharp.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let uv = uv_of(r, x, y);
+            if b.weight(uv) == 0.0 {
+                continue;
+            }
+            let s = at(r, sharp, x, y).map(|v| v as f32 / 255.0);
+            let g = b.gather(uv, 256, |p| bilinear(r, sharp, p));
+            let size = Vec2::new(w as f32, h as f32);
+            let m = b.mix(uv, size, s, g);
+            let i = ((y * w + x) * 4) as usize;
+            for k in 0..3 {
+                out[i + k] = (m[k].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// Mean absolute difference (per channel, RGB) and the share of pixels
+/// with a channel more than `far` apart.
+fn closeness(a: &[u8], b: &[u8], far: u8) -> (f64, f64) {
+    let (mut sum, mut over, mut n) = (0u64, 0usize, 0usize);
+    for (p, q) in a.chunks(4).zip(b.chunks(4)) {
+        let d = (0..3).map(|k| p[k].abs_diff(q[k])).collect::<Vec<_>>();
+        sum += d.iter().map(|&v| v as u64).sum::<u64>();
+        over += d.iter().any(|&v| v > far) as usize;
+        n += 1;
+    }
+    (sum as f64 / (3 * n) as f64, over as f64 / n as f64)
+}
+
+#[test]
+fn speed_blur_off_is_the_frame_without_it_byte_for_byte() {
+    let _g = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let post = Some(Some(PostSettings::FILMIC));
+    let plain = frame(&mut r, None, Extra::default());
+    let filmic = frame(&mut r, post, Extra::default());
+    // A zero strength, or None, is no call at all: nothing runs.
+    for b in [None, Some(SpeedBlur::DEFAULT), Some(SpeedBlur::new(0.0))] {
+        let with = frame(&mut r, post, blurred_or_none(b));
+        assert_eq!(with, filmic, "{b:?}");
+        assert_eq!(r.frame_times().speed_blurs, 0);
+        let alone = frame(&mut r, None, blurred_or_none(b));
+        assert_eq!(alone, plain, "{b:?} without post");
+        assert_eq!(r.frame_times().post_passes, 0);
+    }
+    // A blurred frame leaves nothing behind.
+    let _ = frame(&mut r, post, blurred(SpeedBlur::new(0.8)));
+    assert_eq!(r.frame_times().speed_blurs, 1);
+    assert_eq!(frame(&mut r, post, Extra::default()), filmic);
+    assert_eq!(frame(&mut r, None, Extra::default()), plain);
+    // Cleared at begin_frame: a frame that doesn't call it has none.
+    let _ = frame(&mut r, post, blurred(SpeedBlur::new(0.8)));
+    assert_eq!(frame(&mut r, post, Extra::default()), filmic);
+}
+
+fn blurred_or_none(b: Option<SpeedBlur>) -> Extra {
+    Extra {
+        blur: Some(b),
+        ..Extra::default()
+    }
+}
+
+#[test]
+fn speed_blur_keeps_the_inner_radius_and_the_hud_exact() {
+    let _g = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let post = PostSettings {
+        grading: Some(LUT),
+        ..PostSettings::FILMIC
+    };
+    let hud = Extra {
+        hud: true,
+        lights: true,
+        ..Extra::default()
+    };
+    let sharp = frame(&mut r, Some(Some(post)), hud);
+    let strong = SpeedBlur {
+        strength: 0.8,
+        ..BLUR
+    };
+    let img = frame(
+        &mut r,
+        Some(Some(post)),
+        Extra {
+            blur: Some(Some(strong)),
+            ..hud
+        },
+    );
+    shots(&r, "speed_blur_inner", &img);
+    let (w, h) = r.internal_size();
+    let (mut inside, mut changed) = (0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            let uv = uv_of(&r, x, y);
+            let (a, b) = (at(&r, &sharp, x, y), at(&r, &img, x, y));
+            if strong.weight(uv) == 0.0 {
+                inside += 1;
+                assert_eq!(a, b, "inside the inner radius at ({x}, {y})");
+            } else if a != b {
+                changed += 1;
+            }
+        }
+    }
+    assert!(inside > (w * h / 30) as usize, "{inside} pixels inside");
+    assert!(changed > (w * h / 4) as usize, "{changed} pixels blurred");
+    // The HUD rectangle (drawn after the last 3D draw) in the blurred
+    // corner is not smeared.
+    for (x, y) in [(4, 4), (10, 10), (27, 19)] {
+        assert_eq!(at(&r, &img, x, y), [100, 150, 200], "HUD at ({x}, {y})");
+    }
+}
+
+#[test]
+fn speed_blur_streaks_toward_the_center_like_the_cpu_reference() {
+    let _g = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let post = Some(Some(PostSettings::DEFAULT));
+    let sharp = frame(&mut r, post, Extra::default());
+    for strength in [0.3f32, 0.8] {
+        let b = SpeedBlur { strength, ..BLUR };
+        let img = frame(&mut r, post, blurred(b));
+        assert_eq!(r.frame_times().speed_blurs, 1);
+        shots(
+            &r,
+            &format!("speed_blur_{}", (strength * 10.0) as u32),
+            &img,
+        );
+        let want = reference_blur(&r, &sharp, &b);
+        shots(
+            &r,
+            &format!("speed_blur_{}_cpu", (strength * 10.0) as u32),
+            &want,
+        );
+        let (mean, far) = closeness(&img, &want, 24);
+        let (moved, _) = closeness(&img, &sharp, 24);
+        eprintln!(
+            "strength {strength}: GPU vs CPU mean {mean:.2}, {:.2}% over 24; vs sharp mean {moved:.2}",
+            far * 100.0
+        );
+        assert!(moved > 2.0, "the blur moved the picture: {moved:.2}");
+        assert!(mean < 1.5, "GPU vs CPU reference: mean {mean:.2}");
+        assert!(far < 0.02, "GPU vs CPU reference: {:.2}% far", far * 100.0);
+        // Streaks run outward from the center: the CPU reference with the
+        // streak turned away from it is far off.
+        let away = SpeedBlur {
+            center: Vec2::new(1.0 - b.center.x, 1.0 - b.center.y),
+            ..b
+        };
+        let wrong = reference_blur(&r, &sharp, &away);
+        let (off, _) = closeness(&img, &wrong, 24);
+        assert!(
+            off > mean * 2.0 + 0.5,
+            "a mirrored center fits too: {off:.2}"
+        );
+    }
+}
+
+#[test]
+fn speed_blur_runs_without_post_settings_with_msaa_scale_and_the_preset() {
+    let _g = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let hud = Extra {
+        hud: true,
+        ..Extra::default()
+    };
+    let with_blur = Extra {
+        blur: Some(Some(BLUR)),
+        ..hud
+    };
+    // Alone: over the neutral stack (PostSettings::DEFAULT).
+    let neutral = frame(&mut r, Some(Some(PostSettings::DEFAULT)), with_blur);
+    let alone = frame(&mut r, None, with_blur);
+    assert_eq!(
+        (r.frame_times().post_passes, r.frame_times().speed_blurs),
+        (1, 1)
+    );
+    assert_eq!(alone, neutral, "a speed blur alone runs the neutral stack");
+    let plain = frame(&mut r, None, hud);
+    let corner = |img: &[u8]| {
+        let (w, h) = r.internal_size();
+        closeness(
+            &img[..(w * h / 3 * 4) as usize],
+            &plain[..(w * h / 3 * 4) as usize],
+            0,
+        )
+        .0
+    };
+    assert!(corner(&alone) > 1.0);
+    // MSAA and a scaled scene: still blurred, the HUD untouched.
+    r.set_msaa(true);
+    r.set_render_scale(0.5);
+    let scaled = frame(&mut r, None, with_blur);
+    shots(&r, "speed_blur_half_msaa", &scaled);
+    assert_eq!(r.frame_times().speed_blurs, 1);
+    assert_eq!(at(&r, &scaled, 10, 10), [100, 150, 200]);
+    let (mean, _) = closeness(&scaled, &alone, 24);
+    assert!(mean < 4.0, "half scale + MSAA vs full: mean {mean:.2}");
+    r.set_msaa(false);
+    r.set_render_scale(1.0);
+    // The CPU T&L path: the same composite.
+    r.set_hw_tnl(false);
+    let cpu = frame(&mut r, None, with_blur);
+    assert_eq!(r.frame_times().speed_blurs, 1);
+    let (mean, far) = closeness(&cpu, &alone, 3);
+    assert!(mean < 0.1 && far < 0.001, "CPU T&L: mean {mean:.2}, {far}");
+    r.set_hw_tnl(true);
+    // The preset's post level Off drops it (like the vignette); Low keeps it.
+    let mut q = trino_core::PresetTable::BUILT_IN.get(trino_core::QualityPreset::High);
+    q.msaa = 1;
+    q.render_scale = 1.0;
+    for (level, runs) in [
+        (trino_core::PostSetting::Off, 0),
+        (trino_core::PostSetting::Low, 1),
+    ] {
+        q.post = level;
+        r.apply_quality(&q);
+        let _ = frame(&mut r, Some(Some(PostSettings::DEFAULT)), with_blur);
+        assert_eq!(r.frame_times().speed_blurs, runs, "{level:?}");
+    }
+    // The views: the bloom alone shows no blur; Off shows no post.
+    r.set_post_view(PostView::Bloom);
+    let _ = frame(&mut r, None, with_blur);
+    assert_eq!(r.frame_times().speed_blurs, 0);
+    r.set_post_view(PostView::Off);
+    let _ = frame(&mut r, None, with_blur);
+    assert_eq!(r.frame_times().post_passes, 0);
+    r.set_post_view(PostView::Game);
+}
+
+#[test]
+fn console_profiles_ignore_the_speed_blur() {
+    let _g = gpu();
+    for profile in [SimProfile::N64, SimProfile::N3ds] {
+        let Some(mut r) = headless(profile) else {
+            return;
+        };
+        setup(&mut r);
+        let plain = frame(&mut r, None, Extra::default());
+        let with = frame(&mut r, None, blurred(SpeedBlur::new(1.0)));
+        assert_eq!(plain, with, "{profile:?}");
+        assert_eq!(r.frame_times().speed_blurs, 0);
+    }
 }

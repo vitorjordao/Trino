@@ -317,6 +317,18 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — radial speed blur in the post stack (2026-11-21, branch `feat/post-speed-blur`, ADR 0033 §7)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::post::SpeedBlur` (center, strength, inner radius, feather; `clamped`, `weight`, `along`, the reference `gather`/`mix`), `Renderer::set_speed_blur` (a default: no `GAME_API_VERSION` bump) | 5 unit tests in `post.rs` (off by default and every field clamped, NaN included; the inner radius spared; the two passes tile the streak like one long gather at 0.1–1.0; the reference averages light); `renderer_defaults.rs` |
+| PC/Web: a half-size gather (12 jittered taps, full-strength sub-streak) + 8 taps in the composite, no full-size target; the `off` level, the bloom view and the Baked tier drop it; `PcFrameTimes::speed_blurs` | `crates/platform-pc/tests/post.rs` (5 tests): strength 0 = the frame byte for byte; inner radius and HUD exact; the whole frame within mean 0.46/0.77 levels and 0.44/0.56% of pixels past 24 of `SpeedBlur::gather` at 0.3/0.8 (RADV and lavapipe), a mirrored center misses; alone, MSAA + half scale, CPU T&L, presets; console profiles unchanged. The uniform layout checked with naga; WebGL2 translation |
+| The `post` self-test step, part 3 (the card streaked toward the screen's edge on Full, identical on Baked) | `engine_checks.rs` mutation: the `off` post level fails the step with `post: no speed blur beside the card` |
+| Cost (`post_bench.rs::speed_blur_cost_and_shots`, GPU timestamps) | Renoir iGPU, castle64 hub, 4× MSAA: +1.5–2.3 ms at 1080p, +8–11 ms at 4K (ADR 0033 › Measurements); shots at 0, 0.15, 0.3, 0.8 and a 120-frame clip (`speed_blur_clip_frames`) |
+
+Not done: a per-object velocity buffer (this is a screen-space zoom blur only); the consoles
+(a full-screen gather does not fit their fill rate; a game can fake it with sprites).
+
 ## Done — netplay follow-ups: local seats, spectators, NAT traversal, console lockstep over local wireless, snapshot recordings (2026-11-03, branch `feat/117-netplay-followups`, GitHub #117, ADR 0041)
 
 | Item | Evidence |

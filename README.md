@@ -233,6 +233,7 @@ the Docker image live there ([ADR 0008](docs/adr/0008-external-console-projects.
 | Ambient occlusion | screen-space (SSAO), plus baked | baked into vertex colors (`ao` in the manifest) | baked into vertex colors |
 | Shadows (`ModelParams::shadow`, scene receivers) | a shadow map with PCF on every surface (and the Web) | a soft blob per caster on the surface under it; two projected shapes a frame | the caster's shape projected onto the surface under it, stencil-merged |
 | Post-processing (`Renderer::set_post`): tonemap, bloom, LUT grading, vignette, grain | HDR stack with bloom (and the Web) | the LUT baked into colors, glow halos for bloom | the LUT baked into colors, glow halos for bloom |
+| Radial speed blur (`Renderer::set_speed_blur`) | in the post stack (and the Web) | — | — |
 | Water surfaces: flowing layers, swell, ripples, Fresnel, glint | per pixel, with shore foam | per vertex, RDP 2-cycle layer blend | PICA200 vertex program, TexEnv layer blend |
 | Billboards, particles, impostors, distance LOD, portal/cell visibility | yes | yes | yes |
 | 2D: sprites, `fill_rect`, bitmap text | yes | yes | yes |

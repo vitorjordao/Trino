@@ -63,6 +63,11 @@ pub struct WebConfig {
     /// The color-vision simulation view (`?cvd=deuteranopia`, a review
     /// tool like the PC's `TRINO_CVD`).
     pub cvd: trino_core::CvdMode,
+    /// A pinned wall clock (`?unix=<seconds>`, the PC's `TRINO_UNIX_TIME`).
+    pub unix: Option<u64>,
+    /// Read and store the player's key bindings in `localStorage`
+    /// (`trino-input:<name>`; not in a self-test or a smoke run).
+    pub keep_input: bool,
 }
 
 impl WebConfig {
@@ -102,6 +107,8 @@ impl WebConfig {
                 .get("cvd")
                 .and_then(|m| trino_core::CvdMode::parse(&m))
                 .unwrap_or_default(),
+            unix: query.get("unix").and_then(|v| v.trim().parse().ok()),
+            keep_input: !deterministic,
         }
     }
 }
@@ -185,6 +192,9 @@ pub struct WebHost {
     /// The accessibility settings' `localStorage` key
     /// (`trino-access:<save_name>`, the PC's `<save_name>.access`).
     access_key: String,
+    /// Where the key bindings live (`trino-input:<save_name>`, the PC's
+    /// `<save_name>.input`).
+    input_key: String,
     /// The achievements' `localStorage` key (`trino-services:<save_name>`,
     /// the PC's `<save_name>.achievements`).
     services_key: String,
@@ -315,6 +325,20 @@ impl WebHost {
             access = trino_core::AccessSettings::parse_text(access, forced);
         }
         platform.access.load(access);
+        if let Some(secs) = config.unix {
+            platform.pin_clock(secs);
+        }
+        // The player's key bindings (Bongo-Kart #183).
+        let input_key = format!("trino-input:{}", config.save_name);
+        let mut input = input;
+        if config.keep_input
+            && let Some(t) = local_storage().and_then(|s| s.get_item(&input_key).ok().flatten())
+        {
+            input.load_bindings(&t);
+        }
+        for p in 0..trino_core::MAX_PLAYERS as u8 {
+            platform.rumble_support[p as usize] = input.rumble_support(p);
+        }
         // Achievements and stats (issue #61): the packed state, every bit
         // and stat, base64 (the table isn't loaded yet; its indices are).
         let services_key = format!("trino-services:{}", config.save_name);
@@ -351,6 +375,7 @@ impl WebHost {
             audio_saved: trino_core::BusSettings::default(),
             access_key,
             services_key,
+            input_key,
             quality,
         };
         host.renderer.set_cvd_view(host.config.cvd);
@@ -561,7 +586,11 @@ impl WebHost {
         while let Some(r) = self.platform.players.take_request() {
             self.input.seats.apply(r);
         }
+        for r in std::mem::take(&mut self.platform.key_requests) {
+            self.input.apply_key_request(r);
+        }
         let players = self.input.poll_players();
+        (self.platform.key_labels, self.platform.capturing) = self.input.key_bindings();
         self.platform.players.publish(&self.input.seats);
         let state = players.players[0];
         self.platform.input = Some(InputInfo {
@@ -598,6 +627,21 @@ impl WebHost {
     /// quality requests, the frame meter.
     pub fn end_frame(&mut self) {
         self.audio.poll();
+        // The frame's rumble to the pads, and what they can do (Bongo-Kart
+        // #180).
+        while let Some((player, r, ms)) = self.platform.rumble.take_sent() {
+            self.input.rumble(player, r, ms);
+        }
+        for p in 0..trino_core::MAX_PLAYERS as u8 {
+            self.platform.rumble_support[p as usize] = self.input.rumble_support(p);
+        }
+        // A rebind completed or the game changed the bindings: store them.
+        if let Some(text) = self.input.take_bindings_change()
+            && self.config.keep_input
+            && let Some(s) = local_storage()
+        {
+            let _ = s.set_item(&self.input_key, &text);
+        }
         // The game changed the player's volumes (its options): store them.
         let now = self.audio.bus_settings();
         if now != self.audio_saved {

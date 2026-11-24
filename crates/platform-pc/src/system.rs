@@ -47,7 +47,7 @@ pub struct PcPlatform {
     /// update.
     pub players: trino_core::HostedPlayers,
     /// The game's last rebind/cancel/reset, for the host to apply.
-    input_request: Option<InputRequest>,
+    input_request: Vec<InputRequest>,
     /// The simulated console's hardware tier ([`Platform::hw_tier`]).
     hw_tier: trino_core::HwTier,
     /// The quality ([`Platform::quality`] and its siblings): the console's
@@ -78,6 +78,14 @@ pub struct PcPlatform {
     crash_consent_change: Option<trino_core::CrashConsent>,
     /// The system language, read once ([`crate::language`]).
     language: Option<trino_core::LangTag>,
+    /// `TRINO_UNIX_TIME` (or [`pin_clock`](Self::pin_clock)): a wall clock
+    /// that starts where a test or a recording says.
+    clock_pin: Option<trino_core::PinnedClock>,
+    /// What each player's motors were asked to play (Bongo-Kart #180).
+    rumble: trino_core::HostedRumble,
+    /// Each player's motors as the host last saw them
+    /// ([`publish_rumble`](Self::publish_rumble)).
+    rumble_support: [trino_core::RumbleSupport; MAX_PLAYERS],
 }
 
 impl PcPlatform {
@@ -98,7 +106,7 @@ impl PcPlatform {
             pad_family: None,
             labels: Default::default(),
             players: trino_core::HostedPlayers::new(),
-            input_request: None,
+            input_request: Vec::new(),
             hw_tier: caps.hw_tier,
             quality: HostedQuality::new(caps),
             groups: GroupTable::new(),
@@ -113,7 +121,63 @@ impl PcPlatform {
             crash: None,
             crash_consent_change: None,
             language: crate::language::detect(),
+            clock_pin: std::env::var("TRINO_UNIX_TIME")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(|secs| trino_core::PinnedClock::new(secs, 0)),
+            rumble: trino_core::HostedRumble::new(),
+            // A build with the pad layer can rumble once a pad shows up.
+            rumble_support: [if cfg!(feature = "gamepad") {
+                trino_core::RumbleSupport::Disconnected
+            } else {
+                trino_core::RumbleSupport::Unsupported
+            }; MAX_PLAYERS],
         }
+    }
+
+    /// The wall clock reads `secs` now and runs from there
+    /// ([`Platform::unix_seconds`]; `TRINO_UNIX_TIME` does it at start-up).
+    pub fn pin_clock(&mut self, secs: u64) {
+        self.clock_pin = Some(trino_core::PinnedClock::new(secs, self.now_micros()));
+    }
+
+    /// Send the game's rumble requests to the pads and learn which players'
+    /// pads can rumble (Bongo-Kart #180). Hosts call it once a frame, after
+    /// the game's update.
+    pub fn publish_rumble(&mut self, input: &mut PcInput) {
+        while let Some((player, r, ms)) = self.rumble.take_sent() {
+            input.rumble(player, r, ms);
+        }
+        for (p, s) in self.rumble_support.iter_mut().enumerate() {
+            *s = input.rumble_support(p as u8);
+        }
+    }
+
+    /// Say what player `player`'s motors can do, for a host whose pads
+    /// aren't [`PcInput`]'s (a store's controller layer) or a test.
+    /// [`publish_rumble`](Self::publish_rumble) overwrites it every frame.
+    pub fn set_rumble_support(&mut self, player: u8, support: trino_core::RumbleSupport) {
+        if let Some(s) = self.rumble_support.get_mut(player as usize) {
+            *s = support;
+        }
+    }
+
+    /// The next rumble the game asked for (player, scaled strengths, ms),
+    /// for a host that sends it itself instead of
+    /// [`publish_rumble`](Self::publish_rumble).
+    pub fn take_rumble(&mut self) -> Option<(u8, trino_core::Rumble, u32)> {
+        self.rumble.take_sent()
+    }
+
+    /// The folder [`Platform::save_image`] writes into: `images/` beside the
+    /// save file (`None` without one).
+    pub fn images_dir(&self) -> Option<PathBuf> {
+        let save = self.save_path.as_ref()?;
+        Some(
+            save.parent()
+                .unwrap_or(std::path::Path::new(""))
+                .join("images"),
+        )
     }
 
     /// The host's saved achievements and stats, at start-up (not a change
@@ -209,9 +273,10 @@ impl PcPlatform {
         }
     }
 
-    /// The rebind, cancel or reset the game asked for since the last call.
+    /// The next rebind, cancel, reset or key binding the game asked for,
+    /// in the order it asked (the host applies them all after the frame).
     pub fn take_input_request(&mut self) -> Option<InputRequest> {
-        self.input_request.take()
+        (!self.input_request.is_empty()).then(|| self.input_request.remove(0))
     }
 
     /// The host says the renderer has a second screen (3DS profile).
@@ -273,6 +338,41 @@ impl PcPlatform {
 impl Platform for PcPlatform {
     fn now_micros(&self) -> u64 {
         self.start.elapsed().as_micros() as u64
+    }
+
+    fn unix_seconds(&self) -> Option<u64> {
+        if let Some(pin) = &self.clock_pin {
+            return Some(pin.read(self.now_micros()));
+        }
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs())
+    }
+
+    fn rumble(&mut self, player: u8, low: f32, high: f32, ms: u32) {
+        if self.rumble_support(player) == trino_core::RumbleSupport::Unsupported {
+            return;
+        }
+        let scale = self.access.get().rumble_factor();
+        let now = self.now_micros();
+        self.rumble.request(player, low, high, ms, now, scale);
+    }
+
+    fn rumble_state(&self, player: u8) -> trino_core::Rumble {
+        self.rumble.state(player, self.now_micros())
+    }
+
+    fn rumble_support(&self, player: u8) -> trino_core::RumbleSupport {
+        self.rumble_support
+            .get(player as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn save_image(&mut self, name: &str, image: &trino_core::RgbaImage) -> Result<(), SaveError> {
+        let dir = self.images_dir().ok_or(SaveError::Unsupported)?;
+        crate::image::write_png(&dir, name, image)
     }
 
     fn load_group(&mut self, group: GroupId) -> LoadState {
@@ -461,8 +561,21 @@ impl Platform for PcPlatform {
 
     fn rebind_player(&mut self, player: u8, button: Button, device: BindDevice) {
         if self.input.is_some() && (player as usize) < MAX_PLAYERS {
-            self.input_request = Some(InputRequest::Rebind(player, button, device));
+            self.input_request
+                .push(InputRequest::Rebind(player, button, device));
         }
+    }
+
+    fn rebind_key(&mut self, player: u8, button: Button, key: trino_core::Key) -> bool {
+        let Some(code) = crate::input::key_code_for(key) else {
+            return false;
+        };
+        if self.input.is_none() || player as usize >= MAX_PLAYERS {
+            return false;
+        }
+        self.input_request
+            .push(InputRequest::BindKey(player, button, code));
+        true
     }
 
     fn hosted_players(&self) -> Option<&trino_core::HostedPlayers> {
@@ -475,13 +588,13 @@ impl Platform for PcPlatform {
 
     fn cancel_rebind(&mut self) {
         if self.input.is_some() {
-            self.input_request = Some(InputRequest::Cancel);
+            self.input_request.push(InputRequest::Cancel);
         }
     }
 
     fn reset_bindings(&mut self) {
         if self.input.is_some() {
-            self.input_request = Some(InputRequest::Reset);
+            self.input_request.push(InputRequest::Reset);
         }
     }
 }

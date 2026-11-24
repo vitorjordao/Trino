@@ -170,6 +170,9 @@ pub fn engine_checks(
     if services(renderer, platform)? {
         platform.log("TRINO_STEP:services probed list and toast\n");
     }
+    platform.log("TRINO_STEP:clock rumble input\n");
+    let cri = clock_rumble_input(platform)?;
+    log_clock_rumble_input(platform, &cri);
     platform.log("TRINO_STEP:hw tier\n");
     let tier = hw_tier(renderer, platform)?;
     log_tier(platform, &tier);
@@ -5317,6 +5320,204 @@ pub fn log_quality(platform: &mut dyn Platform, q: &QualityReport) {
 }
 
 // ---------------------------------------------------------------------------
+// Clock, rumble, actions and images (Bongo-Kart #180, #182, #183; ADR 0045).
+
+/// What [`clock_rumble_input`] found.
+#[derive(Clone, Copy, Debug)]
+pub struct ClockRumbleInput {
+    /// `Platform::unix_seconds`, or `None` where the target has no clock.
+    pub clock: Option<u64>,
+    pub rumble: trino_core::RumbleSupport,
+    /// `Platform::rebind_key` took a key (PC with input, the Web).
+    pub rebind: bool,
+    /// `Platform::save_image` kept the picture (`Unsupported` on consoles).
+    pub image: bool,
+}
+
+/// Step `clock rumble input` (Bongo-Kart #180, #182, #183):
+///
+/// - **Clock:** the calendar math on this CPU (a known date both ways), and
+///   the platform's wall clock, when it has one: after 2000, not running
+///   backwards, its date fields a round trip.
+/// - **Rumble:** where the target can rumble at all, a request reads back
+///   scaled by the player's setting (50 % here) and a zero request stops it;
+///   where it can't, nothing is kept (no placebo).
+/// - **Actions:** an `ActionMap` swap, the next-press helper and the save
+///   block, in this target's integer and byte order.
+/// - **Keys and images:** `rebind_key` only where there is input to rebind,
+///   undone at once; `save_image` keeps a 2×2 picture or says `Unsupported`.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn clock_rumble_input(platform: &mut dyn Platform) -> Result<ClockRumbleInput, &'static str> {
+    use trino_core::actions::ActionBinding;
+    use trino_core::clock::{Civil, civil_from_unix, unix_from_civil};
+    use trino_core::{
+        ActionMap, Button, Key, RgbaImage, Rumble, RumbleSupport, SaveError, pressed_key,
+    };
+
+    // 1. Calendar math: 2026-11-24 12:34:56, a Tuesday.
+    let c = civil_from_unix(1_795_523_696);
+    if (c.year, c.month, c.day, c.hour, c.min, c.sec, c.weekday) != (2026, 11, 24, 12, 34, 56, 2)
+        || unix_from_civil(&Civil {
+            year: 2000,
+            month: 2,
+            day: 29,
+            ..Civil::default()
+        }) != Some(951_782_400)
+    {
+        return Err("clock: the calendar math is wrong on this target");
+    }
+    let clock = platform.unix_seconds();
+    if let Some(t) = clock {
+        if t < 946_684_800 {
+            return Err("clock: the wall clock reads before 2000");
+        }
+        let again = platform.unix_seconds().unwrap_or(0);
+        if again < t || again > t + 5 {
+            return Err("clock: the wall clock ran backwards or jumped");
+        }
+        if unix_from_civil(&civil_from_unix(t)) != Some(t) {
+            return Err("clock: the wall clock's date doesn't round-trip");
+        }
+    }
+
+    // 2. Rumble, scaled by the player's setting.
+    let rumble = platform.rumble_support(0);
+    let saved = platform.access();
+    platform.set_access(trino_core::AccessSettings {
+        rumble: 50,
+        ..saved
+    });
+    platform.rumble(0, 1.0, 0.5, 200);
+    let got = platform.rumble_state(0);
+    platform.rumble(0, 0.0, 0.0, 0);
+    let stopped = platform.rumble_state(0);
+    platform.set_access(saved);
+    let want = if rumble == RumbleSupport::Unsupported {
+        Rumble::OFF
+    } else {
+        Rumble {
+            low: 0.5,
+            high: 0.25,
+        }
+    };
+    if got != want {
+        return Err("rumble: the state isn't the request at the player's setting");
+    }
+    if stopped != Rumble::OFF {
+        return Err("rumble: a zero request didn't stop the motors");
+    }
+
+    // 3. Actions: a swap, the next press, the save block.
+    let defaults = [
+        ActionBinding::key(Key::W).or_button(Button::A),
+        ActionBinding::key(Key::Space).or_button(Button::R),
+    ];
+    let mut map = ActionMap::new(defaults);
+    if map.rebind_key(0, 0, Key::Space) != Some(1) || map.binding(1).keys[0] != Some(Key::W) {
+        return Err("actions: taking another action's key didn't swap");
+    }
+    let mut now = InputState::default();
+    now.set_key(Key::J, true);
+    now.set_key(Key::Escape, true);
+    if pressed_key(&now, &InputState::default(), &[Key::Escape]) != Some(Key::J) {
+        return Err("actions: the next press isn't the first new key");
+    }
+    let mut block = [0u8; ActionMap::<2>::save_len()];
+    let mut back = ActionMap::new(defaults);
+    if map.write_save(&mut block) != Some(10) || !back.read_save(&block) || back != map {
+        return Err("actions: the save block doesn't round-trip");
+    }
+    if block[2..6] != [Key::Space as u8, 0xff, Button::A as u8, 0xff] {
+        return Err("actions: the save block's bytes differ on this target");
+    }
+
+    // 4. Keys and images.
+    let rebind = platform.rebind_key(0, Button::A, Key::J);
+    if rebind {
+        platform.reset_bindings();
+    } else if platform.rebind_key(0, Button::A, Key::Escape) {
+        return Err("keys: Escape was bound");
+    }
+    if rebind && platform.input_info().is_none() {
+        return Err("keys: a key was bound on a target without bindings");
+    }
+    let px = [
+        255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128,
+    ];
+    let img = RgbaImage::new(2, 2, &px).ok_or("image: a 2x2 picture is invalid")?;
+    let image = match platform.save_image("selftest", &img) {
+        Ok(()) => true,
+        Err(SaveError::Unsupported) => false,
+        Err(_) => return Err("image: save_image failed"),
+    };
+    if platform.save_image("../x", &img).is_ok() {
+        return Err("image: a name with a folder was kept");
+    }
+    Ok(ClockRumbleInput {
+        clock,
+        rumble,
+        rebind,
+        image,
+    })
+}
+
+/// `TRINO_STEP:clock rumble input ok clock=<date|none> rumble=<support>
+/// rebind=<0|1> image=<0|1>` (the date as `YYYY-MM-DDTHH:MM`).
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn log_clock_rumble_input(platform: &mut dyn Platform, r: &ClockRumbleInput) {
+    let mut b = [0u8; 16];
+    let date: &[u8] = match r.clock {
+        Some(t) => {
+            let c = trino_core::clock::civil_from_unix(t);
+            let fields = [
+                (c.year as u32, 4, b'-'),
+                (c.month as u32, 2, b'-'),
+                (c.day as u32, 2, b'T'),
+                (c.hour as u32, 2, b':'),
+                (c.min as u32, 2, 0),
+            ];
+            let mut i = 0;
+            for (v, width, sep) in fields {
+                let mut d = 1;
+                for _ in 1..width {
+                    d *= 10;
+                }
+                while d > 0 {
+                    b[i] = b'0' + (v / d % 10) as u8;
+                    i += 1;
+                    d /= 10;
+                }
+                if sep != 0 {
+                    b[i] = sep;
+                    i += 1;
+                }
+            }
+            &b[..i]
+        }
+        None => b"none",
+    };
+    let rumble = match r.rumble {
+        trino_core::RumbleSupport::Unsupported => "unsupported",
+        trino_core::RumbleSupport::Disconnected => "disconnected",
+        trino_core::RumbleSupport::Ready => "ready",
+    };
+    let mut line: TextBuf<128> = TextBuf::new();
+    for part in [
+        "TRINO_STEP:clock rumble input ok clock=",
+        core::str::from_utf8(date).unwrap_or("?"),
+        " rumble=",
+        rumble,
+        if r.rebind { " rebind=1" } else { " rebind=0" },
+        if r.image { " image=1\n" } else { " image=0\n" },
+    ] {
+        let _ = core::fmt::Write::write_str(&mut line, part);
+    }
+    platform.log(line.as_str());
+}
+
+// ---------------------------------------------------------------------------
 // Asset groups (issue #56): `Platform::load_group` / `unload_group`.
 
 /// `[groups.selftest_level]`: the card, its texture and a blob.
@@ -5700,6 +5901,7 @@ pub fn accessibility(
         flash_guard: true,
         hold_to_toggle: true,
         cvd_filter: true,
+        rumble: 40,
     };
     if AccessSettings::unpack(want.pack()) != Some(want) {
         return Err("accessibility: the packed settings do not round-trip");

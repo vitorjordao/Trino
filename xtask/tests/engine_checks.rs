@@ -745,6 +745,63 @@ fn the_accessibility_step_passes_on_every_profile() {
     }
 }
 
+/// Step `clock rumble input` (Bongo-Kart #180, #182, #183) on the PC: the
+/// wall clock, rumble at the player's 50 % where a pad can rumble and none
+/// where nothing can, `rebind_key` (bound, then reset) once input is
+/// published, and `save_image` beside the save; a bare platform keeps
+/// neither.
+#[test]
+fn the_clock_rumble_input_step_passes_on_pc() {
+    use trino_core::{Platform, RumbleSupport};
+    use trino_platform_pc::input::InputRequest;
+    let dir = tempfile::tempdir().unwrap();
+    let mut p =
+        PcPlatform::new(&SimProfile::Native.caps()).with_save_file(dir.path().join("s.sav"));
+    let input = trino_platform_pc::PcInput::new();
+    p.publish_input(&input);
+    p.set_rumble_support(0, RumbleSupport::Ready);
+    let r = castle64::selftest::clock_rumble_input(&mut p).unwrap();
+    assert!(r.clock.is_some_and(|t| t > 1_700_000_000));
+    assert_eq!(r.rumble, RumbleSupport::Ready);
+    assert!(r.rebind && r.image, "{r:?}");
+    assert!(dir.path().join("images/selftest.png").exists());
+    assert!(matches!(
+        p.take_input_request(),
+        Some(InputRequest::BindKey(0, trino_core::Button::A, _))
+    ));
+    assert_eq!(p.take_input_request(), Some(InputRequest::Reset));
+    assert_eq!(p.access().rumble, 100, "the player's setting is restored");
+
+    let mut bare = PcPlatform::new(&SimProfile::N64.caps());
+    bare.set_rumble_support(0, RumbleSupport::Unsupported);
+    let r = castle64::selftest::clock_rumble_input(&mut bare).unwrap();
+    assert!(!r.rebind && !r.image && r.rumble == RumbleSupport::Unsupported);
+    // The line the emulator harnesses read.
+    struct Line(PcPlatform, std::cell::RefCell<String>);
+    impl Platform for Line {
+        fn now_micros(&self) -> u64 {
+            self.0.now_micros()
+        }
+        fn log(&self, m: &str) {
+            self.1.borrow_mut().push_str(m);
+        }
+    }
+    let mut l = Line(PcPlatform::new(&trino_core::Caps::PC), Default::default());
+    castle64::selftest::log_clock_rumble_input(
+        &mut l,
+        &castle64::selftest::ClockRumbleInput {
+            clock: Some(1_795_523_696),
+            rumble: RumbleSupport::Disconnected,
+            rebind: false,
+            image: true,
+        },
+    );
+    assert_eq!(
+        l.1.into_inner(),
+        "TRINO_STEP:clock rumble input ok clock=2026-11-24T12:34 rumble=disconnected rebind=0 image=1\n"
+    );
+}
+
 /// The `trace` step's lines (issue #62) read on the host as the emulator
 /// harnesses read them: a platform that records `log` around the PC's, the
 /// lines collected by `trino-trace`, the step's names and nesting there.

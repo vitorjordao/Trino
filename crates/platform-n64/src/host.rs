@@ -136,6 +136,7 @@ impl N64Host {
         self.audio.poll();
         zone.end();
         self.platform.sample_heap();
+        self.platform.tick();
     }
 
     /// Run `frames` scripted frames (`input(i)` per frame) and time them

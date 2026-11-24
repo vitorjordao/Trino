@@ -28,6 +28,12 @@
 //! [n64]
 //! package = "my-game-n64" # staticlib crate (cargo -p)
 //! save = "eeprom16k"             # ed64romconfig save type
+//! rtc = true              # declare the cartridge clock (Platform::unix_seconds).
+//!                         # Default: on unless the save is an EEPROM (the
+//!                         # EverDrive can't have both); self-test ROMs always
+//!                         # declare it unless it is false
+//! pak = "rumble"          # what the four controllers hold: "rumble" (the
+//!                         # default, Platform::rumble), "controller" or "none"
 //! rsp_arena_kb = 384      # RSP mesh copies' own RDRAM, reserved at boot
 //!                         # (optional; GitHub #110: size it from the
 //!                         # self-test's `TRINO_HEAP … rsp=` peak)
@@ -131,6 +137,13 @@ pub struct Project {
     /// `[n64] rsp_arena_kb`: KB the ROM reserves for RSP mesh copies at boot
     /// (`N64Host::boot`; `None` = they take the heap).
     pub n64_rsp_arena_kb: Option<u32>,
+    /// `[n64] rtc`: the ROM header declares the Joybus clock
+    /// (`ed64romconfig --rtc`, Bongo-Kart #182). `None`: on unless the save
+    /// is an EEPROM (`n64::n64_header_flags`).
+    pub n64_rtc: Option<bool>,
+    /// `[n64] pak` (default `rumble`): the accessory the header declares in
+    /// all four ports (`--controllerN n64,pak=…`, Bongo-Kart #180).
+    pub n64_pak: String,
     pub n3ds_package: String,
     pub n3ds_bin: String,
     pub n3ds_icon: Option<PathBuf>,
@@ -381,6 +394,14 @@ struct N64Section {
     save: String,
     #[serde(default)]
     rsp_arena_kb: Option<u32>,
+    #[serde(default)]
+    rtc: Option<bool>,
+    #[serde(default = "default_pak")]
+    pak: String,
+}
+
+fn default_pak() -> String {
+    "rumble".into()
 }
 
 #[derive(Deserialize)]
@@ -549,6 +570,8 @@ impl Project {
             n64_package: "trino-app-n64".into(),
             n64_save: default_save(),
             n64_rsp_arena_kb: None,
+            n64_rtc: None,
+            n64_pak: default_pak(),
             n3ds_package: "trino-app-3ds".into(),
             n3ds_bin: "trino-3ds".into(),
             n3ds_icon: None,
@@ -645,7 +668,15 @@ impl Project {
             package: String::new(),
             save: default_save(),
             rsp_arena_kb: None,
+            rtc: None,
+            pak: default_pak(),
         });
+        if !matches!(n64.pak.as_str(), "rumble" | "controller" | "none") {
+            return Err(format!(
+                "[n64] pak = \"{}\": expected \"rumble\", \"controller\" or \"none\"",
+                n64.pak
+            ));
+        }
         let n3ds = f.n3ds.unwrap_or(N3dsSection {
             package: String::new(),
             bin: String::new(),
@@ -758,6 +789,8 @@ impl Project {
             n64_package: n64.package,
             n64_save: n64.save,
             n64_rsp_arena_kb: n64.rsp_arena_kb,
+            n64_rtc: n64.rtc,
+            n64_pak: n64.pak,
             n3ds_package: n3ds.package,
             n3ds_bin: n3ds.bin,
             n3ds_speedup: n3ds.speedup,
@@ -935,6 +968,38 @@ watch = ["game"]
         assert_eq!(p.test.n64_max_frame_us, Some(33333));
         assert_eq!(p.watch, ["game"]);
         assert!(p.n3ds_speedup, "the New 3DS speedup is on unless opted out");
+        // Rumble Paks unless told otherwise; the clock unless the save is an
+        // EEPROM (the EverDrive can't have both), and always in a self-test
+        // ROM (Bongo-Kart #180, #182).
+        assert_eq!(p.n64_rtc, None);
+        assert_eq!(
+            crate::n64::n64_header_flags(&p, false),
+            " --controller1 n64,pak=rumble --controller2 n64,pak=rumble \
+             --controller3 n64,pak=rumble --controller4 n64,pak=rumble"
+        );
+        assert!(crate::n64::n64_header_flags(&p, true).starts_with(" --rtc --controller1"));
+        let sram = SAMPLE.replace(
+            "package = \"my-game-n64\"",
+            "package = \"my-game-n64\"\nsave = \"sram256k\"",
+        );
+        let sram = Project::parse(&sram, "/g".into(), "/e".into()).unwrap();
+        assert!(crate::n64::n64_header_flags(&sram, false).starts_with(" --rtc "));
+        let plain = SAMPLE.replace(
+            "package = \"my-game-n64\"",
+            "package = \"my-game-n64\"\nrtc = false\npak = \"controller\"",
+        );
+        let c = Project::parse(&plain, "/g".into(), "/e".into()).unwrap();
+        assert_eq!(
+            crate::n64::n64_header_flags(&c, true),
+            " --controller1 n64,pak=controller --controller2 n64,pak=controller \
+             --controller3 n64,pak=controller --controller4 n64,pak=controller"
+        );
+        let bad = SAMPLE.replace(
+            "package = \"my-game-n64\"",
+            "package = \"my-game-n64\"\npak = \"transfer\"",
+        );
+        let e = Project::parse(&bad, "/g".into(), "/e".into()).unwrap_err();
+        assert!(e.contains("[n64] pak"), "{e}");
     }
 
     /// `[threads]` (issue #101): `auto` by default, counts and `-N`

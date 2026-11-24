@@ -33,6 +33,14 @@ ADR 0019 is the design; `docs/PLATFORMS.md` › Web the user guide.
   first time the game loads the group and kept (`src/groups.rs`). The self-test's
   `asset groups` step soaks load/unload over animation frames: WebGL2 frees GPU objects
   only once the event loop turns.
+- Input, clock, rumble, images (ADR 0045): the keyboard's bindings are
+  `keys::WebBindings` (the PC's key table and labels), rebound by `KeyRequest`s the
+  runtime applies before each poll and stored in `localStorage` `trino-input:<save>`
+  (not in a self-test or a smoke run). `Keyboard::state` latches keys tapped since the
+  last read, so call it once a frame. `?unix=<seconds>` pins `unix_seconds`. Rumble goes
+  to `Gamepad.vibrationActuator` (`dual-rumble`, reached by `js_sys::Reflect`: Firefox
+  has none, so its pads read `Disconnected`). `save_image` is a PNG download (`image.rs`;
+  the object URL lives until the next download).
 - `apps/web`: `lib.rs` (game by `?game=`), `selftest.rs` (`?selftest`), `index.html`
   (templated by xtask: `{{TITLE}}`, `{{CANVAS_ID}}`), `vendor/basis/` (Binomial's
   transcoder, the KTX2 decoder in the browser).

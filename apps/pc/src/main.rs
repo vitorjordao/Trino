@@ -473,6 +473,8 @@ impl ApplicationHandler for App {
                     t.frame();
                 }
 
+                // The frame's rumble to the pads (Bongo-Kart #180).
+                ctx.platform.publish_rumble(&mut ctx.input);
                 trino_runner_pc::save_access_settings(
                     &mut ctx.platform,
                     &access_file(),

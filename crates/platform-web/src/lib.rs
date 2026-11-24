@@ -56,6 +56,8 @@ mod audio;
 #[cfg(target_arch = "wasm32")]
 mod groups;
 #[cfg(target_arch = "wasm32")]
+mod image;
+#[cfg(target_arch = "wasm32")]
 mod input;
 #[cfg(target_arch = "wasm32")]
 pub mod js;

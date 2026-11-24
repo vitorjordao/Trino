@@ -12,6 +12,7 @@
 //! (which read the offscreen target back instead of presenting it).
 
 pub mod audio;
+pub mod image;
 pub mod input;
 pub mod language;
 pub mod replay_host;

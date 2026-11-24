@@ -19,12 +19,14 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod access;
+pub mod actions;
 pub mod anim;
 pub mod ao;
 pub mod asset;
 pub mod audio;
 pub mod bundle;
 pub mod caps;
+pub mod clock;
 pub mod collide;
 pub mod determinism;
 pub mod dynamic_mesh;
@@ -32,6 +34,7 @@ pub mod entity;
 pub mod game;
 pub mod group;
 pub mod i18n;
+pub mod image;
 pub mod impostor;
 pub mod input;
 pub mod light;
@@ -56,6 +59,7 @@ pub mod quality;
 pub mod render;
 pub mod render3d;
 pub mod replay;
+pub mod rumble;
 pub mod save;
 pub mod scene;
 pub mod services;
@@ -77,6 +81,7 @@ pub use access::{
     AccessBlob, AccessData, AccessSettings, CameraFx, CaptionMode, CaptionPlace, CaptionStyle,
     Captions, CvdMode, FlashMonitor, HoldToggle, HostedAccess, Outline, ScreenFlash,
 };
+pub use actions::{ActionBinding, ActionMap, pressed_button, pressed_key};
 pub use anim::{AnimEvent, AnimGraph, AnimGraphInstance, EventBuf, EventId, GraphBlob, RootDelta};
 pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
@@ -88,12 +93,14 @@ pub use audio::{
     spatialize,
 };
 pub use caps::{Caps, CapsError, Family, HwTier, TexelFormat};
+pub use clock::{Civil, PinnedClock};
 pub use collide::{MoveResult, move_and_collide};
 pub use dynamic_mesh::{DynVertex, DynamicMesh, DynamicMeshError, smooth_normals};
 pub use entity::{Entity, EntityId, EntityStore};
 pub use game::Game;
 pub use group::{GroupId, GroupTable, LoadState, MemoryReport};
 pub use i18n::{Arg, LangId, LangTag, Localizer, StrKey};
+pub use image::RgbaImage;
 pub use impostor::Impostor;
 pub use input::{Button, Input, InputState, Key, KeySet, PointerButton};
 pub use light::{
@@ -138,6 +145,7 @@ pub use render3d::{
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use replay::{Recorder, Replay, ReplayError, StateHasher};
+pub use rumble::{DutyCycle, HostedRumble, Rumble, RumbleSupport};
 pub use scene::{
     BakedScene, LodLevel, LodPick, Lods, NodeAccess, NodeOutline, SceneNode, Tags, node_access,
 };

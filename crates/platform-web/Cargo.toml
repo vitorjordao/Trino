@@ -20,6 +20,8 @@ trino-render-wgpu = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
+# Platform::save_image downloads a PNG (Bongo-Kart #183).
+png = { workspace = true }
 web-sys = { workspace = true, features = [
     "AddEventListenerOptions",
     "AudioBuffer",
@@ -33,6 +35,8 @@ web-sys = { workspace = true, features = [
     "BaseAudioContext",
     "BiquadFilterNode",
     "BiquadFilterType",
+    "Blob",
+    "BlobPropertyBag",
     "CssStyleDeclaration",
     "Document",
     "DomRect",
@@ -45,6 +49,7 @@ web-sys = { workspace = true, features = [
     "GamepadButton",
     "GamepadMappingType",
     "GainNode",
+    "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",
     "KeyboardEvent",
@@ -63,6 +68,7 @@ web-sys = { workspace = true, features = [
     "Touch",
     "TouchEvent",
     "TouchList",
+    "Url",
     "UrlSearchParams",
     "WheelEvent",
     "Window",

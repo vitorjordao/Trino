@@ -131,6 +131,17 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
   `cargo xtask test n64 --bless` plus the `n64_parity` test.
 - **Saves**: EEPROM 16 Kbit (`ed64romconfig --savetype eeprom16k`), framed by
   `trino_core::save`.
+- **Clock and Rumble Pak** (ADR 0045): the ROM header also declares the
+  cartridge clock (`--rtc`) and a Rumble Pak in all four ports (`--controllerN
+  n64,pak=rumble`), from `trino.toml [n64] rtc` and `pak` (`n64_header_flags`).
+  `rtc` defaults to on unless the save is an EEPROM: ed64romconfig prints "The
+  combination of EEPROM + RTC does not work on EverDrive!". Self-test ROMs declare
+  it anyway, and ares answers with the host's clock and a Rumble Pak
+  (`clock rumble input` step: `clock=<date> rumble=ready`). Read the clock through
+  the shim's raw Joybus commands (`trino_rtc_read`), never libdragon's `rtc.c`:
+  its `time()` hook links `mktime`, `tzset` and `sscanf` (~14 KB of base heap).
+  The Rumble Pak is on/off; `N64Platform::tick` (each host frame) runs strength as
+  a duty cycle.
 - **Test hooks**: `trino_debug_pixel` and `trino_debug_fb_dump` (the golden frame).
 
 ## Troubleshooting

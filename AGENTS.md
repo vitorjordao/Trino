@@ -576,6 +576,29 @@ since #122.
     voice limit, virtual loops, `Doppler`; `update` once a frame.
   - Tests: `crates/core/tests/{voices,audio}.rs`, `crates/platform-pc/tests/audio_music.rs`,
     the `audio control` step; WAVs from `crates/platform-pc/tests/audio_evidence.rs`.
+- **Clock, rumble, remapping, images (2026-11-24, ADR 0045, Bongo-Kart #180, #182,
+  #183):** new `Platform` methods with defaults (no `GAME_API_VERSION` bump).
+  - **`unix_seconds()`:** PC `SystemTime` (`TRINO_UNIX_TIME` pins it), Web `Date.now()`
+    (`?unix=`), 3DS `osGetTime` (local time), N64 the cartridge's Joybus RTC when the ROM
+    header declares one (`trino.toml [n64] rtc`), else `None`. `trino_core::clock`:
+    `Civil`, `unix_from_civil`, `civil_from_unix`, `day_index`, `PinnedClock`. For dates,
+    never for timing or inside a replayed simulation.
+  - **`rumble(player, low, high, ms)`, `rumble_state`, `rumble_support`**
+    (`Unsupported` / `Disconnected` / `Ready`, so a game hides an option that can't
+    work). The player's `AccessSettings::rumble` (0..=100 %, in the packed bytes' spare
+    bits; old saves read 100) scales every request. PC gilrs force feedback
+    (`publish_rumble` each frame), Web `vibrationActuator` `dual-rumble`, N64 the Rumble
+    Pak as a duty cycle (`N64Platform::tick`; `[n64] pak = "rumble"` in the header), 3DS
+    none. `trino_core::HostedRumble` holds the state.
+  - **Remapping:** `rebind_key(player, button, key)` binds at once (PC, Web); the Web
+    rebinds by press too and keeps `trino-input:<save>` in `localStorage`.
+    `trino_core::ActionMap<N>` (`ActionBinding`: 2 keys + 2 buttons) holds a game's own
+    actions on every target: swaps, `pressed_key`/`pressed_button`, a `2 + 4N`-byte save
+    block; `Key::label`. A key tapped between two polls reads down once (PC, Web).
+  - **`save_image(name, &RgbaImage)`:** a PNG in `<save folder>/images/` on the PC, a
+    download on the Web, `Unsupported` on the consoles.
+  - Tests: `crates/core/tests/actions.rs`, `crates/platform-pc/tests/clock_rumble_keys.rs`,
+    the Web's `keys.rs` tests, the `clock rumble input` step.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -1351,14 +1374,17 @@ also `right_stick`, Z is Select; New 3DS ZL/ZR = L2/R2 (`triggers` 0 or 1), C-st
 `right_stick`.
 Both the keys and the pad buttons can be **rebound** from the game: `Platform::input_info`
 (gamepad support/connection, a pending rebind), `gamepad_name`, `binding_label`,
-`rebind`, `cancel_rebind`, `reset_bindings` (PC only, `None`/no-ops on consoles).
+`rebind`, `rebind_key` (a key at once, ADR 0045), `cancel_rebind`, `reset_bindings` (PC
+and Web; the Web rebinds keys only and keeps them in `localStorage` `trino-input:<save>`;
+`None`/no-ops on consoles, where a game's own `ActionMap` remaps).
 `trino-runner-pc` applies them after the frame and keeps them in `<save_name>.input`
 (text; `input::bindings_to_text`, one line per `BINDABLE` button; files from before
 L2–R3 have 12 lines and still parse). The next bindable key or pad button pressed becomes
-the binding, Escape cancels; keys with a fixed role (WASD and the shortcut keys: Esc,
-Space, Tab, Delete, Backspace, F1–F8, 1–3, Page Up/Down, Home, R, T, =, −, Ctrl; and
-Super, which the OS takes) are not bindable, so one press never does two things. Without the `gamepad` feature (or a working pad layer)
-`GamepadStatus::Unsupported` and keyboard rebinding still works.
+the binding, Escape cancels. Only the keys in `input.rs`'s `KEYS` table are bindable:
+W/A/S/D (the stick), Escape, F1–F8, Delete, Home, Page Up/Down, =, −, Ctrl, the numpad's
+1–3/+/− and Super (the OS takes it) are not, so one press never does two things. Without
+the `gamepad` feature (or a working pad layer) `GamepadStatus::Unsupported` and keyboard
+rebinding still works.
 
 ## Repository map
 
@@ -1652,6 +1678,15 @@ cargo test --workspace
   blob, or drop it when the path is off (`PcRenderer::write_dynamic`); the test that
   catches it compares a rewritten slot with the baked model's frame
   (`a_rewritten_mesh_shows_only_this_frames_vertices`).
+- **A host request kept in one `Option` slot loses the second request of a frame.** The
+  PC's input requests were one slot, so `rebind_key` then `reset_bindings` in the same
+  update kept only the reset (ADR 0045). Requests a game can make several of per frame
+  go in a queue that the host drains in order (`PcPlatform::take_input_request`, the
+  Web's `key_requests`).
+- **Key taps are latched until the next read** (ADR 0045 §4): `PcInput::poll` /
+  `keyboard_state` and the Web's `Keyboard::state` clear them. A host that reads the
+  keyboard twice in one frame gives the second read no taps; read it once and share the
+  `InputState`.
 - **A ggrs batch's last advance is not always a new frame.** A rollback can re-simulate
   up to the current frame and add none; `trino_net::run_requests` decides by ggrs's
   frame numbers (`FrameClock`). Effects keyed on "the newest advance" doubled a sound.

@@ -681,9 +681,34 @@ fn text_pad_for(pad: u32) -> (String, String) {
     )
 }
 
-fn pack_rom(p: &Project) -> Result<(), String> {
+/// The homebrew ROM header's clock and controller accessories beyond the
+/// save type (`[n64] rtc`, `[n64] pak`; Bongo-Kart #180, #182): what
+/// emulators (ares) and flash carts read to give the game a Joybus clock and
+/// a Rumble Pak in every port. The clock is on unless the save is an EEPROM
+/// (ed64romconfig: "the combination of EEPROM + RTC does not work on
+/// EverDrive"), and on in a self-test ROM, so ares exercises it; an explicit
+/// `rtc` wins either way.
+pub fn n64_header_flags(p: &Project, test_mode: bool) -> String {
+    let mut out = String::new();
+    let eeprom = p.n64_save.starts_with("eeprom");
+    if p.n64_rtc.unwrap_or(test_mode || !eeprom) {
+        out.push_str(" --rtc");
+    }
+    let port = match p.n64_pak.as_str() {
+        "rumble" => "n64,pak=rumble",
+        "controller" => "n64,pak=controller",
+        _ => "n64",
+    };
+    for n in 1..=4 {
+        out.push_str(&format!(" --controller{n} {port}"));
+    }
+    out
+}
+
+fn pack_rom(p: &Project, test_mode: bool) -> Result<(), String> {
     println!("[n64] linking + packing ROM...");
     let (name, title, save) = (&p.name, &p.title, &p.n64_save);
+    let header = n64_header_flags(p, test_mode);
     let staticlib = p.n64_staticlib();
     let (pad_obj, pad_step) = text_pad_step();
     // After the Rust code, so linking it moves none of that.
@@ -716,7 +741,7 @@ fn pack_rom(p: &Project) -> Result<(), String> {
          mkdfs {name}.dfs filesystem >/dev/null\n\
          n64tool --title '{title}' --toc --output {name}.z64 --align 256 {name}.elf.stripped \
          --align 8 {name}.elf.sym --align 16 {name}.dfs\n\
-         ed64romconfig --savetype {save} {name}.z64\n"
+         ed64romconfig --savetype {save}{header} {name}.z64\n"
     );
     let status = docker_sh(p, true, &script).map_err(|e| format!("docker: {e}"))?;
     if !status.success() {
@@ -874,7 +899,7 @@ pub fn build(p: &Project, test_mode: bool) -> ExitCode {
         compile_shim(p)?;
         bake_assets(p, test_mode)?;
         cargo_build(p)?;
-        pack_rom(p)?;
+        pack_rom(p, test_mode)?;
         Ok(())
     };
     match steps() {

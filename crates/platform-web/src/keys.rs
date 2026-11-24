@@ -98,7 +98,8 @@ pub fn keys_for(code: &str) -> &'static [Key] {
     }
 }
 
-/// The console button a key presses (the PC's default bindings).
+/// The console button a key presses with the default bindings (what
+/// [`is_game_key`] protects from the browser).
 pub fn button_for(code: &str) -> Option<Button> {
     Some(match code {
         "KeyZ" => Button::A,
@@ -141,19 +142,234 @@ pub fn is_game_key(code: &str) -> bool {
         )
 }
 
+/// The keys a binding may use, by `KeyboardEvent.code`, with their labels:
+/// the PC's list (`trino_platform_pc::input`'s `KEYS`), so a game shows the
+/// same names on both. W/A/S/D (the stick), Escape, F1–F8, Delete, Home,
+/// Page Up/Down, =, −, Ctrl and Super are not in it.
+const KEYS: &[(&str, &str)] = &[
+    ("KeyB", "B"),
+    ("KeyC", "C"),
+    ("KeyE", "E"),
+    ("KeyF", "F"),
+    ("KeyG", "G"),
+    ("KeyH", "H"),
+    ("KeyI", "I"),
+    ("KeyJ", "J"),
+    ("KeyK", "K"),
+    ("KeyL", "L"),
+    ("KeyM", "M"),
+    ("KeyN", "N"),
+    ("KeyO", "O"),
+    ("KeyP", "P"),
+    ("KeyQ", "Q"),
+    ("KeyR", "R"),
+    ("KeyT", "T"),
+    ("KeyU", "U"),
+    ("KeyV", "V"),
+    ("KeyX", "X"),
+    ("KeyY", "Y"),
+    ("KeyZ", "Z"),
+    ("Digit0", "0"),
+    ("Digit1", "1"),
+    ("Digit2", "2"),
+    ("Digit3", "3"),
+    ("Digit4", "4"),
+    ("Digit5", "5"),
+    ("Digit6", "6"),
+    ("Digit7", "7"),
+    ("Digit8", "8"),
+    ("Digit9", "9"),
+    ("Space", "SPACE"),
+    ("Tab", "TAB"),
+    ("Backspace", "BACKSPACE"),
+    ("ArrowUp", "UP"),
+    ("ArrowDown", "DOWN"),
+    ("ArrowLeft", "LEFT"),
+    ("ArrowRight", "RIGHT"),
+    ("Enter", "ENTER"),
+    ("ShiftLeft", "LSHIFT"),
+    ("ShiftRight", "RSHIFT"),
+    ("AltLeft", "LALT"),
+    ("AltRight", "RALT"),
+    ("Insert", "INSERT"),
+    ("End", "END"),
+    ("Comma", ","),
+    ("Period", "."),
+    ("Slash", "/"),
+    ("Semicolon", ";"),
+    ("Quote", "'"),
+    ("BracketLeft", "["),
+    ("BracketRight", "]"),
+    ("Backslash", "\\"),
+    ("Backquote", "`"),
+    ("F9", "F9"),
+    ("F10", "F10"),
+    ("F11", "F11"),
+    ("F12", "F12"),
+    ("Numpad0", "NUM0"),
+    ("Numpad4", "NUM4"),
+    ("Numpad5", "NUM5"),
+    ("Numpad6", "NUM6"),
+    ("Numpad7", "NUM7"),
+    ("Numpad8", "NUM8"),
+    ("Numpad9", "NUM9"),
+    ("NumpadEnter", "NUMENTER"),
+];
+
+/// A bindable key's `code` as a `'static` string and its label (`None`:
+/// not bindable).
+pub fn bindable(code: &str) -> Option<(&'static str, &'static str)> {
+    KEYS.iter().find(|(c, _)| *c == code).copied()
+}
+
+/// The `code` a binding to `key` uses
+/// ([`Platform::rebind_key`](trino_core::Platform::rebind_key)): the first
+/// bindable key that sets `key`'s bit, as on the PC ([`Key::Shift`] is the
+/// left Shift). `None` for keys with a fixed role.
+pub fn code_for(key: Key) -> Option<&'static str> {
+    KEYS.iter()
+        .map(|(c, _)| *c)
+        .find(|c| keys_for(c).contains(&key))
+}
+
+/// Which key presses each console button ([`Button::ALL`] order), by
+/// `code`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WebBindings(pub [Option<&'static str>; 16]);
+
+impl Default for WebBindings {
+    /// The PC's defaults.
+    fn default() -> Self {
+        WebBindings([
+            Some("KeyZ"),
+            Some("KeyX"),
+            Some("KeyC"),
+            Some("KeyV"),
+            Some("KeyQ"),
+            Some("KeyE"),
+            Some("Enter"),
+            Some("ShiftRight"),
+            Some("ArrowUp"),
+            Some("ArrowDown"),
+            Some("ArrowLeft"),
+            Some("ArrowRight"),
+            None,
+            None,
+            None,
+            None,
+        ])
+    }
+}
+
+impl WebBindings {
+    /// `button` is `code` from now on; no other button keeps it. `false`
+    /// for a code that isn't bindable.
+    pub fn bind(&mut self, button: Button, code: &str) -> bool {
+        let Some((code, _)) = bindable(code) else {
+            return false;
+        };
+        for c in self.0.iter_mut() {
+            if *c == Some(code) {
+                *c = None;
+            }
+        }
+        self.0[button as usize] = Some(code);
+        true
+    }
+
+    /// The button `code` presses.
+    pub fn button_for(&self, code: &str) -> Option<Button> {
+        let i = self.0.iter().position(|c| *c == Some(code))?;
+        Button::ALL.get(i).copied()
+    }
+
+    /// Every button's key label, [`Button::ALL`] order.
+    pub fn labels(&self) -> [Option<&'static str>; 16] {
+        core::array::from_fn(|i| Button::ALL.get(i).and_then(|b| self.label(*b)))
+    }
+
+    /// `button`'s key label ("Z", "RSHIFT"), `None` when unbound.
+    pub fn label(&self, button: Button) -> Option<&'static str> {
+        self.0[button as usize].and_then(|c| bindable(c).map(|(_, l)| l))
+    }
+
+    /// As text for `localStorage` (`trino-input:<save>`): one `A = KeyZ`
+    /// line per button, `-` for none.
+    pub fn to_text(&self) -> String {
+        let mut out = String::new();
+        for (b, c) in Button::ALL.iter().zip(self.0.iter()) {
+            out.push_str(&format!("{b:?} = {}\n", c.unwrap_or("-")));
+        }
+        out
+    }
+
+    /// [`to_text`](Self::to_text)'s lines over the defaults: an unknown
+    /// button or key keeps that button's default.
+    pub fn from_text(text: &str) -> WebBindings {
+        let mut b = WebBindings::default();
+        for line in text.lines() {
+            let Some((name, code)) = line.split_once('=') else {
+                continue;
+            };
+            let (name, code) = (name.trim(), code.trim());
+            let Some(button) = Button::ALL.iter().find(|b| format!("{b:?}") == name) else {
+                continue;
+            };
+            if code == "-" {
+                b.0[*button as usize] = None;
+            } else if let Some((c, _)) = bindable(code) {
+                b.0[*button as usize] = Some(c);
+            }
+        }
+        b
+    }
+}
+
 /// The keyboard's part of the input: held keys, bound buttons, the WASD
-/// stick.
-#[derive(Clone, Copy, Debug, Default)]
+/// stick, a pending rebind.
+#[derive(Clone, Debug, Default)]
 pub struct Keyboard {
+    /// Key bits and the stick (buttons come from `held` at each read).
     state: InputState,
     wasd: [bool; 4],
+    /// Codes held, and codes pressed since the last [`state`](Self::state):
+    /// a press and release between two frames (a tap shorter than a frame,
+    /// Bongo-Kart #183) still reads as down once.
+    held: Vec<String>,
+    tapped: Vec<String>,
+    pub bindings: WebBindings,
+    /// The button waiting for its next key ([`Platform::rebind`](trino_core::Platform::rebind)).
+    capture: Option<Button>,
+    /// The bindings changed since [`take_changed`](Self::take_changed).
+    changed: bool,
 }
 
 impl Keyboard {
-    /// A key went down or up (repeats filtered by the caller).
+    /// A key went down or up (repeats filtered by the caller). While a
+    /// rebind waits, the next bindable key becomes the binding and does
+    /// nothing else; Escape cancels it.
     pub fn key(&mut self, code: &str, down: bool) {
-        if let Some(b) = button_for(code) {
-            self.state.set(b, down);
+        if down && let Some(button) = self.capture {
+            if code == "Escape" {
+                self.capture = None;
+                return;
+            }
+            if self.bindings.bind(button, code) {
+                self.capture = None;
+                self.changed = true;
+                self.held.retain(|c| c != code);
+                return;
+            }
+        }
+        if down {
+            if !self.held.iter().any(|c| c == code) {
+                self.held.push(code.to_string());
+            }
+            if !self.tapped.iter().any(|c| c == code) {
+                self.tapped.push(code.to_string());
+            }
+        } else {
+            self.held.retain(|c| c != code);
         }
         for k in keys_for(code) {
             self.state.set_key(*k, down);
@@ -165,23 +381,85 @@ impl Keyboard {
             "KeyD" => self.wasd[3] = down,
             _ => {}
         }
-        // Digital stick: Y-up positive, matching real console sticks.
-        self.state.stick = Vec2::new(
-            (self.wasd[3] as i8 - self.wasd[1] as i8) as f32,
-            (self.wasd[0] as i8 - self.wasd[2] as i8) as f32,
-        );
+        self.state.stick = stick(self.wasd);
     }
 
     /// Every key up (the canvas lost focus: a key released elsewhere never
-    /// reports its `keyup`).
+    /// reports its `keyup`). Bindings and a pending rebind stay.
     pub fn release_all(&mut self) {
-        *self = Keyboard::default();
+        self.state = InputState::default();
+        self.wasd = [false; 4];
+        self.held.clear();
+        self.tapped.clear();
     }
 
-    /// The keyboard's state for a frame.
-    pub fn state(&self) -> InputState {
-        self.state
+    /// The keyboard's state for a frame: held keys, plus keys tapped since
+    /// the last call (then forgotten).
+    pub fn state(&mut self) -> InputState {
+        let mut state = self.state;
+        let mut wasd = self.wasd;
+        for code in &self.tapped {
+            for k in keys_for(code) {
+                state.set_key(*k, true);
+            }
+            match code.as_str() {
+                "KeyW" => wasd[0] = true,
+                "KeyA" => wasd[1] = true,
+                "KeyS" => wasd[2] = true,
+                "KeyD" => wasd[3] = true,
+                _ => {}
+            }
+        }
+        state.stick = stick(wasd);
+        for code in self.held.iter().chain(self.tapped.iter()) {
+            if let Some(b) = self.bindings.button_for(code) {
+                state.set(b, true);
+            }
+        }
+        self.tapped.clear();
+        state
     }
+
+    /// Wait for the next key to bind `button` (`None` cancels).
+    pub fn capture(&mut self, button: Option<Button>) {
+        self.capture = button;
+    }
+
+    /// The button a rebind is waiting for.
+    pub fn capturing(&self) -> Option<Button> {
+        self.capture
+    }
+
+    /// Bind `button` to `code` now (`false`: not bindable).
+    pub fn bind(&mut self, button: Button, code: &str) -> bool {
+        let ok = self.bindings.bind(button, code);
+        if ok {
+            self.changed = true;
+        }
+        ok
+    }
+
+    /// Back to the default bindings.
+    pub fn reset(&mut self) {
+        self.capture = None;
+        if self.bindings != WebBindings::default() {
+            self.bindings = WebBindings::default();
+            self.changed = true;
+        }
+    }
+
+    /// Did the bindings change since the last call (time to store them)?
+    pub fn take_changed(&mut self) -> bool {
+        core::mem::take(&mut self.changed)
+    }
+}
+
+/// The digital stick: Y-up positive, matching real console sticks.
+fn stick(wasd: [bool; 4]) -> Vec2 {
+    Vec2::new(
+        (wasd[3] as i8 - wasd[1] as i8) as f32,
+        (wasd[0] as i8 - wasd[2] as i8) as f32,
+    )
 }
 
 /// One gamepad as the Gamepad API reports it in the standard mapping:
@@ -314,6 +592,7 @@ mod tests {
         assert!(s.is_down(Button::A) && s.is_down(Button::Start) && s.is_down(Button::DpadLeft));
         assert!(s.key(Key::Z) && s.key(Key::Enter) && s.key(Key::ArrowLeft));
         k.key("KeyZ", false);
+        let _ = k.state(); // the tap reads once
         assert!(!k.state().is_down(Button::A) && !k.state().key(Key::Z));
         // `=` is Equal and Plus; numpad 2 is Digit2.
         k.key("Equal", true);
@@ -332,6 +611,66 @@ mod tests {
         assert_eq!(k.state().stick, Vec2::new(1.0, 1.0));
         k.key("KeyA", true);
         assert_eq!(k.state().stick, Vec2::new(0.0, 1.0));
+    }
+
+    #[test]
+    fn a_tap_between_two_frames_reads_down_once() {
+        let mut k = Keyboard::default();
+        k.key("Enter", true);
+        k.key("Enter", false);
+        k.key("KeyW", true);
+        k.key("KeyW", false);
+        let s = k.state();
+        assert!(s.is_down(Button::Start) && s.key(Key::Enter) && s.stick.y > 0.0);
+        let s = k.state();
+        assert!(!s.is_down(Button::Start) && !s.key(Key::Enter) && s.stick.y == 0.0);
+        // Held keys stay down.
+        k.key("KeyZ", true);
+        assert!(k.state().is_down(Button::A) && k.state().is_down(Button::A));
+    }
+
+    #[test]
+    fn keys_rebind_by_press_or_at_once_and_round_trip_as_text() {
+        let mut k = Keyboard::default();
+        // The next bindable key binds A and presses nothing.
+        k.capture(Some(Button::A));
+        k.key("KeyW", true); // the stick: not bindable, still waiting
+        assert_eq!(k.capturing(), Some(Button::A));
+        k.key("KeyW", false);
+        k.key("KeyJ", true);
+        assert_eq!(k.capturing(), None);
+        assert!(
+            !k.state().is_down(Button::A),
+            "the binding press does nothing"
+        );
+        k.key("KeyJ", false);
+        assert!(k.take_changed() && !k.take_changed());
+        assert_eq!(k.bindings.label(Button::A), Some("J"));
+        k.key("KeyZ", true);
+        assert!(!k.state().is_down(Button::A), "Z no longer presses A");
+        k.key("KeyZ", false);
+        // Escape cancels.
+        k.capture(Some(Button::B));
+        k.key("Escape", true);
+        assert_eq!((k.capturing(), k.take_changed()), (None, false));
+        // At once: B takes J from A.
+        assert!(k.bind(Button::B, code_for(Key::J).unwrap()));
+        assert_eq!(
+            (k.bindings.label(Button::A), k.bindings.label(Button::B)),
+            (None, Some("J"))
+        );
+        assert!(!k.bind(Button::B, "KeyW"));
+        assert_eq!(code_for(Key::Shift), Some("ShiftLeft"));
+        assert_eq!(code_for(Key::Escape), None);
+        let text = k.bindings.to_text();
+        assert_eq!(WebBindings::from_text(&text), k.bindings);
+        assert_eq!(
+            WebBindings::from_text("A = KeyW\nnonsense\nB = Nope"),
+            WebBindings::default()
+        );
+        k.reset();
+        assert_eq!(k.bindings, WebBindings::default());
+        assert!(k.take_changed());
     }
 
     #[test]

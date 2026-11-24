@@ -20,6 +20,8 @@ bytemuck = { workspace = true }
 pollster = { workspace = true }
 # The OS locale (Platform::system_language, issue #59).
 sys-locale = "0.3"
+# Platform::save_image writes PNG (Bongo-Kart #183).
+png = { workspace = true }
 # Gamepads (feature `gamepad`). On Linux gilrs links libudev: install
 # libudev-dev (Debian/Ubuntu) / systemd-devel (Fedora) to enable it.
 gilrs = { version = "0.11", optional = true }
@@ -33,7 +35,6 @@ tracy = ["trino-render-wgpu/tracy"]
 [dev-dependencies]
 # The trace test reads its own lines back (issue #62).
 trino-trace = { workspace = true }
-png = { workspace = true }
 # Golden tests of the real showcase game + baked 3D models (dev-only: the
 # dep-graph rule about platform crates concerns normal dependencies).
 platformer = { workspace = true }

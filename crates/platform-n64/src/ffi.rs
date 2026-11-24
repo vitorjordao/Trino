@@ -157,6 +157,14 @@ unsafe extern "C" {
     pub fn trino_joypad_poll() -> u32;
     /// The VR4300's FCR31 (flush-to-zero, rounding, exception enables).
     pub fn trino_fpu_control() -> u32;
+    /// The cartridge clock (Bongo-Kart #182): 1 and `out[0..6]` = year −
+    /// 1900, month 1..=12, day, hour, minute, second; 0 without a clock
+    /// (`rtc_init` found none at boot).
+    pub fn trino_rtc_read(out: *mut u8) -> u32;
+    /// 1 when port `port` (0..4) has a Rumble Pak (Bongo-Kart #180).
+    pub fn trino_rumble_supported(port: u32) -> u32;
+    /// Start (1) or stop (0) port `port`'s Rumble Pak motor.
+    pub fn trino_rumble_set(port: u32, on: u32);
     /// Port `port`'s buttons as [`trino_joypad_buttons`] packs them (after
     /// [`trino_joypad_poll`]).
     pub fn trino_joypad_port_buttons(port: u32) -> u32;

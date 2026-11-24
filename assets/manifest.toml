@@ -636,6 +636,13 @@ formats = { n64 = "RGBA5551" }
 file = "sprites/selftest_detail.png"
 formats = { n64 = "I4" }
 
+# A one-texel checker with a mipmap chain (selftest::mipmaps, Bongo-Kart
+# #178): the PC and the Web sample its chain, the consoles level 0.
+[sprites.selftest_mips]
+file = "sprites/selftest_mips.png"
+formats = { n64 = "CI4" }
+mipmaps = true
+
 # One card per 3DS texture format (selftest::texture_formats, issue #52):
 # quadrants each format stores exactly; the N64 bakes them as RGBA5551.
 [sprites.selftest_fmt_rgba8]

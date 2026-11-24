@@ -106,6 +106,7 @@ const SUN: Light = Light {
     color: Color::WHITE,
     ambient_color: Color::WHITE,
     fog: Fog::NONE,
+    ..Light::DEFAULT
 };
 
 const AO: AmbientOcclusion = AmbientOcclusion {

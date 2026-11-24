@@ -86,7 +86,12 @@ impl std::error::Error for RendererError {}
 struct SpriteEntry {
     bind_group: wgpu::BindGroup,
     /// Kept for the 3D (wrapping) bind group, created on first 3D use.
+    /// Level 0 only: what 2D draws and the console profiles sample.
     view: wgpu::TextureView,
+    /// The whole mipmap chain, when the texture was uploaded with one
+    /// (Bongo-Kart #178): what bilinear 3D draws sample on a target with
+    /// [`Caps::mipmaps`].
+    mip_view: Option<wgpu::TextureView>,
     size: (u32, u32),
     /// GPU bytes of the texture, and whether it is block-compressed
     /// ([`PcRenderer::sprite_memory`]).
@@ -404,10 +409,14 @@ pub struct PcRenderer {
     /// `tri`, `tri clamp` and `lit` again for blended triangles: depth
     /// tested, never written ([`TriKind::PlainBlend`]).
     blend_pipelines: [wgpu::RenderPipeline; 3],
-    /// What the scene pipelines are built from, and the seven again for a
+    /// `tri`, `tri clamp` and `lit` for additive triangles
+    /// ([`TriKind::PlainAdd`], `Blend::Add`): `dst + src·a`, depth tested,
+    /// never written.
+    add_pipelines: [wgpu::RenderPipeline; 3],
+    /// What the scene pipelines are built from, and the ten again for a
     /// multisampled target, built by the first [`PcRenderer::set_msaa`]
-    /// that turns it on: sprite, tri, tri clamp, lit and the three blended
-    /// ones. (Building them for every renderer made parallel headless tests
+    /// that turns it on: sprite, tri, tri clamp, lit, the three blended
+    /// ones and the three additive ones. (Building them for every renderer made parallel headless tests
     /// crash RADV.)
     sources: SceneSources,
     ms_pipelines: Option<[wgpu::RenderPipeline; SCENE_PIPES]>,
@@ -451,6 +460,13 @@ pub struct PcRenderer {
     tex3d_linear: wgpu::Sampler,
     clamp_nearest: wgpu::Sampler,
     clamp_linear: wgpu::Sampler,
+    /// Trilinear twins of the two linear samplers, for textures with a
+    /// mipmap chain (Bongo-Kart #178).
+    tex3d_linear_mip: wgpu::Sampler,
+    clamp_linear_mip: wgpu::Sampler,
+    /// Sample mipmap chains where the target has them
+    /// ([`PcRenderer::set_mipmaps`], `TRINO_MIPS=0` turns them off).
+    mipmaps_on: bool,
     /// 1x1 white: what untextured triangles "sample" (×1 = unchanged), and
     /// a draw without a detail layer.
     white_view: wgpu::TextureView,
@@ -492,6 +508,9 @@ pub struct PcRenderer {
     /// Texture of each pending triangle (parallel to `pending_tris`; only
     /// allocated into when the batch has textured draws).
     pending_tex: Vec<Option<TexKey>>,
+    /// Per pending triangle: from an additive draw (`Blend::Add`).
+    /// Materialized like `pending_tex`, once an additive draw joins.
+    pending_add: Vec<bool>,
     /// Per-pixel lighting inputs of each pending triangle (parallel; only
     /// allocated into once a lit draw joins the batch).
     pending_surf: Vec<Option<SurfTri>>,
@@ -1181,8 +1200,24 @@ fn create_targets(
 pub const MSAA_SAMPLES: u32 = 4;
 
 /// The scene pipelines of one target ([`scene_pipelines`]): sprite, tri,
-/// tri clamp, lit, then tri, tri clamp and lit for blended triangles.
-pub(crate) const SCENE_PIPES: usize = 7;
+/// tri clamp, lit, then tri, tri clamp and lit for blended triangles, and
+/// the same three for additive ones (`Blend::Add`).
+pub(crate) const SCENE_PIPES: usize = 10;
+
+/// `Blend::Add` (ADR 0043 §2): the source weighted by its alpha, added to
+/// what is there; the destination's alpha kept.
+const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 /// The shader and layouts the scene pipelines are built from, kept so the
 /// multisampled set ([`PcRenderer::set_msaa`]) is only built when asked for.
 #[derive(Clone)]
@@ -1255,6 +1290,16 @@ fn lit_attributes() -> Vec<wgpu::VertexAttribute> {
 
 /// The four scene pipelines for a target with `samples` samples per pixel:
 /// sprite, tri, tri clamp (billboards), lit.
+/// How a batch triangle meets what is behind it (its pipeline family).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    Opaque,
+    /// Blended by alpha ([`blends`]).
+    Blend,
+    /// Added (`Blend::Add`).
+    Add,
+}
+
 /// Whether a batch triangle blends with what is behind it: a vertex alpha
 /// below 255, or a tiled (model) texture with texels below full alpha.
 /// Billboards' clamped textures are cut out at half alpha (`fs_tri_clamp`)
@@ -1319,6 +1364,7 @@ fn batch_keys(
     tris: &[ScreenTri],
     tex: &[Option<TexKey>],
     surf: &[Option<SurfTri>],
+    add: &[bool],
     alpha_texture: impl Fn(u32) -> bool,
 ) -> Vec<(u64, u64)> {
     let mut keys: Vec<(u64, u64)> = tris
@@ -1338,7 +1384,9 @@ fn batch_keys(
             let painter = trino_core::render3d::painter_key(tri.depth, i);
             if s.is_some_and(|s| s.water) {
                 (1 << 63 | group << 1 | lit, painter)
-            } else if blends(tri, t, &alpha_texture) {
+            } else if add.get(i).copied().unwrap_or(false) || blends(tri, t, &alpha_texture) {
+                // Additive triangles (`Blend::Add`) sort among the blended
+                // ones: adding commutes, blending over them doesn't.
                 (1 << 62, painter)
             } else {
                 (group << 1 | lit, painter)
@@ -1442,8 +1490,9 @@ fn scene_pipelines(
             },
         )
     };
+    const ALPHA: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
     let tri_attrs = tri_attributes();
-    let make_tri_pipeline = |fragment: &str, samples: u32, depth_write: bool| {
+    let make_tri_pipeline = |fragment: &str, samples: u32, depth_write: bool, blend| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
@@ -1465,7 +1514,7 @@ fn scene_pipelines(
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -1491,7 +1540,7 @@ fn scene_pipelines(
         )
     };
     let lit_attrs = lit_attributes();
-    let make_lit_pipeline = |samples: u32, depth_write: bool| {
+    let make_lit_pipeline = |samples: u32, depth_write: bool, blend| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
@@ -1513,7 +1562,7 @@ fn scene_pipelines(
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -1536,12 +1585,15 @@ fn scene_pipelines(
     };
     [
         make_sprite_pipeline(samples),
-        make_tri_pipeline("fs_tri", samples, true),
-        make_tri_pipeline("fs_tri_clamp", samples, true),
-        make_lit_pipeline(samples, true),
-        make_tri_pipeline("fs_tri", samples, false),
-        make_tri_pipeline("fs_tri_clamp", samples, false),
-        make_lit_pipeline(samples, false),
+        make_tri_pipeline("fs_tri", samples, true, ALPHA),
+        make_tri_pipeline("fs_tri_clamp", samples, true, ALPHA),
+        make_lit_pipeline(samples, true, ALPHA),
+        make_tri_pipeline("fs_tri", samples, false, ALPHA),
+        make_tri_pipeline("fs_tri_clamp", samples, false, ALPHA),
+        make_lit_pipeline(samples, false, ALPHA),
+        make_tri_pipeline("fs_tri_add", samples, false, ADDITIVE),
+        make_tri_pipeline("fs_tri_clamp_add", samples, false, ADDITIVE),
+        make_lit_pipeline(samples, false, ADDITIVE),
     ]
 }
 
@@ -2090,6 +2142,22 @@ impl PcRenderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let tex3d_linear_mip = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-tex3d-linear-mip"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let clamp_linear_mip = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("trino-clamp-linear-mip"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
         // The window blit stays nearest: consoles output at native
         // resolution; the integer upscale is a PC artifact and must not blur.
         let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2254,6 +2322,9 @@ impl PcRenderer {
             blend_plain,
             blend_clamp,
             blend_lit,
+            add_plain,
+            add_clamp,
+            add_lit,
         ] = scene_pipelines(&device, &sources, 1, OFFSCREEN_FORMAT);
 
         // Water: the lit vertices, groups 0..2 as the lit pipeline (the
@@ -2468,6 +2539,7 @@ impl PcRenderer {
             tri_clamp_pipeline,
             lit_pipeline,
             blend_pipelines: [blend_plain, blend_clamp, blend_lit],
+            add_pipelines: [add_plain, add_clamp, add_lit],
             sources,
             ms_pipelines: None,
             msaa: 1,
@@ -2495,6 +2567,9 @@ impl PcRenderer {
             tex3d_linear,
             clamp_nearest,
             clamp_linear,
+            tex3d_linear_mip,
+            clamp_linear_mip,
+            mipmaps_on: std::env::var("TRINO_MIPS").as_deref() != Ok("0"),
             white_view,
             white_bg,
             tex_filter,
@@ -2514,6 +2589,7 @@ impl PcRenderer {
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
             pending_tex: Vec::new(),
+            pending_add: Vec::new(),
             pending_surf: Vec::new(),
             locals: LightList::EMPTY,
             poses: Vec::new(),
@@ -3735,6 +3811,7 @@ impl PcRenderer {
         self.tri_verts.clear();
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_add.clear();
         self.pending_surf.clear();
         self.light_sets.clear();
         self.water_sets.clear();
@@ -4015,14 +4092,39 @@ impl PcRenderer {
             return;
         }
         let alpha = SpriteAlpha::of_rgba(rgba);
-        self.install_sprite(
-            id,
-            (width, height),
-            OFFSCREEN_FORMAT,
-            rgba,
-            width * 4,
-            alpha,
-        );
+        self.install_sprite(id, (width, height), OFFSCREEN_FORMAT, &[rgba], alpha);
+    }
+
+    /// [`PcRenderer::upload_sprite`] with a mipmap chain (Bongo-Kart #178):
+    /// the smaller levels are made here from `rgba` by
+    /// [`trino_core::mip`] (linear light, alpha-weighted), down to 4 texels
+    /// on the smaller side. Bilinear 3D draws on a target with
+    /// [`Caps::mipmaps`] then sample the level that fits each pixel; 2D
+    /// draws and the console profiles keep sampling level 0. A size that
+    /// can't carry a chain (not powers of two, or under 4 texels) uploads
+    /// level 0 alone, as [`PcRenderer::upload_sprite`].
+    pub fn upload_sprite_mipmapped(&mut self, id: SpriteId, width: u32, height: u32, rgba: &[u8]) {
+        if !trino_core::mip::chainable(width, height)
+            || rgba.len() as u64 != u64::from(width) * u64::from(height) * 4
+        {
+            self.upload_sprite(id, width, height, rgba);
+            return;
+        }
+        if !self.sprite_size_ok(id, width, height) {
+            return;
+        }
+        let mut chain = vec![0u8; trino_core::mip::rgba8_chain_bytes(width, height)];
+        chain[..rgba.len()].copy_from_slice(rgba);
+        trino_core::mip::fill_rgba8_chain(&mut chain, width, height);
+        let levels: Vec<&[u8]> = (0..trino_core::mip::levels(width, height))
+            .map(|l| {
+                let at = trino_core::mip::rgba8_level_offset(width, height, l);
+                let (lw, lh) = trino_core::mip::level_size(width, height, l);
+                &chain[at..at + (lw * lh * 4) as usize]
+            })
+            .collect();
+        let alpha = SpriteAlpha::of_rgba(rgba);
+        self.install_sprite(id, (width, height), OFFSCREEN_FORMAT, &levels, alpha);
     }
 
     /// Does this renderer sample block-compressed sprites
@@ -4105,7 +4207,54 @@ impl PcRenderer {
             return false;
         }
         let alpha = alpha.unwrap_or_else(|| gpu_tnl::bc_alpha_class(format, blocks));
-        self.install_sprite(id, (width, height), format.wgpu(), blocks, row, alpha);
+        self.install_sprite(id, (width, height), format.wgpu(), &[blocks], alpha);
+        true
+    }
+
+    /// [`PcRenderer::upload_sprite_compressed`] with a mipmap chain
+    /// (Bongo-Kart #178): `levels[0]` is the texture, each next one half
+    /// its size, as [`trino_core::mip::levels`] counts them (a bake's
+    /// `TBCN` or KTX2 levels). A chain of another length, or a level of
+    /// the wrong size, uploads nothing and returns `false`.
+    pub fn upload_sprite_compressed_levels(
+        &mut self,
+        id: SpriteId,
+        width: u32,
+        height: u32,
+        format: CompressedFormat,
+        levels: &[&[u8]],
+        alpha: Option<SpriteAlpha>,
+    ) -> bool {
+        if levels.len() <= 1 {
+            return levels.first().is_some_and(|l0| {
+                self.upload_sprite_compressed(id, width, height, format, l0, alpha)
+            });
+        }
+        if !self.supports_compressed(format) || !self.sprite_size_ok(id, width, height) {
+            return false;
+        }
+        if !trino_core::mip::chainable(width, height)
+            || levels.len() as u32 != trino_core::mip::levels(width, height)
+        {
+            eprintln!(
+                "[trino] sprite {id:?}: {} levels are not the {width}x{height} chain",
+                levels.len()
+            );
+            return false;
+        }
+        for (l, data) in levels.iter().enumerate() {
+            let (lw, lh) = trino_core::mip::level_size(width, height, l as u32);
+            let want = u64::from(lw / 4 * format.block_bytes()) * u64::from(lh / 4);
+            if data.len() as u64 != want {
+                eprintln!(
+                    "[trino] sprite {id:?}: level {l} has {} bytes of blocks, not {want}",
+                    data.len()
+                );
+                return false;
+            }
+        }
+        let alpha = alpha.unwrap_or_else(|| gpu_tnl::bc_alpha_class(format, levels[0]));
+        self.install_sprite(id, (width, height), format.wgpu(), levels, alpha);
         true
     }
 
@@ -4138,23 +4287,20 @@ impl PcRenderer {
         m
     }
 
-    /// Create the texture, write `data` (rows of `row_bytes`: pixels, or
-    /// 4×4 blocks for a compressed format) and register its bind group
-    /// under `id`. `alpha`: what its alpha does.
+    /// Create the texture, write its levels (`levels[0]` the texture, each
+    /// next one a mip level half its size: pixels, or 4×4 blocks for a
+    /// compressed format) and register its bind group under `id`.
+    /// `alpha`: what its alpha does.
     fn install_sprite(
         &mut self,
         id: SpriteId,
         (width, height): (u32, u32),
         format: wgpu::TextureFormat,
-        data: &[u8],
-        row_bytes: u32,
+        levels: &[&[u8]],
         alpha: SpriteAlpha,
     ) {
-        let rows = if format == OFFSCREEN_FORMAT {
-            height
-        } else {
-            height / 4
-        };
+        let compressed = format != OFFSCREEN_FORMAT;
+        let level_count = levels.len().max(1) as u32;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("trino-sprite"),
             size: wgpu::Extent3d {
@@ -4162,33 +4308,52 @@ impl PcRenderer {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count: level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(row_bytes),
-                rows_per_image: Some(rows),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut bytes = 0u64;
+        for (l, data) in levels.iter().enumerate() {
+            let (lw, lh) = trino_core::mip::level_size(width, height, l as u32);
+            let (row_bytes, rows) = if compressed {
+                let block = format.block_copy_size(None).unwrap_or(16);
+                (lw / 4 * block, lh / 4)
+            } else {
+                (lw * 4, lh)
+            };
+            bytes += u64::from(row_bytes) * u64::from(rows);
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: l as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: Some(rows),
+                },
+                wgpu::Extent3d {
+                    width: lw,
+                    height: lh,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        // Level 0 alone for 2D draws and the console profiles; the whole
+        // chain for bilinear 3D draws where the target has mipmaps.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            ..Default::default()
+        });
+        let mip_view =
+            (level_count > 1).then(|| texture.create_view(&wgpu::TextureViewDescriptor::default()));
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trino-sprite-bg"),
             layout: &self.sprite_bgl,
@@ -4210,13 +4375,43 @@ impl PcRenderer {
             SpriteEntry {
                 bind_group,
                 view,
+                mip_view,
                 size: (width, height),
-                bytes: (row_bytes * rows) as u64,
-                compressed: format != OFFSCREEN_FORMAT,
+                bytes,
+                compressed,
                 alpha: alpha != SpriteAlpha::Opaque,
                 cutout: alpha == SpriteAlpha::Cutout,
             },
         );
+    }
+
+    /// Levels of a sprite's texture: 1, or its mipmap chain's length (0
+    /// when not loaded).
+    pub fn sprite_levels(&self, id: SpriteId) -> u32 {
+        self.sprites.get(&id.0).map_or(0, |e| {
+            if e.mip_view.is_some() {
+                trino_core::mip::levels(e.size.0, e.size.1)
+            } else {
+                1
+            }
+        })
+    }
+
+    /// Sample mipmap chains (default on; `TRINO_MIPS=0` starts off): the
+    /// A/B switch for evidence and measurements. Off, every draw samples
+    /// level 0 as before mipmaps existed.
+    pub fn set_mipmaps(&mut self, on: bool) {
+        if self.mipmaps_on != on {
+            self.mipmaps_on = on;
+            self.tex3d.clear();
+        }
+    }
+
+    /// Does a bilinear 3D draw sample a sprite's mipmap chain here: the
+    /// target has them ([`Caps::mipmaps`]: the native profile) and
+    /// [`PcRenderer::set_mipmaps`] left them on.
+    pub fn samples_mipmaps(&self) -> bool {
+        self.mipmaps_on && self.caps.mipmaps
     }
 
     /// Free a sprite's texture (its asset group unloaded, issue #56);
@@ -4595,6 +4790,7 @@ impl PcRenderer {
                     self.pending_surf.extend_from_slice(&chunk.surf[at..at + n]);
                 }
                 self.tag_pending(before, n, job.texture);
+                self.tag_add(before, n, job.params.blend);
                 self.frame_stats.tnl.add(&stats);
                 at += n;
             }
@@ -4614,17 +4810,25 @@ impl PcRenderer {
             &self.pending_tris,
             &self.pending_tex,
             &self.pending_surf,
+            &self.pending_add,
             |id| self.sprites.get(&id).is_some_and(|e| e.alpha),
         );
-        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>, bool)> = keys
+        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>, Mode)> = keys
             .iter()
             .map(|&(k, key)| {
                 let i = trino_core::render3d::painter_index(key);
+                let mode = if k >> 62 != 1 {
+                    Mode::Opaque
+                } else if self.pending_add.get(i).copied().unwrap_or(false) {
+                    Mode::Add
+                } else {
+                    Mode::Blend
+                };
                 (
                     self.pending_tex.get(i).copied().flatten(),
                     self.pending_tris[i],
                     self.pending_surf.get(i).copied().flatten(),
-                    k >> 62 == 1,
+                    mode,
                 )
             })
             .collect();
@@ -4667,12 +4871,13 @@ impl PcRenderer {
         self.push_gpu_runs(&ids, true);
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_add.clear();
         self.pending_surf.clear();
     }
 
     /// Append `order`'s triangles as GPU vertices and commands, a command
     /// per run of one texture and pipeline.
-    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>, bool)]) {
+    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>, Mode)]) {
         let rgba = |c: Color| {
             [
                 c.r as f32 / 255.0,
@@ -4681,12 +4886,14 @@ impl PcRenderer {
                 c.a as f32 / 255.0,
             ]
         };
-        let kind = |s: &Option<SurfTri>, blend: bool| match s {
-            None if blend => TriKind::PlainBlend,
-            None => TriKind::Plain,
-            Some(s) if s.water => TriKind::Water,
-            Some(_) if blend => TriKind::LitBlend,
-            Some(_) => TriKind::Lit,
+        let kind = |s: &Option<SurfTri>, mode: Mode| match (s, mode) {
+            (Some(s), _) if s.water => TriKind::Water,
+            (None, Mode::Opaque) => TriKind::Plain,
+            (None, Mode::Blend) => TriKind::PlainBlend,
+            (None, Mode::Add) => TriKind::PlainAdd,
+            (Some(_), Mode::Opaque) => TriKind::Lit,
+            (Some(_), Mode::Blend) => TriKind::LitBlend,
+            (Some(_), Mode::Add) => TriKind::LitAdd,
         };
         let mut run_start = self.tri_verts.len() as u32;
         let mut run = order.first().map(|(t, _, s, b)| (*t, kind(s, *b)));
@@ -5055,6 +5262,16 @@ impl PcRenderer {
         }
     }
 
+    /// Record whether the `added` triangles appended at `before` add
+    /// (`Blend::Add`; the list is only materialized once one does).
+    fn tag_add(&mut self, before: usize, added: usize, blend: trino_core::Blend) {
+        let add = blend == trino_core::Blend::Add;
+        if add || !self.pending_add.is_empty() {
+            self.pending_add.resize(before, false);
+            self.pending_add.extend(std::iter::repeat_n(add, added));
+        }
+    }
+
     /// Record the texture of the `added` triangles appended at `before`
     /// (the tag list is only materialized once a textured draw joins).
     fn tag_pending(&mut self, before: usize, added: usize, key: Option<TexKey>) {
@@ -5073,27 +5290,46 @@ impl PcRenderer {
             // The N64 look filters in the shader (3-point or point), from
             // nearest texels; elsewhere the sampler does.
             let linear = key.filter == TexFilter::Bilinear && !self.n64_look;
+            // A mipmap chain where the target samples one (Bongo-Kart
+            // #178): bilinear draws only, never the console profiles.
+            let mips = linear && self.mipmaps_on && self.caps.mipmaps;
+            fn view_of(e: &SpriteEntry, mips: bool) -> &wgpu::TextureView {
+                match (&e.mip_view, mips) {
+                    (Some(v), true) => v,
+                    _ => &e.view,
+                }
+            }
+            let chained = mips && entry.mip_view.is_some();
             let sampler = match (key.clamp, linear) {
                 (true, false) => &self.clamp_nearest,
+                (true, true) if chained => &self.clamp_linear_mip,
                 (true, true) => &self.clamp_linear,
                 (false, false) => &self.tex3d_nearest,
                 // The quality's anisotropy (#55) on wrapping bilinear
-                // textures.
-                (false, true) => self.tex3d_aniso.as_ref().unwrap_or(&self.tex3d_linear),
+                // textures (its sampler is trilinear already).
+                (false, true) => match &self.tex3d_aniso {
+                    Some(a) => a,
+                    None if chained => &self.tex3d_linear_mip,
+                    None => &self.tex3d_linear,
+                },
             };
-            let detail = key
-                .detail
-                .and_then(|d| self.sprites.get(&d.sprite.0))
-                .map_or(&self.white_view, |e| &e.view);
+            let detail_entry = key.detail.and_then(|d| self.sprites.get(&d.sprite.0));
+            let detail = detail_entry.map_or(&self.white_view, |e| view_of(e, mips));
             let dsampler = if linear {
-                self.tex3d_aniso.as_ref().unwrap_or(&self.tex3d_linear)
+                match &self.tex3d_aniso {
+                    Some(a) => a,
+                    None if mips && detail_entry.is_some_and(|e| e.mip_view.is_some()) => {
+                        &self.tex3d_linear_mip
+                    }
+                    None => &self.tex3d_linear,
+                }
             } else {
                 &self.tex3d_nearest
             };
             let bg = create_tex3d_bind_group(
                 &self.device,
                 &self.tex3d_bgl,
-                (&entry.view, sampler),
+                (view_of(entry, mips), sampler),
                 (detail, dsampler),
             );
             self.tex3d.insert(key, bg);
@@ -5318,7 +5554,10 @@ impl PcRenderer {
         };
         if segments.iter().any(|s| match s {
             Segment::Tris { kind, .. } => {
-                matches!(kind, TriKind::Lit | TriKind::LitBlend | TriKind::Water)
+                matches!(
+                    kind,
+                    TriKind::Lit | TriKind::LitBlend | TriKind::LitAdd | TriKind::Water
+                )
             }
             Segment::Meshes { first, count, .. } => gpu_lit(*first, *count),
             Segment::Sprites { .. } => false,
@@ -5645,6 +5884,7 @@ impl PcRenderer {
             let bloom_cap = self.bloom_cap();
             let speed = self.frame_speed_blur(bloom_only);
             let lut = settings.grading.and_then(|id| self.luts.get(&id));
+            let lut_b = settings.grading_to.and_then(|id| self.luts.get(&id));
             let pass = self
                 .post_pass
                 .get_or_insert_with(|| post::PostPass::new(&self.device, self.hdr_ok));
@@ -5660,6 +5900,7 @@ impl PcRenderer {
                         bloom_only,
                         bloom_cap,
                         lut,
+                        lut_b,
                         sharpen: self.quality.sharpen,
                         seed: self.post_seed,
                         speed,
@@ -5905,6 +6146,9 @@ impl PcRenderer {
                 &self.blend_pipelines[0],
                 &self.blend_pipelines[1],
                 &self.blend_pipelines[2],
+                &self.add_pipelines[0],
+                &self.add_pipelines[1],
+                &self.add_pipelines[2],
             ],
         };
         let mut draws = 0;
@@ -5995,6 +6239,12 @@ impl PcRenderer {
                             pass.set_bind_group(2, &self.lights_bg, &[]);
                             (pipes[6], 11)
                         }
+                        TriKind::LitAdd => {
+                            pass.set_bind_group(2, &self.lights_bg, &[]);
+                            (pipes[9], 14)
+                        }
+                        TriKind::PlainAdd if texture.is_some_and(|t| t.clamp) => (pipes[8], 13),
+                        TriKind::PlainAdd => (pipes[7], 12),
                         TriKind::Plain if texture.is_some_and(|t| t.clamp) => (pipes[2], 2),
                         TriKind::Plain => (pipes[1], 1),
                         TriKind::PlainBlend if texture.is_some_and(|t| t.clamp) => (pipes[5], 10),
@@ -6421,6 +6671,7 @@ impl Renderer for PcRenderer {
         self.tri_verts.clear();
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_add.clear();
         self.pending_surf.clear();
         self.locals = LightList::EMPTY;
         self.poses.clear();
@@ -7134,6 +7385,7 @@ impl Renderer for PcRenderer {
         }
         let added = self.pending_tris.len() - before;
         self.tag_pending(before, added, texkey);
+        self.tag_add(before, added, params.blend);
     }
 
     fn draw_mesh(&mut self, mesh: &DynamicMesh<'_>, matrix: &Mat34, params: &ModelParams) {
@@ -8136,7 +8388,7 @@ mod batch_order_tests {
             tex(5, true),
             tex(7, false),
         ];
-        let keys = batch_keys(&tris, &texs, &[], |id| id == 5);
+        let keys = batch_keys(&tris, &texs, &[], &[], |id| id == 5);
         let order: Vec<usize> = keys
             .iter()
             .map(|&(_, k)| trino_core::render3d::painter_index(k))

@@ -26,6 +26,9 @@ editor (and a running `TRINO_SCENE` player) reloads them live. Formats are docum
         clear: (132, 178, 226),
         camera: (eye: (9.0, 7.0, -13.0), target: (0.0, 1.0, 0.0), fov: 55.0),
         light: (dir: (0.45, -0.75, 0.48), color: (255, 244, 225), ambient: 0.42, ambient_color: (190, 210, 255)),
+        // Optional (Bongo-Kart #181): a two-color ambient (ambient_color is then the sky's)
+        // and a rim light. `ground_color` is bare: `(40, 30, 20)`, not `Some(...)`.
+        // light: (.., ground_color: (60, 45, 30), rim: 0.5, rim_color: (200, 220, 255)),
         fog: Some((color: (132, 178, 226), near: 16.0, far: 42.0)),
         // Screen-space AO on the PC (consoles: bake `ao` into the models, add-asset).
         // Every field defaults: `ao: Some(())` works; `enabled: false` keeps the tuning.
@@ -207,6 +210,12 @@ See `scenes/interior.scene.ron` for a working portal example.
   Some("luts/dusk"), vignette: 0.2, grain: 0.0))` — every field defaults; `Some(())` is
   the neutral stack. An `Option` field: `Some((...))`, never a bare `(...)` ("Expected
   option" at parse). Codegen writes `POST`; TSCN carries none.
+- Two looks mixed (Bongo-Kart #181, PC and Web): `grading_to: Some("luts/night"),
+  grading_mix: 0.4` beside `grading` (0 = `grading` alone). A game animates
+  `PostSettings::grading_mix` for a time of day; the consoles' bake grades by `grading`.
+- The light's `ground_color` and `rim` take every lit draw on the N64 and the 3DS off the
+  RSP/PICA200 (CPU T&L), and the rim lights a floor seen at a grazing angle too: in a
+  game, set a rimmed light for the characters and the plain one for the level.
 - An entity's `glow: Some((radius: 0.5, color: (255, 220, 160, 200)))` draws a halo of
   `sprites/glow` where the target has no bloom (`mode: Always` for every target);
   codegen and TSCN v6 carry it, `draw_nodes` and `EntityStore::draw` draw it.

@@ -45,6 +45,10 @@ pub enum PcGpuReject {
     /// Wholly outside the guard band or behind the near plane: the CPU
     /// path culls it (invisible work).
     Offscreen,
+    /// An additive draw ([`Blend::Add`](crate::Blend::Add)): the CPU path
+    /// sorts its triangles among the batch's blended ones (effects are
+    /// small; ADR 0043 §2).
+    Additive,
     // Reported by the renderer, never by [`pc_gpu_check`] (it knows the
     // textures and its own settings). A draw shaded per pixel (a local
     // light, gloss, wetness) is no reason: the GPU path has lit pipelines.
@@ -67,12 +71,13 @@ impl PcGpuReject {
         PcGpuReject::Empty,
         PcGpuReject::FlatSkinned,
         PcGpuReject::Offscreen,
+        PcGpuReject::Additive,
         PcGpuReject::TextureAlpha,
         PcGpuReject::Disabled,
     ];
 
     /// Reasons in all ([`PcGpuReject::ALL`]'s length).
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 
     /// The reason's slot in a per-reason histogram (`[u32; COUNT]`).
     pub const fn index(self) -> usize {
@@ -85,6 +90,7 @@ impl PcGpuReject {
             PcGpuReject::Empty => "empty mesh",
             PcGpuReject::FlatSkinned => "flat-shaded skeleton",
             PcGpuReject::Offscreen => "off screen",
+            PcGpuReject::Additive => "additive blend",
             PcGpuReject::TextureAlpha => "texture alpha",
             PcGpuReject::Disabled => "GPU T&L off",
         }
@@ -96,6 +102,7 @@ impl PcGpuReject {
             PcGpuReject::Empty => "empty",
             PcGpuReject::FlatSkinned => "flat_skinned",
             PcGpuReject::Offscreen => "offscreen",
+            PcGpuReject::Additive => "additive",
             PcGpuReject::TextureAlpha => "texture_alpha",
             PcGpuReject::Disabled => "disabled",
         }
@@ -135,6 +142,9 @@ pub fn pc_gpu_check(
     // the same, so both paths draw (and count) the same set of meshes.
     if pc_offscreen(ctx, mesh, model) {
         return Err(PcGpuReject::Offscreen);
+    }
+    if params.blend == crate::render::Blend::Add && params.water.is_none() {
+        return Err(PcGpuReject::Additive);
     }
     Ok(())
 }

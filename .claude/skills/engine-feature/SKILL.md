@@ -321,6 +321,13 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   bytes, compare counts. A step that only calls the API and prints proves nothing.
   Then break the feature on purpose (one line in the PC backend) and make sure the
   step fails. The first `dual screen` probes passed with a wrong projection.
+- **A step that probes pixels draws through `selftest::probe_frames`** (a `ProbeScene`,
+  `ProbeDraw`s with prebuilt `ModelParams`, the probes): one size-optimized copy of the
+  draw-three-frames-then-read loop. A closure per step inlined it at each call and the
+  three Bongo-Kart steps (`additive`, `light terms`, `lut mix`) cost 12 KB of N64 text,
+  which the base console's heap paid: `memory allocation of 10168 bytes failed` at the
+  micro scenes (2026-11-23). Measure a new step with `mips64-elf-nm -S --size-sort -C
+  target/n64/trino.elf | grep selftest`.
 - A step that probes pixels must still run its logic where `read_screen_pixel` is
   `None` (the browsers): return `Ok(false)` ("probe skipped") after the non-pixel checks
   instead of skipping the whole step (`ui_layout` taps the touch screen either way).
@@ -329,6 +336,12 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   with `--test-threads=1`, as the editor UI tests do, or don't touch global state.
 - Tests that spawn `cargo` should reuse this workspace's `target/`
   (`CARGO_TARGET_DIR`), or they rebuild the world.
+- **A new light or surface term on the PC's GPU T&L gets an oracle test on a subdivided
+  mesh** (`tnl_oracle::compare`, Bongo-Kart #181's rim light). A per-vertex color that
+  changes across one big triangle crossing the guard band differs between the two paths
+  by design (clipped polygon vs whole triangle): a 9 m two-triangle floor read 11/255 off
+  and 1 % of pixels, a 18×18 grid matched at 0.000/255. Derive a pixel probe's expected
+  value from the geometry (the normal the camera sees there), never from "half".
 
 ### Tuning a deterministic game sim (Solid Eleven, issue #86)
 

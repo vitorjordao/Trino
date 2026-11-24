@@ -99,6 +99,13 @@ struct MeshCtx {
     fog_color: [f32; 4],
     fog_range: [f32; 4],
     view_up: [f32; 4],
+    /// The two-color ambient's ground (the sky's color without one); w: 1
+    /// when the light has a ground or a rim (`Light::has_terms`).
+    ground: [f32; 4],
+    /// The rim's color × strength; w: 1 when it is on.
+    rim: [f32; 4],
+    /// The camera's world position (the rim's view direction).
+    eye: [f32; 4],
 }
 
 /// Joint matrices of one draw: 32 joints × 3 rows (`Joints`).
@@ -256,6 +263,19 @@ fn mesh_ctx(ctx: &TnlContext) -> MeshCtx {
         ],
         fog_range: [fog.near, fog.far, 0.0, 0.0],
         view_up: [view.m[0][1], view.m[1][1], view.m[2][1], 0.0],
+        ground: {
+            let g = light.ground.map_or(ac, f);
+            [g[0], g[1], g[2], light.has_terms() as u32 as f32]
+        },
+        rim: {
+            let (r, k) = (f(light.rim.color), light.rim.strength);
+            let on = light.has_terms() && k > 0.0;
+            [r[0] * k, r[1] * k, r[2] * k, on as u32 as f32]
+        },
+        eye: {
+            let e = ctx.camera().eye;
+            [e.x, e.y, e.z, 0.0]
+        },
     }
 }
 
@@ -1345,7 +1365,8 @@ mod tests {
         assert_eq!(MESH_VERTEX_STRIDE, 56);
         // InstIn: two 3x4 matrices and two uvec4.
         assert_eq!(INSTANCE_STRIDE, 128);
-        assert_eq!(core::mem::size_of::<MeshCtx>(), 112);
+        // Ten vec4f: #181 added the ground, the rim and the eye.
+        assert_eq!(core::mem::size_of::<MeshCtx>(), 160);
         assert_eq!(core::mem::size_of::<JointBlock>(), 1536);
         assert_eq!(identity_block()[..3], Mat34::IDENTITY.m);
     }

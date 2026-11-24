@@ -41,6 +41,7 @@ pub mod math;
 pub mod math3d;
 pub mod mem;
 pub mod memo;
+pub mod mip;
 pub mod netpad;
 pub mod options;
 pub mod pad;
@@ -125,13 +126,13 @@ pub use quality::{
     QualitySettings, QualitySource, ShadowSetting,
 };
 pub use render::{
-    AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Instance,
-    Material, MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading, SpriteId,
-    SpriteParams, TexFilter, TextAlign, TextParams, Transform3,
+    AnimBlend, AnimRef, BillboardParams, Blend, ClipId, DetailTexture, FontId, FrameStats,
+    Instance, Material, MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading,
+    SpriteId, SpriteParams, TexFilter, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
-    PcGpuReject, RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch,
+    PcGpuReject, Rim, RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch,
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use replay::{Recorder, Replay, ReplayError, StateHasher};

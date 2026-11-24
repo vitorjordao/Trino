@@ -328,6 +328,44 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — two-color ambient, rim light and a mix of two LUTs (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #181, ADR 0043 §3)
+
+| Item | Evidence |
+|---|---|
+| `Light::ground: Option<Color>` and `Light::rim: Rim { color, strength }` (defaults off: every golden unchanged), `Light::has_terms`, `Light::DEFAULT` | `core/tests/light_terms.rs` (4 tests) |
+| CPU T&L: the lit copy's `Terms::light` (sky to ground by `n.y`, `(1 − n·v)²` rim; `tessellate_joints` untouched); PC/Web GPU T&L: `MeshCtx::{ground, rim, eye}` in `mesh_vertex`; the RSP and the PICA200 leave lit draws under them to the CPU (`RspReject::LightTerms`, `GpuReject::LightTerms`) | `platform-pc/tests/light_terms.rs` (3 tests: the oracle at mean 0.000/255, the old light from a ground of the sky's color, top > middle > bottom and a rim on the silhouette on the native profile's two paths and the console profiles), evidence `target/evidence/light-terms/` |
+| Scenes' `ground_color` (bare), `rim`, `rim_color`; codegen; the editor's Light › Ground and Rim | `the_lights_ground_and_rim_round_trip_and_map_onto_the_core`, `scene_codegen` (`showcase_gen` regenerated) |
+| `PostSettings::{grading_to, grading_mix}`, the composite's second LUT (binding 6, uniform 104 bytes), `post::grade_mix`; scenes' `post`, codegen, the editor's "Mix to"/"Mix" | `two_luts_mix_by_the_weight`, `two_luts_mix_like_the_cpu_reference` (4 weights × 8 swatches against `grade_mix`; weight 0 and a missing LUT byte for byte), `codegen_and_tscn_carry_post_and_glows`, the editor's post UI test |
+| castle64's `light terms` and `lut mix` self-test steps | `engine_checks` (3 profiles; `light terms` on both T&L paths); ares (both tiers), Azahar, browsers |
+
+Not done: the terms on the RSP overlays and the PICA200's shader (lit draws under them run
+the CPU T&L on the consoles); neither is in TSCN. On the N64 a light change per group of
+draws (a rim for the characters only) defeats the draw memo.
+
+## Done — additive blending (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #179 blend half, ADR 0043 §2)
+
+| Item | Evidence |
+|---|---|
+| `ModelParams::blend: Blend::{Alpha, Add}` (default `Alpha`), materials' `blend: Add` (`BlendDef`, the editor's material inspector), TSCN's reserved surface byte, scene codegen | `core/tests/blend.rs`, `baked_scene_reads_every_field`, `an_additive_material_bakes_its_blend`, `blend_round_trips_and_defaults_to_alpha`, the material widget test; `showcase_gen` regenerated (`blend: Blend::Alpha` everywhere) |
+| Hardware T&L paths reject it (`RspReject::Translucent`, `GpuReject::Translucent`, new `PcGpuReject::Additive`), the N64 memo skips it | `core/tests/blend.rs` |
+| PC/Web: additive triangles sort among the blended ones, three new scene pipelines (`SrcAlpha, One`; `fs_tri_add` keeps the full alpha in the N64 look); N64: a bucket with `RDPQ_BLENDER_ADDITIVE` (`trino_3d_additive`); 3DS: a bucket with `GPU_BLEND_ADD` (material bit 14) | `platform-pc/tests/additive.rs` (5 tests: adds vs covers, any depth order, no depth write, GPU path = CPU path, console profiles), evidence `target/evidence/additive/sparks_{alpha,add,add_n64,add_3ds}.png` |
+| castle64's `additive` self-test step | `engine_checks` (3 profiles × both T&L paths); ares, Azahar, browsers |
+
+Not done: additive billboards and particles (`draw_billboard`, `Emitter`); the N64 sum
+wraps past white (the RDP doesn't saturate), documented on `Blend::Add`.
+
+## Done — mipmap chains on the PC and the Web (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #178, ADR 0043 §1)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::mip` (linear-light, alpha-weighted 2×2 chain down to 4 texels), `Caps::mipmaps` (PC, Web on; consoles off) | 4 unit tests (a checker averages to sRGB 188, transparent texels don't tint, flat colors stay, chain sizes) |
+| `mipmaps = true` on a sprite: `TSPM` master, BC chain in `<id>.bc`, KTX2 levels (Basis user mipmaps, `basis_to_ktx2` per level), the loader's `LoadedSprite::{mipmaps, compressed_levels}`; power-of-two sizes only | `asset-pipeline/tests/mipmaps.rs` (3 tests), the KTX2 chain test; the consoles' bakes unchanged |
+| `PcRenderer::{upload_sprite_mipmapped, upload_sprite_compressed_levels, set_mipmaps, samples_mipmaps, sprite_levels}`, trilinear samplers, level-0 views for 2D and console profiles; the PC runner, the editor and the Web (pack, groups, `glue.js` per-level transcode) upload chains; `TRINO_MIPS=0` | `platform-pc/tests/mipmaps.rs` (5 tests): far-floor moiré 51.1 → 0.5 and its light 127 → 187; per preset Low 22.6 → 0.0, Medium 23.5 → 11.4, High 18.3 → 13.8, Ultra 12.9 → 12.8; console profiles and 2D byte for byte; BC chain within 2/255 |
+| castle64's `mipmaps` self-test step | `engine_checks` (both T&L paths; fails with the chain off; console profiles report level 0) |
+
+Not done: chains on the consoles (no TMEM for them on the N64; the 3DS could take them in
+`tex3ds` later); auto-mipmaps for every 3D texture (opt-in keeps memory and goldens).
+
 ## Done — radial speed blur in the post stack (2026-11-21, branch `feat/post-speed-blur`, ADR 0033 §7)
 
 | Item | Evidence |

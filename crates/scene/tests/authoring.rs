@@ -171,6 +171,7 @@ fn transforms_and_environment_map_onto_the_core_types() {
     let plain = Scene::new("plain").environment.core_light();
     assert!(!plain.fog.enabled());
     assert_eq!(plain.dir, trino_core::DEFAULT_LIGHT.dir);
+    assert!(!plain.has_terms(), "no ground, no rim by default");
 
     assert_eq!(
         SpriteComponent::new("sprites/a").sprite_id(),
@@ -180,6 +181,35 @@ fn transforms_and_environment_map_onto_the_core_types() {
         ModelComponent::new("models/a").model_id(),
         trino_core::ModelId::from_path("models/a")
     );
+}
+
+/// A two-color ambient and a rim light (Bongo-Kart #181): written bare
+/// (`ground_color: (40, 30, 20)`), left out of the file when unset, and
+/// mapped onto `Light::ground` / `Light::rim`.
+#[test]
+fn the_lights_ground_and_rim_round_trip_and_map_onto_the_core() {
+    let mut scene = Scene::new("terms");
+    let text = scene.to_ron();
+    assert!(
+        !text.contains("ground_color") && !text.contains("rim"),
+        "unset terms stay out of the file: {text}"
+    );
+    scene.environment.light.ground_color = Some([40, 30, 20]);
+    scene.environment.light.rim = 0.6;
+    scene.environment.light.rim_color = [200, 220, 255];
+    let text = scene.to_ron();
+    assert!(text.contains("ground_color: (40, 30, 20)"), "{text}");
+    let back = Scene::from_ron(&text).unwrap();
+    assert_eq!(back.environment.light, scene.environment.light);
+    let light = back.environment.core_light();
+    assert_eq!(light.ground, Some(Color::rgb(40, 30, 20)));
+    assert_eq!(light.rim.color, Color::rgb(200, 220, 255));
+    assert_eq!(light.rim.strength, 0.6);
+    assert!(light.has_terms());
+    // Hand-written, bare, beside the old fields.
+    let hand = text.replace("ground_color: (40, 30, 20)", "ground_color: (1, 2, 3)");
+    let hand = Scene::from_ron(&hand).unwrap();
+    assert_eq!(hand.environment.light.ground_color, Some([1, 2, 3]));
 }
 
 #[test]

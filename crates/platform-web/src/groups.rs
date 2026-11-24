@@ -338,10 +338,7 @@ fn hold(
                 Some(k) => {
                     crate::assets::upload_ktx2(renderer, SpriteId(id), k, target)?;
                 }
-                None => {
-                    let (w, h, px) = crate::pack::read_sprite(&asset.bytes)?;
-                    renderer.upload_sprite(SpriteId(id), w, h, px);
-                }
+                None => crate::assets::upload_tspr(renderer, SpriteId(id), &asset.bytes)?,
             }
             renderer.sprite_bytes(SpriteId(id)) as u32
         }

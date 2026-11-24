@@ -197,7 +197,8 @@ pub fn to_tscn_for(scene: &Scene, lib: &Library, target: Target) -> (Vec<u8>, Ve
             trino_core::TexFilter::Point => 1,
             trino_core::TexFilter::Bilinear => 2,
         };
-        out.extend_from_slice(&[p.gloss, filter, p.detail.map_or(0, |d| d.scale_log2), 0]);
+        let blend = (p.blend == trino_core::Blend::Add) as u8;
+        out.extend_from_slice(&[p.gloss, filter, p.detail.map_or(0, |d| d.scale_log2), blend]);
         out.extend_from_slice(&p.detail.map_or(0, |d| d.sprite.0).to_le_bytes());
         let w = p.water.unwrap_or(trino_core::Water::DEFAULT);
         for v in [
@@ -381,6 +382,33 @@ mod tests {
         // The editor-side resolve agrees.
         let item = &crate::resolve(&scene, &Library::default(), 0.0).items[0];
         assert_eq!(item.model_from(eye(20.0)), Some(id("models/tree-far")));
+    }
+
+    #[test]
+    fn an_additive_material_bakes_its_blend() {
+        let mut lib = Library::default();
+        lib.materials.insert(
+            "materials/spark".into(),
+            crate::MaterialDef {
+                blend: crate::BlendDef::Add,
+                ..crate::MaterialDef::default()
+            },
+        );
+        let mut scene = Scene::new("t");
+        scene
+            .entities
+            .push(Entity::new("spark").with_model(ModelComponent {
+                material: Some("materials/spark".into()),
+                ..ModelComponent::new("models/spark")
+            }));
+        scene
+            .entities
+            .push(Entity::new("rock").with_model(ModelComponent::new("models/rock")));
+        let (blob, _) = to_tscn(&scene, &lib);
+        let baked = BakedScene::parse(Box::leak(blob.into_boxed_slice())).unwrap();
+        let blend = |n: &str| baked.find(n).unwrap().params.blend;
+        assert_eq!(blend("spark"), trino_core::Blend::Add);
+        assert_eq!(blend("rock"), trino_core::Blend::Alpha);
     }
 
     #[test]

@@ -177,6 +177,31 @@ palette losslessly after RGBA5551 truncation.
   takes its color or its coverage, whichever previews closer. (i, i, i, i) still
   attenuates a white mask twice (about 20 dB): the engine has no IA format.
 
+### Mipmaps on the PC and the Web (ADR 0043 §1)
+
+`mipmaps = true` on a `[sprites.*]` entry gives the texture a mipmap chain: the halved
+copies a GPU samples where the texture covers fewer pixels than it has texels. Use it on
+textures that tile a floor, a sea or a wall seen from far: without it they shimmer in
+moiré rings at grazing angles.
+
+```toml
+[sprites.water]
+file = "sprites/water.png"   # both sides powers of two (else the bake fails)
+mipmaps = true               # +33 % of its memory on the PC and the Web
+```
+
+- **One generator** (`trino_core::mip`): each level is the 2×2 mean of the one above in
+  linear light, weighted by alpha, down to 4 texels on the smaller side. A one-texel
+  black and white checker settles to sRGB 188 (half the light), not 128.
+- **PC:** the BC file carries every level (`<id>.bc` level after level); without BC, or
+  with `TRINO_BC=0`, the chain is made at upload from the pixels. **Web:** the KTX2 file
+  carries every level (Basis user mipmaps); the browser transcodes each one.
+- **Who samples it:** bilinear 3D draws on the PC's native profile and the Web
+  (`Caps::mipmaps`). 2D draws, `Point` draws and the PC's console profiles sample level
+  0, so the HUD and the console looks don't change. The consoles bake one level.
+- **A/B:** `TRINO_MIPS=0` (or `PcRenderer::set_mipmaps(false)`) samples level 0
+  everywhere.
+
 ### Checking textures
 
 - `cargo xtask texture inspect sprites/x [--platform 3ds|web] [--json]`: per platform the

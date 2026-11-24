@@ -47,7 +47,7 @@ pub mod steam;
 pub mod ui;
 
 pub use library::{Library, ModelBounds};
-pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};
+pub use material::{BlendDef, DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};
 pub use platform::{PlatformVariants, Target, Variant};
 pub use prefab::{Override, Prefab, PrefabInstance};
 pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};
@@ -167,6 +167,13 @@ pub struct PostDef {
     /// tonemap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grading: Option<String>,
+    /// A second LUT the grading mixes toward by `grading_mix` (Bongo-Kart
+    /// #181; PC and Web: the consoles' bake grades by `grading`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading_to: Option<String>,
+    /// 0..=1: the weight of `grading_to`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub grading_mix: f32,
     /// Darkens the corners, 0..=1.
     #[serde(default)]
     pub vignette: f32,
@@ -183,6 +190,8 @@ impl Default for PostDef {
             tonemap: TonemapDef::None,
             bloom: None,
             grading: None,
+            grading_to: None,
+            grading_mix: 0.0,
             vignette: 0.0,
             grain: 0.0,
         }
@@ -197,6 +206,8 @@ impl PostDef {
             tonemap: self.tonemap.core(),
             bloom: self.bloom.map(|b| b.core()),
             grading: self.grading.as_deref().map(trino_core::LutId::of),
+            grading_to: self.grading_to.as_deref().map(trino_core::LutId::of),
+            grading_mix: self.grading_mix,
             vignette: self.vignette,
             grain: self.grain,
         }
@@ -437,6 +448,29 @@ pub struct LightDef {
     pub color: [u8; 3],
     pub ambient: f32,
     pub ambient_color: [u8; 3],
+    /// The ground's ambient color (a two-color ambient, Bongo-Kart #181):
+    /// `ambient_color` is then the sky's. Written bare: `ground_color: (40,
+    /// 30, 20)`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::anim::bare",
+        serialize_with = "crate::anim::bare_ser"
+    )]
+    pub ground_color: Option<[u8; 3]>,
+    /// The rim light's strength (0 = off) and color.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rim: f32,
+    #[serde(default = "rgb_white", skip_serializing_if = "is_rgb_white")]
+    pub rim_color: [u8; 3],
+}
+
+fn rgb_white() -> [u8; 3] {
+    [255, 255, 255]
+}
+
+fn is_rgb_white(c: &[u8; 3]) -> bool {
+    *c == [255, 255, 255]
 }
 
 impl Default for LightDef {
@@ -447,6 +481,9 @@ impl Default for LightDef {
             color: [255, 255, 255],
             ambient: d.ambient,
             ambient_color: [255, 255, 255],
+            ground_color: None,
+            rim: 0.0,
+            rim_color: [255, 255, 255],
         }
     }
 }
@@ -745,6 +782,8 @@ impl Environment {
         e.clear = g(e.clear);
         e.light.color = g(e.light.color);
         e.light.ambient_color = g(e.light.ambient_color);
+        e.light.ground_color = e.light.ground_color.map(g);
+        e.light.rim_color = g(e.light.rim_color);
         if let Some(f) = &mut e.fog {
             f.color = g(f.color);
         }
@@ -775,6 +814,11 @@ impl Environment {
                     far: f.far,
                 },
                 None => trino_core::Fog::NONE,
+            },
+            ground: l.ground_color.map(rgb),
+            rim: trino_core::Rim {
+                color: rgb(l.rim_color),
+                strength: l.rim,
             },
         }
     }

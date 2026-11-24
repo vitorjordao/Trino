@@ -130,6 +130,11 @@ unsafe extern "C" {
     /// detail is on (both fit TMEM and neither is a palette).
     pub fn trino_3d_water(sprite: *mut c_void, detail: *mut c_void, flags: u32, scroll: u32)
     -> u32;
+    /// Additive triangles (`Blend::Add`, ADR 0043 §2): `1` = the RDP's
+    /// additive blender over the mode just bound (`trino_3d_begin` or
+    /// `trino_3d_texture_ex`), z-tested, not written; `0` = done, the next
+    /// draw binds its own mode again.
+    pub fn trino_3d_additive(on: u32);
     /// Bind the shadow mode (ADR 0025): the shade's color blended by its
     /// alpha, z-tested, not written. `texels`: the blob's `size`² I8
     /// falloff (uncached, alive while frames draw it) for `trino_tri_tex`;

@@ -75,6 +75,58 @@ impl BcFormat {
         (width as u64 / 4) * (height as u64 / 4) * self.block_bytes() as u64
     }
 
+    /// Bytes of a `width`×`height` mipmap chain's blocks, every level
+    /// (`trino_core::mip::levels`; one level when it can't carry a chain).
+    pub fn chain_bytes(self, width: u32, height: u32) -> u64 {
+        (0..trino_core::mip::levels(width, height))
+            .map(|l| {
+                let (lw, lh) = trino_core::mip::level_size(width, height, l);
+                self.texture_bytes(lw, lh)
+            })
+            .sum()
+    }
+
+    /// Encode `rgba` and its mipmap chain (Bongo-Kart #178): the chain
+    /// `trino_core::mip` makes, each level's blocks after the one before.
+    /// One level when the size can't carry a chain.
+    pub fn encode_chain(self, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        if !trino_core::mip::chainable(width, height) {
+            return self.encode(width, height, rgba);
+        }
+        let mut chain = vec![0u8; trino_core::mip::rgba8_chain_bytes(width, height)];
+        chain[..rgba.len()].copy_from_slice(rgba);
+        trino_core::mip::fill_rgba8_chain(&mut chain, width, height);
+        let mut out = Vec::with_capacity(self.chain_bytes(width, height) as usize);
+        for l in 0..trino_core::mip::levels(width, height) {
+            let (lw, lh) = trino_core::mip::level_size(width, height, l);
+            let at = trino_core::mip::rgba8_level_offset(width, height, l);
+            out.extend_from_slice(&self.encode(lw, lh, &chain[at..at + (lw * lh * 4) as usize]));
+        }
+        out
+    }
+
+    /// Split a chain's blocks ([`BcFormat::encode_chain`]) into its levels;
+    /// `None` when `data` is not one level or the whole chain.
+    pub fn levels(self, width: u32, height: u32, data: &[u8]) -> Option<Vec<&[u8]>> {
+        if data.len() as u64 == self.texture_bytes(width, height) {
+            return Some(vec![data]);
+        }
+        if !trino_core::mip::chainable(width, height)
+            || data.len() as u64 != self.chain_bytes(width, height)
+        {
+            return None;
+        }
+        let mut rest = data;
+        let mut out = Vec::new();
+        for l in 0..trino_core::mip::levels(width, height) {
+            let (lw, lh) = trino_core::mip::level_size(width, height, l);
+            let (level, tail) = rest.split_at(self.texture_bytes(lw, lh) as usize);
+            out.push(level);
+            rest = tail;
+        }
+        Some(out)
+    }
+
     /// Encode row-major RGBA8 (`width`, `height` multiples of 4).
     pub fn encode(self, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         assert!(

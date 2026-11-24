@@ -235,8 +235,9 @@ fn fs_tri_clamp(in: TriOut) -> @location(0) vec4<f32> {
     return c;
 }
 
-@fragment
-fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
+// A triangle's color before the N64 look stores it: the texel (the RDP's
+// 3-point sample in that look) times the vertex color and the detail layer.
+fn tri_color(in: TriOut) -> vec4<f32> {
     // Sampled unconditionally: textureSample requires uniform control flow.
     let detail = detail_texel(in.uv, in.tex);
     let plain = textureSample(t_sprite, s_sprite, in.uv) * in.color * detail;
@@ -246,10 +247,43 @@ fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
         if in.tex.y > 0.0 {
             d = vec4<f32>(sample_n64(t_detail, in.uv * in.tex.y, point).rgb, 1.0);
         }
-        let c = sample_n64(t_sprite, in.uv, point) * in.color * d;
-        return quantize_5551(c, vec2<u32>(in.clip.xy));
+        return sample_n64(t_sprite, in.uv, point) * in.color * d;
     }
     return plain;
+}
+
+@fragment
+fn fs_tri(in: TriOut) -> @location(0) vec4<f32> {
+    let c = tri_color(in);
+    if globals.look == 1u {
+        return quantize_5551(c, vec2<u32>(in.clip.xy));
+    }
+    return c;
+}
+
+// Additive triangles (`Blend::Add`, ADR 0043 §2; the pipeline adds
+// `src·a`). The N64 look keeps the full alpha, as the RDP's additive
+// blender weighs by the combiner's alpha (like `fs_shadow`); no cutout, so
+// a soft spark stays soft.
+@fragment
+fn fs_tri_add(in: TriOut) -> @location(0) vec4<f32> {
+    let c = tri_color(in);
+    if globals.look == 1u {
+        let q = quantize_5551(c, vec2<u32>(in.clip.xy));
+        return vec4<f32>(q.rgb, c.a);
+    }
+    return c;
+}
+
+@fragment
+fn fs_tri_clamp_add(in: TriOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(t_sprite, s_sprite, in.uv);
+    if globals.look == 1u {
+        let c = sample_3point(in.uv) * in.color;
+        let q = quantize_5551(c, vec2<u32>(in.clip.xy));
+        return vec4<f32>(q.rgb, c.a);
+    }
+    return texel * in.color;
 }
 
 // Blob and planar shadows, blended (shadow.rs): the shadow color times the

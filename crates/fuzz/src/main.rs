@@ -418,7 +418,7 @@ fn corpus(args: &[&str], json: bool) -> ExitCode {
             continue;
         };
         let kind = match bytes.get(..4) {
-            Some(b"TSPR") => 0u8,
+            Some(b"TSPR" | b"TSPM") => 0u8,
             Some(b"TSN2") => 1,
             Some(b"TMIX") => 3,
             Some(b"TMDL") => 4,

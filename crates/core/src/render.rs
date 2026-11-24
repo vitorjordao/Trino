@@ -360,6 +360,38 @@ pub struct ModelParams {
     /// ([`Renderer::set_shadows`], [`crate::shadow`]): a blob, its shape,
     /// or the tier's pick. Doesn't change the draw itself.
     pub shadow: crate::shadow::ShadowCast,
+    /// How the draw's color meets what is behind it: [`Blend::Alpha`] (the
+    /// default: opaque, or blended by the tint's and the vertices' alpha)
+    /// or [`Blend::Add`] (light added: sparks, flames, glows, lasers).
+    /// Ignored by water surfaces, which blend their own way.
+    pub blend: Blend,
+}
+
+/// How a 3D draw's color combines with the frame ([`ModelParams::blend`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Blend {
+    /// Opaque where the tint and the vertices are; blended by their alpha
+    /// where they aren't (`src·a + dst·(1 − a)`).
+    #[default]
+    Alpha,
+    /// Added to the frame, weighted by alpha: `dst + src·a` (Bongo-Kart
+    /// #179, ADR 0043 §2). Black adds nothing, so a spark's sprite needs no
+    /// alpha. Depth tested, never written; drawn after the batch's opaque
+    /// triangles, back to front with its blended ones. Every target:
+    ///
+    /// - PC and Web: a blend pipeline (`One` on the destination); with the
+    ///   post stack's HDR target a sum past white keeps its light, and
+    ///   bloom picks it up.
+    /// - 3DS: `GPU_BLEND_ADD` with `GPU_ONE` on the destination (saturates).
+    /// - N64: the RDP's additive blender (`RDPQ_BLENDER_ADDITIVE`). The RDP
+    ///   doesn't saturate: a sum past white wraps toward black. Keep
+    ///   additive colors dim (half intensity or less) where they overlap
+    ///   bright things on the N64.
+    ///
+    /// The hardware T&L paths (the N64's RSP, the 3DS's PICA200, the PC's
+    /// GPU T&L) leave additive draws to the CPU T&L: they are meant small
+    /// (effects, not the level).
+    Add,
 }
 
 /// How a 3D draw's texture is sampled ([`ModelParams::filter`]).
@@ -439,6 +471,7 @@ impl ModelParams {
         detail: None,
         water: None,
         shadow: crate::shadow::ShadowCast::None,
+        blend: Blend::Alpha,
     };
 
     /// Default surface with a tint — the common case in game code.

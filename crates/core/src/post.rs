@@ -149,6 +149,14 @@ pub struct PostSettings {
     pub bloom: Option<Bloom>,
     /// Graded through this LUT after the tonemap (display space).
     pub grading: Option<LutId>,
+    /// A second LUT the grading mixes toward (Bongo-Kart #181): the picture
+    /// through `grading` (ungraded without one) and through this one,
+    /// mixed by `grading_mix` ([`grade_mix`]). A time of day or a weather
+    /// passing between two looks without a LUT baked per step. The Full
+    /// tier only: the consoles' bakes grade by `grading` alone.
+    pub grading_to: Option<LutId>,
+    /// 0..=1: the weight of `grading_to` (0 = `grading` alone).
+    pub grading_mix: f32,
     /// Darkens the corners, 0..=1.
     pub vignette: f32,
     /// Film grain (monochrome, changes every frame), 0..=1.
@@ -163,6 +171,8 @@ impl PostSettings {
         tonemap: Tonemap::None,
         bloom: None,
         grading: None,
+        grading_to: None,
+        grading_mix: 0.0,
         vignette: 0.0,
         grain: 0.0,
     };
@@ -173,6 +183,8 @@ impl PostSettings {
         tonemap: Tonemap::AgX,
         bloom: Some(Bloom::DEFAULT),
         grading: None,
+        grading_to: None,
+        grading_mix: 0.0,
         vignette: 0.2,
         grain: 0.0,
     };
@@ -193,6 +205,8 @@ impl PostSettings {
                 radius: fix(b.radius, 0.0, 1.0, d.radius),
             }),
             grading: self.grading,
+            grading_to: self.grading_to,
+            grading_mix: fix(self.grading_mix, 0.0, 1.0, 0.0),
             vignette: fix(self.vignette, 0.0, 1.0, 0.0),
             grain: fix(self.grain, 0.0, 1.0, 0.0),
         }
@@ -202,6 +216,25 @@ impl PostSettings {
 impl Default for PostSettings {
     fn default() -> Self {
         PostSettings::DEFAULT
+    }
+}
+
+/// A pixel `c` (display space, 0..=1) graded through `a` (unchanged
+/// without one) and mixed toward its grading through `b` by `mix`
+/// ([`PostSettings::grading_to`], Bongo-Kart #181): the reference of the
+/// PC's and the Web's composite.
+pub fn grade_mix(a: Option<&Lut<'_>>, b: Option<&Lut<'_>>, mix: f32, c: [f32; 3]) -> [f32; 3] {
+    let ga = a.map_or(c, |l| l.apply(c));
+    match b {
+        Some(l) if mix > 0.0 => {
+            let gb = l.apply(c);
+            [
+                ga[0] + (gb[0] - ga[0]) * mix,
+                ga[1] + (gb[1] - ga[1]) * mix,
+                ga[2] + (gb[2] - ga[2]) * mix,
+            ]
+        }
+        _ => ga,
     }
 }
 
@@ -1140,6 +1173,45 @@ mod tests {
             last = m;
         }
         assert_eq!(last, 1.0);
+    }
+
+    /// A size-2 LUT that maps every color to `to` (a flat look).
+    fn flat(to: [u8; 3]) -> std::vec::Vec<u8> {
+        let mut v = Lut::header(2).to_vec();
+        for _ in 0..8 {
+            v.extend(to);
+        }
+        v
+    }
+
+    /// `grade_mix` (Bongo-Kart #181): no second LUT or a zero weight is the
+    /// first grading alone; a weight walks linearly from the first grading
+    /// to the second; without a first LUT it mixes from the ungraded color.
+    #[test]
+    fn two_luts_mix_by_the_weight() {
+        let (ba, bb) = (flat([255, 0, 0]), flat([0, 0, 255]));
+        let (a, b) = (Lut::parse(&ba).unwrap(), Lut::parse(&bb).unwrap());
+        let c = [0.25, 0.5, 0.75];
+        assert_eq!(grade_mix(Some(&a), None, 0.7, c), [1.0, 0.0, 0.0]);
+        assert_eq!(grade_mix(Some(&a), Some(&b), 0.0, c), [1.0, 0.0, 0.0]);
+        assert_eq!(grade_mix(Some(&a), Some(&b), 1.0, c), [0.0, 0.0, 1.0]);
+        let half = grade_mix(Some(&a), Some(&b), 0.5, c);
+        assert!((half[0] - 0.5).abs() < 1e-6 && (half[2] - 0.5).abs() < 1e-6);
+        assert_eq!(grade_mix(None, None, 0.5, c), c);
+        let from_plain = grade_mix(None, Some(&b), 0.5, c);
+        assert!((from_plain[0] - 0.125).abs() < 1e-6, "{from_plain:?}");
+        assert!((from_plain[2] - 0.875).abs() < 1e-6, "{from_plain:?}");
+        // The weight is clamped with the rest of the settings.
+        let wild = PostSettings {
+            grading_mix: 3.0,
+            ..PostSettings::DEFAULT
+        };
+        assert_eq!(wild.clamped().grading_mix, 1.0);
+        let nan = PostSettings {
+            grading_mix: f32::NAN,
+            ..PostSettings::DEFAULT
+        };
+        assert_eq!(nan.clamped().grading_mix, 0.0);
     }
 
     #[test]

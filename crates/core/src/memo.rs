@@ -39,12 +39,15 @@ impl MemoKey {
     /// `gloss` is excluded: only the per-pixel tier (PC) reads it, and the
     /// memo serves the N64's RSP draws. `shadow` is excluded too: it adds a
     /// shadow draw beside the command and never changes the command.
+    /// Additive draws ([`crate::Blend::Add`]) are never memoized: the RSP
+    /// leaves them to the CPU.
     pub fn new(model: u32, generation: u32, matrix: &Mat34, params: &ModelParams) -> Option<Self> {
         let e = params.emissive;
         if e.r | e.g | e.b != 0
             || params.anim.is_some()
             || params.palette.is_some()
             || params.water.is_some()
+            || params.blend != crate::render::Blend::Alpha
         {
             return None;
         }

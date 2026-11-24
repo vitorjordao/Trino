@@ -528,6 +528,35 @@ since #122.
   the PC's console profiles (counted in `FrameStats::dynamic_rejected`). Tests:
   `crates/core/tests/dynamic_mesh.rs`, `crates/platform-pc/tests/dynamic_mesh.rs`
   (byte for byte the baked model's frame on both paths), the `dynamic mesh` step.
+- **Mipmaps (2026-11-23, ADR 0043 §1, Bongo-Kart #178):** `mipmaps = true` on a sprite
+  gives the PC and the Web a chain (`trino_core::mip`: 2×2 means in linear light, alpha
+  weighted, down to 4 texels; powers of two only). The PC's `<id>.bc` holds every level and
+  the master's magic is `TSPM`; the Web's KTX2 carries the levels (Basis user mipmaps,
+  transcoded level by level in `glue.js`). `PcRenderer::upload_sprite_mipmapped` /
+  `upload_sprite_compressed_levels`; bilinear 3D draws sample the chain where
+  `Caps::mipmaps` (PC native, Web), 2D draws and the console profiles keep level 0
+  (`set_mipmaps`, `TRINO_MIPS=0`). Tests: `crates/platform-pc/tests/mipmaps.rs` (far-floor
+  moiré per quality preset), `crates/asset-pipeline/tests/mipmaps.rs`, the `mipmaps` step.
+- **Additive blending (2026-11-23, ADR 0043 §2, Bongo-Kart #179):** `ModelParams::blend`
+  (`Blend::Alpha` default, `Blend::Add` = `dst + src·a`, depth tested, never written;
+  water ignores it), `blend: Add` in materials, TSCN's reserved surface byte. Additive
+  draws leave the RSP, the PICA200 and the PC's GPU T&L (`PcGpuReject::Additive`) and the
+  N64 memo; their CPU triangles take each target's mode: PC/Web three scene pipelines
+  sorted among the blended triangles, N64 a bucket with `RDPQ_BLENDER_ADDITIVE`
+  (`trino_3d_additive`; the RDP wraps a sum past white: keep it dim), 3DS a bucket with
+  `GPU_BLEND_ADD`. Tests: `crates/platform-pc/tests/additive.rs`, `crates/core/tests/
+  blend.rs`, the `additive` step.
+- **Two-color ambient, rim light, two LUTs (2026-11-23, ADR 0043 §3, Bongo-Kart #181):**
+  `Light::ground` (the ambient from the ground's color to the sky's by the normal's height)
+  and `Light::rim` (`(1 − n·v)²` of its color × strength), off by default
+  (`Light::has_terms`); scenes' `ground_color` (bare), `rim`, `rim_color`. The CPU T&L's lit
+  copy (`render3d/lit.rs`, `Terms`) and the PC/Web GPU T&L evaluate them (oracle mean
+  0.000/255); the RSP and the PICA200 leave lit draws under them to the CPU T&L
+  (`RspReject`/`GpuReject::LightTerms`). The rim lights grazing ground too: give
+  characters their own light. `PostSettings::{grading_to, grading_mix}` mixes a second
+  LUT's grading in the composite (`post::grade_mix`, the Full tier only). Tests:
+  `crates/{core,platform-pc}/tests/light_terms.rs`, `post.rs`'s `two_luts_*`, the
+  `light terms` and `lut mix` steps.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -1746,6 +1775,19 @@ cargo test --workspace
   streak left gaps between the composite's taps, eight stepped copies at strength 0.8.
   Gather the full-strength sub-streak everywhere and let the composite's taps overlap;
   hold the frame to a one-pass CPU reference (`SpeedBlur::gather`), not to the eye.
+- **The PC's N64 look stores one bit of alpha** (`quantize_5551`: alpha ≥ 0.5 or 0). A
+  pipeline that blends by the source alpha in that look (shadows, additive) returns the
+  full alpha beside the quantized color (`fs_shadow`, `fs_tri_add`), as the RDP's blender
+  weighs by the combiner's alpha; otherwise soft sparks turn into hard, saturated stars
+  in the N64 profile only (Bongo-Kart #179).
+- **A view-dependent vertex color differs between the PC's T&L paths on a big triangle
+  that crosses the guard band** (Bongo-Kart #181's rim light): the CPU path clips it into a
+  polygon whose new vertices it colors in 3D, the GPU path interpolates over the whole
+  triangle (up to 11/255 on a 9 m floor). Fog had the same reason to cut the showcase's
+  river: test and author such surfaces subdivided.
+- **On the N64 every `set_light` change bumps the draw memo's generation:** two lights a
+  frame (a rimmed one for the characters, a plain one for the level) leave the memo
+  without a hit. Keep one light per frame on the N64.
 - **Trino's vertex colors are 8-bit, so "HDR" is only per-pixel light** (local lights,
   highlights, the wet floor, issue #64): bloom thresholds in linear light with a soft
   knee and defaults to 0.8 so an unlit white glows; a threshold of 1.0 blooms almost

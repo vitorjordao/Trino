@@ -2,6 +2,9 @@
 //!
 //! PC blob formats (little-endian):
 //! - `<hash>.sprite`: magic `TSPR`, u32 width, u32 height, RGBA8 pixels.
+//!   `TSPM` is the same layout for a sprite with `mipmaps = true`
+//!   (Bongo-Kart #178): the PC's native profile and the Web make its
+//!   mipmap chain from these pixels at upload (`trino_core::mip`).
 //! - `<hash>.3ds.sprite`: the same, holding what the 3DS samples from the
 //!   sprite's 3DS format (`crate::texture`), written when that format is not
 //!   RGBA8. The PC's 3DS profile draws it instead (`preview_3ds` in the
@@ -10,7 +13,9 @@
 //!   (`BcFormat::code`: 1, 3, 7), the blocks — written when the sprite's PC
 //!   format is BCn (`compressed` in the index). The PC's native profile
 //!   uploads it where the GPU samples BC; the `.sprite` master stays for
-//!   tools, the console profiles and GPUs without BC.
+//!   tools, the console profiles and GPUs without BC. A mipmapped sprite's
+//!   file holds every level, level after level (`trino_core::mip::levels`
+//!   of them, the blocks of the chain the master makes).
 //! - `<hash>.ktx2`: a KTX2 file of Basis Universal data (`crate::texture::ktx2`),
 //!   written by a Web bake when the sprite's Web format is `KTX2-ETC1S` or
 //!   `KTX2-UASTC` (`ktx2` in the index). The browser transcodes it to what
@@ -152,12 +157,20 @@ pub fn bake_all_with(
         (|| -> Result<BakedEntry, String> {
             let source = resolve_source(assets_root, platform, &decl.file)?;
             let (w, h, rgba) = decode_png(&source)?;
+            if decl.mipmaps && !trino_core::mip::chainable(w, h) {
+                return Err(format!(
+                    "sprite `{logical}`: mipmaps = true needs power-of-two sides of at least \
+                     {} texels ({w}x{h})",
+                    trino_core::mip::MIN_SIDE
+                ));
+            }
             // The PC keeps the master (tools and the console profiles draw
             // it) plus its own BCn and the 3DS preview; a console bake here
             // only decides the format (their bakers convert:
             // `xtask/src/{n64,n3ds}.rs`).
             let file = format!("{id:08x}.sprite");
-            let changed = write_if_changed(&out_dir.join(&file), &tspr(w, h, &rgba))?;
+            let master = tspr_mipmapped(w, h, &rgba, decl.mipmaps);
+            let changed = write_if_changed(&out_dir.join(&file), &master)?;
             // The N64's own master when it overrides this one (its format is
             // chosen from what the N64 build stages).
             let n64 = match platform {
@@ -176,7 +189,7 @@ pub fn bake_all_with(
                 id,
                 &logical,
                 platform,
-                crate::texture::Source::Sprite,
+                (crate::texture::Source::Sprite, decl.mipmaps),
                 &|p| decl.settings(p),
                 (
                     w,
@@ -533,7 +546,7 @@ pub fn bake_all_with(
                 id,
                 &logical,
                 platform,
-                crate::texture::Source::FontAtlas,
+                (crate::texture::Source::FontAtlas, false),
                 &|p| decl.settings(p),
                 (font.width, font.height, &font.rgba, None),
             )?;
@@ -835,8 +848,14 @@ fn write_bundles(
 
 /// A `TSPR` blob: magic, u32 width, u32 height, RGBA8.
 fn tspr(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    tspr_mipmapped(w, h, rgba, false)
+}
+
+/// [`tspr`], or with `mipmaps` the `TSPM` magic: the same layout, asking
+/// the PC and the Web for a mipmap chain (Bongo-Kart #178).
+fn tspr_mipmapped(w: u32, h: u32, rgba: &[u8], mipmaps: bool) -> Vec<u8> {
     let mut blob = Vec::with_capacity(12 + rgba.len());
-    blob.extend_from_slice(b"TSPR");
+    blob.extend_from_slice(if mipmaps { b"TSPM" } else { b"TSPR" });
     blob.extend_from_slice(&w.to_le_bytes());
     blob.extend_from_slice(&h.to_le_bytes());
     blob.extend_from_slice(rgba);
@@ -862,7 +881,9 @@ fn bake_texture(
     id: u32,
     logical: &str,
     platform: Platform,
-    source: crate::texture::Source,
+    // What the texture is, and its `mipmaps = true` (Bongo-Kart #178): the
+    // BCn file and the KTX2 then carry the chain (the consoles ignore it).
+    (source, mipmaps): (crate::texture::Source, bool),
     settings: &dyn Fn(Platform) -> crate::texture::TextureSettings,
     // The master, and the N64's own master when it overrides it.
     (w, h, rgba, n64): (u32, u32, &[u8], Option<Pixels<'_>>),
@@ -882,7 +903,11 @@ fn bake_texture(
         // two: `xtask/src/web.rs` packs the KTX2 when there is one).
         if let Some(mode) = crate::texture::Ktx2Mode::parse(&t.format) {
             let file = format!("{id:08x}.ktx2");
-            let e = crate::texture::ktx2::encode_cached(mode, w, h, rgba)?;
+            let e = if mipmaps {
+                crate::texture::ktx2::encode_mipmapped(mode, w, h, rgba)?
+            } else {
+                crate::texture::ktx2::encode_cached(mode, w, h, rgba)?
+            };
             t.changed |= write_if_changed(&out_dir.join(&file), &e.ktx2)?;
             t.ktx2 = Some(file);
         }
@@ -912,7 +937,11 @@ fn bake_texture(
         for v in [w, h, bc.code()] {
             blob.extend_from_slice(&v.to_le_bytes());
         }
-        blob.extend_from_slice(&bc.encode(w, h, rgba));
+        if mipmaps {
+            blob.extend_from_slice(&bc.encode_chain(w, h, rgba));
+        } else {
+            blob.extend_from_slice(&bc.encode(w, h, rgba));
+        }
         t.changed |= write_if_changed(&out_dir.join(&file), &blob)?;
         t.compressed = Some(file);
     }

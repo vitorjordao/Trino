@@ -160,6 +160,7 @@ const SUN: Light = Light {
     color: Color::rgb(255, 246, 228),
     ambient_color: Color::rgb(190, 210, 255),
     fog: trino_core::Fog::NONE,
+    ..Light::DEFAULT
 };
 
 const WATER: Water = Water {

@@ -198,6 +198,7 @@ impl Look {
                 color: Color::rgb(255, 170, 110),
                 ambient_color: Color::rgb(110, 120, 190),
                 fog: scene.fog,
+                ..Light::DEFAULT
             }
         } else {
             *scene

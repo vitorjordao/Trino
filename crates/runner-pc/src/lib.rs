@@ -456,6 +456,9 @@ pub fn upload_assets(
 /// Upload one baked sprite the way `target` shows it: the 3DS preview on
 /// the 3DS profile, the master on the N64's, and on the PC the BCn blocks
 /// where the GPU samples them, else those blocks decoded (logged once).
+/// A sprite with `mipmaps = true` (Bongo-Kart #178) goes up with its chain
+/// on the PC: the baked BC levels, or one made from the pixels; the
+/// console profiles sample its level 0 only.
 pub fn upload_sprite(
     renderer: &mut PcRenderer,
     sprite: &trino_asset_pipeline::LoadedSprite,
@@ -473,12 +476,15 @@ pub fn upload_sprite(
         // The master says what the alpha is (the blocks of a BC7 can't):
         // a mask lets the GPU path cut it instead of the CPU path blending.
         let alpha = trino_platform_pc::SpriteAlpha::of_rgba(&sprite.rgba);
-        if renderer.upload_sprite_compressed(
+        let levels = sprite
+            .compressed_levels()
+            .unwrap_or_else(|| vec![&c.data[..]]);
+        if renderer.upload_sprite_compressed_levels(
             id,
             sprite.width,
             sprite.height,
             format,
-            &c.data,
+            &levels,
             Some(alpha),
         ) {
             return;
@@ -489,7 +495,16 @@ pub fn upload_sprite(
                 "[trino] BC textures are off (no GPU support, or TRINO_BC=0): uploading them decoded"
             );
         });
-        renderer.upload_sprite(id, sprite.width, sprite.height, &sprite.pc_pixels());
+        let px = sprite.pc_pixels();
+        if sprite.mipmaps {
+            renderer.upload_sprite_mipmapped(id, sprite.width, sprite.height, &px);
+        } else {
+            renderer.upload_sprite(id, sprite.width, sprite.height, &px);
+        }
+        return;
+    }
+    if sprite.mipmaps && target == trino_asset_pipeline::Platform::Pc {
+        renderer.upload_sprite_mipmapped(id, sprite.width, sprite.height, &sprite.rgba);
         return;
     }
     renderer.upload_sprite(id, sprite.width, sprite.height, sprite.pixels_for(target));

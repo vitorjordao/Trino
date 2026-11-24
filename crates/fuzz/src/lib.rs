@@ -336,7 +336,7 @@ pub const TARGETS: &[Target] = &[
     #[cfg(feature = "host")]
     Target {
         name: "pc_asset",
-        formats: &["TSPR", "TBCN", "TSND", "PC asset"],
+        formats: &["TSPR", "TSPM", "TBCN", "TSND", "PC asset"],
         run: host_targets::pc_asset,
         max_len: 1 << 16,
         seeds: Seeds::Committed,

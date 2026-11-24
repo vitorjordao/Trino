@@ -122,6 +122,7 @@ impl FontDecl {
 
     fn sprite(&self) -> crate::manifest::SpriteDecl {
         crate::manifest::SpriteDecl {
+            mipmaps: false,
             file: self.file.clone(),
             formats: self.formats.clone(),
             quality: self.quality.clone(),

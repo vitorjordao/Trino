@@ -416,6 +416,8 @@ fn codegen_and_tscn_carry_post_and_glows() {
         tonemap: trino_scene::TonemapDef::Aces,
         bloom: Some(trino_scene::BloomDef::default()),
         grading: Some("luts/dusk".into()),
+        grading_to: Some("luts/selftest".into()),
+        grading_mix: 0.4,
         vignette: 0.25,
         grain: 0.0,
         enabled: true,
@@ -425,9 +427,11 @@ fn codegen_and_tscn_carry_post_and_glows() {
         code.contains(&format!(
             "pub const POST: Option<PostSettings> = Some(PostSettings {{\n    exposure: 1.25,\n    \
              tonemap: Tonemap::Aces,\n    bloom: Some(Bloom {{ threshold: 0.8, intensity: 0.6, \
-             radius: 0.6 }}),\n    grading: Some(LutId({:#010x})),\n    vignette: 0.25,\n    \
+             radius: 0.6 }}),\n    grading: Some(LutId({:#010x})),\n    \
+             grading_to: Some(LutId({:#010x})),\n    grading_mix: 0.4,\n    vignette: 0.25,\n    \
              grain: 0.0,\n}});",
-            trino_core::asset_id("luts/dusk")
+            trino_core::asset_id("luts/dusk"),
+            trino_core::asset_id("luts/selftest")
         )),
         "{code}"
     );

@@ -198,6 +198,7 @@ fn colored_light_tints_lit_surfaces() {
         color: Color::rgb(255, 0, 0),
         ambient_color: Color::rgb(0, 0, 255),
         fog: Fog::NONE,
+        ..Light::DEFAULT
     };
     let (tris, _) = draw(&white, &Mat34::IDENTITY, &light, &ModelParams::DEFAULT);
     let c = tris[0].colors[0];

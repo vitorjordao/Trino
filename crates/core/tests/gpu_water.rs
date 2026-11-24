@@ -66,6 +66,7 @@ fn ctx() -> TnlContext {
             near: 3.0,
             far: 9.0,
         },
+        ..Light::DEFAULT
     };
     let ripple = Ripple {
         pos: Vec2::new(0.3, -0.2),

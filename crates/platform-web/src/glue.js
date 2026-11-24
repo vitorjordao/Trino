@@ -61,7 +61,17 @@ export function trino_transcode_ktx2(bytes, format) {
     if (!file.transcodeImage(out, 0, 0, 0, format, 0, -1, -1)) {
       throw new Error("transcodeImage failed for format " + format);
     }
-    return [w, h, alpha, out];
+    // A mipmap chain (Bongo-Kart #178): every level after level 0.
+    const answer = [w, h, alpha, out];
+    const levels = file.getLevels();
+    for (let level = 1; level < levels; level++) {
+      const bytes = new Uint8Array(file.getImageTranscodedSizeInBytes(level, 0, 0, format));
+      if (!file.transcodeImage(bytes, level, 0, 0, format, 0, -1, -1)) {
+        throw new Error("transcodeImage failed for level " + level);
+      }
+      answer.push(bytes);
+    }
+    return answer;
   } finally {
     file.close();
     file.delete();

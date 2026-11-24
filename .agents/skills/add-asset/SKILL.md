@@ -311,6 +311,14 @@ The mesh's vertex alpha sets the translucency (deep middle opaque, banks clear).
 showcase's river meshes come from `xtask/src/river_assets.rs` (`cargo xtask
 gen-assets`), driven by the same `showcase::river` table as the game's floor.
 
+**Additive** (ADR 0043 §2): `blend: Add` (`ModelParams::blend = Blend::Add` in code) adds
+the surface's light to the frame (`dst + src·a`): sparks, flames, glows. Black adds
+nothing, so an additive effect needs no alpha. It never writes depth and always takes the
+CPU T&L (no RSP, no PICA200, no PC GPU T&L): keep such meshes small. On the N64 the RDP
+doesn't saturate, so a sum past white wraps toward black: keep additive colors at half
+intensity or less where they cross bright surfaces, and check in ares. Billboards and
+`Emitter` particles don't take it yet.
+
 Scenes/prefabs reference materials by logical path; games use the equivalent
 `ModelParams` (or export the scene to code — `scene-authoring` skill).
 
@@ -337,6 +345,18 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
 - Live reload re-uploads changed boot assets; a grouped asset's new bytes show the next
   time its group loads.
 
+## Mipmaps (Bongo-Kart #178, ADR 0043 §1)
+
+- `mipmaps = true` on a `[sprites.*]` entry: a chain on the PC and the Web for textures
+  that tile far surfaces (water, roads, floors). Both sides must be powers of two (the
+  bake says which size it got); +33 % of its memory; the consoles ignore it.
+- Only bilinear 3D draws sample the chain (`TexFilter::Bilinear` or the platform's
+  default); 2D draws and `Point` draws keep level 0. `TRINO_MIPS=0` turns chains off for an
+  A/B screenshot.
+- The anisotropic presets (Medium and up) keep a sharper level along the view: a texture
+  with detail at the texel scale (a one-texel checker) keeps some moiré there. Soften the
+  master's finest detail if a surface still shimmers.
+
 ## Accessibility data (issue #60, ADR 0027)
 
 - Captions on a sound or a music track: `caption = "cap.x"` (a key in every
@@ -362,6 +382,10 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
   shows the result. Unlit colors match the PC exactly; lit ones are graded before the
   light (close, not equal).
 - `lut inspect <file|luts/x>` says how far a LUT moves colors (`identity` for a neutral).
+- Two LUTs mixed (Bongo-Kart #181): `PostSettings { grading: Some(a), grading_to: Some(b),
+  grading_mix: t, .. }` grades through both and mixes by `t` on the PC and the Web
+  (`trino_core::post::grade_mix` is the reference). Declare both as `[luts.*]`; the
+  consoles keep their baked `grading`.
 
 ## Verify
 

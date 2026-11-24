@@ -122,6 +122,7 @@ const SUN: Light = Light {
     color: Color::rgb(255, 246, 228),
     ambient_color: Color::rgb(190, 205, 240),
     fog: trino_core::Fog::NONE,
+    ..Light::DEFAULT
 };
 
 const TOWER_AT: Vec3 = Vec3::new(-1.2, 0.0, 0.6);
@@ -586,6 +587,7 @@ mod contact {
         color: Color::rgb(255, 246, 228),
         ambient_color: Color::rgb(190, 205, 240),
         fog: trino_core::Fog::NONE,
+        ..Light::DEFAULT
     };
 
     pub const ON: ShadowSettings = ShadowSettings {

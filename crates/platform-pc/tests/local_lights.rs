@@ -134,6 +134,7 @@ const NIGHT: Light = Light {
     color: Color::rgb(120, 130, 170),
     ambient_color: Color::rgb(150, 160, 200),
     fog: trino_core::Fog::NONE,
+    ..Light::DEFAULT
 };
 
 fn lamps() -> [LocalLight; 3] {

@@ -51,6 +51,10 @@ pub enum TriKind {
     /// triangles, back to front, depth tested but never written.
     PlainBlend,
     LitBlend,
+    /// Triangles of an additive draw (`Blend::Add`): added to the frame,
+    /// sorted with the blended ones, depth tested but never written.
+    PlainAdd,
+    LitAdd,
     /// A water surface (ADR 0015): translucent, after the batch's others.
     Water,
     /// Blob and planar shadows (ADR 0025, `shadow.rs`): blended over the

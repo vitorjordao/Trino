@@ -200,6 +200,14 @@ struct Comp {
     // 1 / `SpeedBlur::FADE_PIXELS` and the picture's size in pixels.
     speed_fade: f32,
     speed_size: vec2<f32>,
+    // The second LUT's texels per axis (0 = none) and its weight
+    // (`PostSettings::grading_to`, `grading_mix`).
+    lut_b_n: f32,
+    lut_mix: f32,
+    // A uniform block's size is a multiple of 16 bytes on WebGL2
+    // (`DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`).
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var t_scene: texture_2d<f32>;
@@ -208,6 +216,7 @@ struct Comp {
 @group(0) @binding(3) var s_lin: sampler;
 @group(0) @binding(4) var<uniform> comp: Comp;
 @group(0) @binding(5) var t_speed: texture_2d<f32>;
+@group(0) @binding(6) var t_lut_b: texture_3d<f32>;
 
 fn rows(r0: vec3<f32>, r1: vec3<f32>, r2: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(r0, v), dot(r1, v), dot(r2, v));
@@ -322,10 +331,22 @@ fn fs_post(in: VsOut) -> @location(0) vec4<f32> {
         }
         c = mix(c, toned(sqrt(sum / comp.speed_taps), bloom), fade);
     }
-    if comp.lut_n > 0.0 {
-        let n = comp.lut_n;
-        let uvw = c * ((n - 1.0) / n) + vec3<f32>(0.5 / n);
-        c = textureSampleLevel(t_lut, s_lin, uvw, 0.0).rgb;
+    if comp.lut_n > 0.0 || comp.lut_b_n > 0.0 {
+        var a = c;
+        if comp.lut_n > 0.0 {
+            let n = comp.lut_n;
+            let uvw = c * ((n - 1.0) / n) + vec3<f32>(0.5 / n);
+            a = textureSampleLevel(t_lut, s_lin, uvw, 0.0).rgb;
+        }
+        // Mixed toward the second LUT's grading of the same color
+        // (`trino_core::post::grade_mix`).
+        if comp.lut_b_n > 0.0 && comp.lut_mix > 0.0 {
+            let n = comp.lut_b_n;
+            let uvw = c * ((n - 1.0) / n) + vec3<f32>(0.5 / n);
+            let b = textureSampleLevel(t_lut_b, s_lin, uvw, 0.0).rgb;
+            a = a + (b - a) * comp.lut_mix;
+        }
+        c = a;
     }
     if comp.vignette > 0.0 {
         let d = (in.uv - vec2<f32>(0.5)) * 2.0;

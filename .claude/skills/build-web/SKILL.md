@@ -124,6 +124,12 @@ zones need `TIMESTAMP_QUERY`: none on WebGL2.
 
 ## Traps (all hit while building it)
 
+- **A uniform block's size must be a multiple of 16 bytes on WebGL2** (wgpu's
+  `DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` is missing there): a struct that
+  grows by one `f32` passes every native test and WebGPU, then every WebGL2 browser
+  panics creating the pipeline (`fs_post` at 104 bytes, Bongo-Kart #181). Pad it, and
+  let the shader's layout test check `size % 16 == 0` (`post.rs::the_uniforms_match_
+  the_shader_layout`). Run `cargo xtask test web` for any shader struct change.
 - **WebGL2 depth:** naga's GLSL can't `textureLoad` a `texture_depth_2d`, and wgpu's GL
   backend leaves a depth texture's filter incomplete (a fetch reads 0). Shaders that read
   depth go through `depth_as_float` (unfilterable float binding + a nearest sampler at

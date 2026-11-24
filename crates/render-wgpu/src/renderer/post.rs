@@ -207,8 +207,10 @@ const SLOT: u64 = 256;
 const SLOTS: u64 = 2 + 2 * MAX_LEVELS as u64;
 /// The speed blur's gather, after them.
 const SPEED_SLOT: u64 = SLOTS;
-/// The composite's uniform block (`Comp` in `post.wgsl`).
-const COMP_BYTES: u64 = 104;
+/// The composite's uniform block (`Comp` in `post.wgsl`): a multiple of 16
+/// bytes, or WebGL2 refuses the pipeline (no
+/// `DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`).
+const COMP_BYTES: u64 = 112;
 /// The bloom chain's deepest level count.
 pub(super) const MAX_LEVELS: u32 = 6;
 
@@ -790,7 +792,7 @@ impl PostPass {
         work
     }
 
-    fn comp_words(&self, frame: &PostFrame<'_>, bloom: f32) -> [u32; 26] {
+    fn comp_words(&self, frame: &PostFrame<'_>, bloom: f32) -> [u32; 28] {
         let s = frame.settings;
         let scene = frame.scene;
         let (ew, eh) = (scene.extent.0 as f32, scene.extent.1 as f32);
@@ -831,6 +833,9 @@ impl PostPass {
             // The second LUT: 0 texels skips it.
             f(frame.lut_b.map_or(0.0, |l| l.size as f32)),
             f(s.grading_mix),
+            // Padding to a multiple of 16 bytes (WebGL2).
+            0,
+            0,
         ]
     }
 }
@@ -861,9 +866,11 @@ mod tests {
     }
 
     /// The uniform blocks the pass writes have the sizes the shader reads:
-    /// the composite's `COMP_BYTES` (the 26 words of `comp_words`), and
+    /// the composite's `COMP_BYTES` (the 28 words of `comp_words`), and
     /// the blur and gather blocks inside the 64 bytes their bind group
-    /// gives them.
+    /// gives them. Every block is a multiple of 16 bytes: WebGL2 refuses
+    /// a pipeline whose uniform isn't (#181's second LUT made `Comp` 104
+    /// bytes and only the browsers' WebGL2 runs failed).
     #[test]
     fn the_uniforms_match_the_shader_layout() {
         let module = naga::front::wgsl::parse_str(SHADER).expect("post.wgsl parses");
@@ -876,7 +883,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("no struct {name}"))
         };
         assert_eq!(size("Comp"), COMP_BYTES);
-        assert_eq!(COMP_BYTES, 26 * 4, "comp_words' length");
+        assert_eq!(COMP_BYTES, 28 * 4, "comp_words' length");
+        for name in ["Comp", "Blur", "Speed"] {
+            assert_eq!(size(name) % 16, 0, "{name}: not a multiple of 16 bytes");
+        }
         assert!(size("Blur") <= 64);
         assert_eq!(size("Speed"), 64);
         const { assert!(COMP_BYTES <= SLOT && SPEED_SLOT >= SLOTS) };

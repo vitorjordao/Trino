@@ -204,6 +204,10 @@ struct Comp {
     // (`PostSettings::grading_to`, `grading_mix`).
     lut_b_n: f32,
     lut_mix: f32,
+    // A uniform block's size is a multiple of 16 bytes on WebGL2
+    // (`DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`).
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var t_scene: texture_2d<f32>;

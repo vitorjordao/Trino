@@ -311,6 +311,14 @@ The mesh's vertex alpha sets the translucency (deep middle opaque, banks clear).
 showcase's river meshes come from `xtask/src/river_assets.rs` (`cargo xtask
 gen-assets`), driven by the same `showcase::river` table as the game's floor.
 
+**Additive** (ADR 0043 §2): `blend: Add` (`ModelParams::blend = Blend::Add` in code) adds
+the surface's light to the frame (`dst + src·a`): sparks, flames, glows. Black adds
+nothing, so an additive effect needs no alpha. It never writes depth and always takes the
+CPU T&L (no RSP, no PICA200, no PC GPU T&L): keep such meshes small. On the N64 the RDP
+doesn't saturate, so a sum past white wraps toward black: keep additive colors at half
+intensity or less where they cross bright surfaces, and check in ares. Billboards and
+`Emitter` particles don't take it yet.
+
 Scenes/prefabs reference materials by logical path; games use the equivalent
 `ModelParams` (or export the scene to code — `scene-authoring` skill).
 

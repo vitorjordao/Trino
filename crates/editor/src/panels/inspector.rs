@@ -1406,6 +1406,26 @@ pub fn material_editor(ui: &mut egui::Ui, def: &mut MaterialDef, textures: &[Str
     theme::prop(ui, "Sides", |ui| {
         changed |= ui.checkbox(&mut def.double_sided, "Double-sided").changed();
     });
+    theme::prop(ui, "Blend", |ui| {
+        for b in trino_scene::BlendDef::ALL {
+            if ui
+                .selectable_label(def.blend == b, b.label())
+                .on_hover_text(match b {
+                    trino_scene::BlendDef::Alpha => {
+                        "Opaque, or blended by the tint's and the vertices' alpha"
+                    }
+                    trino_scene::BlendDef::Add => {
+                        "Light added to the frame: sparks, flames, glows. Never on the N64's \
+                         RSP; the N64 wraps a sum past white, so keep it dim there"
+                    }
+                })
+                .clicked()
+            {
+                def.blend = b;
+                changed = true;
+            }
+        }
+    });
     theme::prop(ui, "Gloss", |ui| {
         changed |= ui
             .add(egui::Slider::new(&mut def.gloss, 0..=255))

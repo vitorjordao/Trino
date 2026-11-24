@@ -328,6 +328,18 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — additive blending (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #179 blend half, ADR 0043 §2)
+
+| Item | Evidence |
+|---|---|
+| `ModelParams::blend: Blend::{Alpha, Add}` (default `Alpha`), materials' `blend: Add` (`BlendDef`, the editor's material inspector), TSCN's reserved surface byte, scene codegen | `core/tests/blend.rs`, `baked_scene_reads_every_field`, `an_additive_material_bakes_its_blend`, `blend_round_trips_and_defaults_to_alpha`, the material widget test; `showcase_gen` regenerated (`blend: Blend::Alpha` everywhere) |
+| Hardware T&L paths reject it (`RspReject::Translucent`, `GpuReject::Translucent`, new `PcGpuReject::Additive`), the N64 memo skips it | `core/tests/blend.rs` |
+| PC/Web: additive triangles sort among the blended ones, three new scene pipelines (`SrcAlpha, One`; `fs_tri_add` keeps the full alpha in the N64 look); N64: a bucket with `RDPQ_BLENDER_ADDITIVE` (`trino_3d_additive`); 3DS: a bucket with `GPU_BLEND_ADD` (material bit 14) | `platform-pc/tests/additive.rs` (5 tests: adds vs covers, any depth order, no depth write, GPU path = CPU path, console profiles), evidence `target/evidence/additive/sparks_{alpha,add,add_n64,add_3ds}.png` |
+| castle64's `additive` self-test step | `engine_checks` (3 profiles × both T&L paths); ares, Azahar, browsers |
+
+Not done: additive billboards and particles (`draw_billboard`, `Emitter`); the N64 sum
+wraps past white (the RDP doesn't saturate), documented on `Blend::Add`.
+
 ## Done — mipmap chains on the PC and the Web (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #178, ADR 0043 §1)
 
 | Item | Evidence |

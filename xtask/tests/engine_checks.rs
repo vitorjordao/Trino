@@ -236,6 +236,29 @@ fn the_mipmaps_step_reads_the_mean_light_on_the_native_profile_only() {
     }
 }
 
+/// The `additive` step (Bongo-Kart #179) on the native profile (both T&L
+/// paths) and each console profile: the added card reads the backdrop plus
+/// its light (drawn with alpha it would read the card alone, which the
+/// step tells from the sum: the backdrop under the probes is lit).
+#[test]
+fn the_additive_step_adds_on_every_profile() {
+    use castle64::selftest::additive;
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        for gpu in [true, false] {
+            renderer.set_hw_tnl(gpu);
+            assert_eq!(
+                additive(&mut renderer),
+                Ok(true),
+                "{profile:?}, GPU path {gpu}"
+            );
+        }
+    }
+}
+
 /// The `post` step (issue #64) on the native profile and each console
 /// profile: the card is graded alike (the PC's LUT at run time, the
 /// consoles' graded bake) and blooms or glows. Breaking each tier's half

@@ -75,6 +75,8 @@ static float s_detail_scale = 1.0f;
 static int s_shadow = 0;
 static int s_stencil = 0;
 static int s_blob_on = 0;
+// Additive triangles (trino_3d_material flags bit 14, Blend::Add, ADR 0043 §2).
+static int s_add = 0;
 static C3D_Tex s_blob;
 static int s_blob_ready = 0;
 // One projection per screen (citro2d's own for each): 3D drawn after
@@ -826,6 +828,7 @@ void trino_3d_material(void* detail, uint32_t flags, uint32_t scroll)
     s_shadow = (flags >> 9) & 1;
     s_stencil = s_shadow ? (int)((flags >> 10) & 7) : 0;
     s_blob_on = s_shadow && ((flags >> 13) & 1) && s_blob_ready;
+    s_add = (flags >> 14) & 1;
     s_detail_off[0] = s_water ? (float)(scroll >> 16) / 65536.0f : 0.0f;
     s_detail_off[1] = s_water ? (float)(scroll & 0xFFFF) / 65536.0f : 0.0f;
 }
@@ -955,6 +958,13 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_COLOR);
     }
+    if (s_add) {
+        // Additive (Blend::Add, ADR 0043 §2): dst + src * alpha, depth
+        // tested but not written; the blend goes back to citro's after.
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_DepthTest(true, GPU_GEQUAL, GPU_WRITE_COLOR);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_ZERO, GPU_ONE);
+    }
     if (s_shadow) {
         // The shadow color by the vertex alpha (times the blob's).
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
@@ -971,6 +981,10 @@ void trino_3d_draw(const float* v, uint32_t count, void* sheet, uint32_t clamp)
     C3D_DrawArrays(GPU_TRIANGLES, s_vused, count);
     s_vused += count;
     if (s_shadow) trino_shadow_leave();
+    if (s_add) {
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
+                       GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    }
     // Hand the GPU back to citro2d (program, attributes, buffers, texenv).
     C2D_Prepare();
 }

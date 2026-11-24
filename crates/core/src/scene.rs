@@ -497,7 +497,8 @@ impl SceneNode {
 ///   visibility: u8 cell (0xFF none), u8 volume kind (0 none, 1 cell,
 ///   2 portal), u8 portal a, u8 portal b, f32*3 world half extents,
 ///   surface (v3): u8 gloss, u8 filter (0 default, 1 point, 2 bilinear),
-///   u8 detail scale_log2, u8 reserved, u32 detail sprite (flag bit5)
+///   u8 detail scale_log2, u8 blend (0 alpha, 1 add: ADR 0043 §2, was
+///   reserved, so older files read alpha), u32 detail sprite (flag bit5)
 ///   water (v4, flag bit6): f32 flow_speed x y, f32 detail_flow x y,
 ///   f32 wave_amplitude, f32 wave_frequency, f32 ripple_responsiveness
 ///   shadow (v5): u8 cast (0 none, 1 blob, 2 mesh, 3 auto), u8 receiver,
@@ -939,6 +940,10 @@ impl BakedScene {
             anim: None,
             texture: (flags & 8 != 0).then(|| crate::render::SpriteId(rd_u32(d, b + 48))),
             gloss: d[surf],
+            blend: match d[surf + 3] {
+                1 => crate::render::Blend::Add,
+                _ => crate::render::Blend::Alpha,
+            },
             filter: match d[surf + 1] {
                 1 => crate::render::TexFilter::Point,
                 2 => crate::render::TexFilter::Bilinear,
@@ -1334,7 +1339,7 @@ mod tests {
         b.extend_from_slice(&[0; 12]); // sound (flag off)
         b.extend_from_slice(&[3, 2, 1, 4]); // cell 3, portal 1 <-> 4
         f(&mut b, &[0.5, 1.0, 0.25]);
-        b.extend_from_slice(&[40, 1, 0, 0, 0, 0, 0, 0]); // gloss 40, point, no detail
+        b.extend_from_slice(&[40, 1, 0, 1, 0, 0, 0, 0]); // gloss 40, point, no detail, add
         f(&mut b, &[0.5, -0.25, 0.1, 0.2, 0.05, 0.6, 1.5]); // water (flag bit6 off)
         // Casts a 0.4 m blob (auto), receives: a 2 x 1 top at (3, 1, -2).
         b.extend_from_slice(&[3, 1, 0, 0]);
@@ -1372,6 +1377,11 @@ mod tests {
         assert_eq!(n.params.shading, Shading::Unlit);
         assert_eq!(n.params.gloss, 40);
         assert_eq!(n.params.filter, crate::render::TexFilter::Point);
+        assert_eq!(
+            n.params.blend,
+            crate::render::Blend::Add,
+            "the once reserved byte"
+        );
         assert_eq!(n.params.detail, None);
         assert_eq!(n.params.water, None, "flag bit6 off");
         assert_eq!(n.anim, Some((ClipId(9), 2.0)));

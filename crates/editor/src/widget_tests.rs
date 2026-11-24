@@ -97,6 +97,9 @@ fn material_editor_sets_shading_sides_and_texture() {
     h.get_by_label("Double-sided").click();
     h.run();
     assert!(h.state().def.double_sided);
+    h.get_by_label("Additive").click();
+    h.run();
+    assert_eq!(h.state().def.blend, trino_scene::BlendDef::Add);
 
     // Pick a texture from the combo box, then clear it again.
     h.get_all_by_role(Role::ComboBox).next().unwrap().click();
@@ -120,7 +123,7 @@ fn material_editor_sets_shading_sides_and_texture() {
     h.run();
     let d = h.state().def.detail.clone().expect("a detail layer");
     assert_eq!((d.texture.as_str(), d.scale_log2), ("sprites/brick", 2));
-    assert!(h.state().changes >= 7, "every edit reports a change");
+    assert!(h.state().changes >= 8, "every edit reports a change");
     // The edited definition still round-trips through its file format.
     let def = &h.state().def;
     assert_eq!(&MaterialDef::from_ron(&def.to_ron()).unwrap(), def);

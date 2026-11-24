@@ -1729,7 +1729,9 @@ pub enum RspReject {
     /// Fog on a draw the CPU path would split (long edges inside the
     /// fog band, [`rsp_fog_check`]): the overlay doesn't split.
     Fog,
-    /// A tint with alpha below 255.
+    /// A tint with alpha below 255, or an additive draw
+    /// ([`Blend::Add`](crate::Blend::Add)): blending needs the CPU path's
+    /// order and the RDP's blend modes.
     Translucent,
     /// A textured draw the CPU path would split (an edge spanning
     /// [`DEPTH_SPLIT`] of view depth: it splits every textured draw).
@@ -2061,7 +2063,7 @@ pub fn rsp_check_mv(
     if params.water.is_some() {
         return rsp_water_check(ctx, mesh, model, mv, params);
     }
-    if params.tint.a < 255 {
+    if params.tint.a < 255 || params.blend != crate::render::Blend::Alpha {
         return Err(RspReject::Translucent);
     }
     let (c, r) = mesh.bounds().ok_or(RspReject::NoBounds)?;
@@ -2492,7 +2494,7 @@ pub fn rsp_rigid_draws(
     if params.water.is_some() {
         return Err(RspReject::Water);
     }
-    if params.tint.a < 255 {
+    if params.tint.a < 255 || params.blend != crate::render::Blend::Alpha {
         return Err(RspReject::Translucent);
     }
     if params.texture.is_some() {

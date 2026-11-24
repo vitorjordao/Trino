@@ -126,9 +126,9 @@ pub use quality::{
     QualitySettings, QualitySource, ShadowSetting,
 };
 pub use render::{
-    AnimBlend, AnimRef, BillboardParams, ClipId, DetailTexture, FontId, FrameStats, Instance,
-    Material, MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading, SpriteId,
-    SpriteParams, TexFilter, TextAlign, TextParams, Transform3,
+    AnimBlend, AnimRef, BillboardParams, Blend, ClipId, DetailTexture, FontId, FrameStats,
+    Instance, Material, MaterialId, ModelId, ModelParams, Palette, Renderer, Screen, Shading,
+    SpriteId, SpriteParams, TexFilter, TextAlign, TextParams, Transform3,
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,

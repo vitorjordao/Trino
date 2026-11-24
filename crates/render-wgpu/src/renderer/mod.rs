@@ -409,10 +409,14 @@ pub struct PcRenderer {
     /// `tri`, `tri clamp` and `lit` again for blended triangles: depth
     /// tested, never written ([`TriKind::PlainBlend`]).
     blend_pipelines: [wgpu::RenderPipeline; 3],
-    /// What the scene pipelines are built from, and the seven again for a
+    /// `tri`, `tri clamp` and `lit` for additive triangles
+    /// ([`TriKind::PlainAdd`], `Blend::Add`): `dst + src·a`, depth tested,
+    /// never written.
+    add_pipelines: [wgpu::RenderPipeline; 3],
+    /// What the scene pipelines are built from, and the ten again for a
     /// multisampled target, built by the first [`PcRenderer::set_msaa`]
-    /// that turns it on: sprite, tri, tri clamp, lit and the three blended
-    /// ones. (Building them for every renderer made parallel headless tests
+    /// that turns it on: sprite, tri, tri clamp, lit, the three blended
+    /// ones and the three additive ones. (Building them for every renderer made parallel headless tests
     /// crash RADV.)
     sources: SceneSources,
     ms_pipelines: Option<[wgpu::RenderPipeline; SCENE_PIPES]>,
@@ -504,6 +508,9 @@ pub struct PcRenderer {
     /// Texture of each pending triangle (parallel to `pending_tris`; only
     /// allocated into when the batch has textured draws).
     pending_tex: Vec<Option<TexKey>>,
+    /// Per pending triangle: from an additive draw (`Blend::Add`).
+    /// Materialized like `pending_tex`, once an additive draw joins.
+    pending_add: Vec<bool>,
     /// Per-pixel lighting inputs of each pending triangle (parallel; only
     /// allocated into once a lit draw joins the batch).
     pending_surf: Vec<Option<SurfTri>>,
@@ -1193,8 +1200,24 @@ fn create_targets(
 pub const MSAA_SAMPLES: u32 = 4;
 
 /// The scene pipelines of one target ([`scene_pipelines`]): sprite, tri,
-/// tri clamp, lit, then tri, tri clamp and lit for blended triangles.
-pub(crate) const SCENE_PIPES: usize = 7;
+/// tri clamp, lit, then tri, tri clamp and lit for blended triangles, and
+/// the same three for additive ones (`Blend::Add`).
+pub(crate) const SCENE_PIPES: usize = 10;
+
+/// `Blend::Add` (ADR 0043 §2): the source weighted by its alpha, added to
+/// what is there; the destination's alpha kept.
+const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 /// The shader and layouts the scene pipelines are built from, kept so the
 /// multisampled set ([`PcRenderer::set_msaa`]) is only built when asked for.
 #[derive(Clone)]
@@ -1267,6 +1290,16 @@ fn lit_attributes() -> Vec<wgpu::VertexAttribute> {
 
 /// The four scene pipelines for a target with `samples` samples per pixel:
 /// sprite, tri, tri clamp (billboards), lit.
+/// How a batch triangle meets what is behind it (its pipeline family).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    Opaque,
+    /// Blended by alpha ([`blends`]).
+    Blend,
+    /// Added (`Blend::Add`).
+    Add,
+}
+
 /// Whether a batch triangle blends with what is behind it: a vertex alpha
 /// below 255, or a tiled (model) texture with texels below full alpha.
 /// Billboards' clamped textures are cut out at half alpha (`fs_tri_clamp`)
@@ -1331,6 +1364,7 @@ fn batch_keys(
     tris: &[ScreenTri],
     tex: &[Option<TexKey>],
     surf: &[Option<SurfTri>],
+    add: &[bool],
     alpha_texture: impl Fn(u32) -> bool,
 ) -> Vec<(u64, u64)> {
     let mut keys: Vec<(u64, u64)> = tris
@@ -1350,7 +1384,9 @@ fn batch_keys(
             let painter = trino_core::render3d::painter_key(tri.depth, i);
             if s.is_some_and(|s| s.water) {
                 (1 << 63 | group << 1 | lit, painter)
-            } else if blends(tri, t, &alpha_texture) {
+            } else if add.get(i).copied().unwrap_or(false) || blends(tri, t, &alpha_texture) {
+                // Additive triangles (`Blend::Add`) sort among the blended
+                // ones: adding commutes, blending over them doesn't.
                 (1 << 62, painter)
             } else {
                 (group << 1 | lit, painter)
@@ -1454,8 +1490,9 @@ fn scene_pipelines(
             },
         )
     };
+    const ALPHA: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
     let tri_attrs = tri_attributes();
-    let make_tri_pipeline = |fragment: &str, samples: u32, depth_write: bool| {
+    let make_tri_pipeline = |fragment: &str, samples: u32, depth_write: bool, blend| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
@@ -1477,7 +1514,7 @@ fn scene_pipelines(
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -1503,7 +1540,7 @@ fn scene_pipelines(
         )
     };
     let lit_attrs = lit_attributes();
-    let make_lit_pipeline = |samples: u32, depth_write: bool| {
+    let make_lit_pipeline = |samples: u32, depth_write: bool, blend| {
         crate::renderer::pipes::render(
             device,
             wgpu::RenderPipelineDescriptor {
@@ -1525,7 +1562,7 @@ fn scene_pipelines(
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -1548,12 +1585,15 @@ fn scene_pipelines(
     };
     [
         make_sprite_pipeline(samples),
-        make_tri_pipeline("fs_tri", samples, true),
-        make_tri_pipeline("fs_tri_clamp", samples, true),
-        make_lit_pipeline(samples, true),
-        make_tri_pipeline("fs_tri", samples, false),
-        make_tri_pipeline("fs_tri_clamp", samples, false),
-        make_lit_pipeline(samples, false),
+        make_tri_pipeline("fs_tri", samples, true, ALPHA),
+        make_tri_pipeline("fs_tri_clamp", samples, true, ALPHA),
+        make_lit_pipeline(samples, true, ALPHA),
+        make_tri_pipeline("fs_tri", samples, false, ALPHA),
+        make_tri_pipeline("fs_tri_clamp", samples, false, ALPHA),
+        make_lit_pipeline(samples, false, ALPHA),
+        make_tri_pipeline("fs_tri_add", samples, false, ADDITIVE),
+        make_tri_pipeline("fs_tri_clamp_add", samples, false, ADDITIVE),
+        make_lit_pipeline(samples, false, ADDITIVE),
     ]
 }
 
@@ -2282,6 +2322,9 @@ impl PcRenderer {
             blend_plain,
             blend_clamp,
             blend_lit,
+            add_plain,
+            add_clamp,
+            add_lit,
         ] = scene_pipelines(&device, &sources, 1, OFFSCREEN_FORMAT);
 
         // Water: the lit vertices, groups 0..2 as the lit pipeline (the
@@ -2496,6 +2539,7 @@ impl PcRenderer {
             tri_clamp_pipeline,
             lit_pipeline,
             blend_pipelines: [blend_plain, blend_clamp, blend_lit],
+            add_pipelines: [add_plain, add_clamp, add_lit],
             sources,
             ms_pipelines: None,
             msaa: 1,
@@ -2545,6 +2589,7 @@ impl PcRenderer {
             tri_verts: Vec::new(),
             pending_tris: Vec::new(),
             pending_tex: Vec::new(),
+            pending_add: Vec::new(),
             pending_surf: Vec::new(),
             locals: LightList::EMPTY,
             poses: Vec::new(),
@@ -3766,6 +3811,7 @@ impl PcRenderer {
         self.tri_verts.clear();
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_add.clear();
         self.pending_surf.clear();
         self.light_sets.clear();
         self.water_sets.clear();
@@ -4744,6 +4790,7 @@ impl PcRenderer {
                     self.pending_surf.extend_from_slice(&chunk.surf[at..at + n]);
                 }
                 self.tag_pending(before, n, job.texture);
+                self.tag_add(before, n, job.params.blend);
                 self.frame_stats.tnl.add(&stats);
                 at += n;
             }
@@ -4763,17 +4810,25 @@ impl PcRenderer {
             &self.pending_tris,
             &self.pending_tex,
             &self.pending_surf,
+            &self.pending_add,
             |id| self.sprites.get(&id).is_some_and(|e| e.alpha),
         );
-        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>, bool)> = keys
+        let order: Vec<(Option<TexKey>, ScreenTri, Option<SurfTri>, Mode)> = keys
             .iter()
             .map(|&(k, key)| {
                 let i = trino_core::render3d::painter_index(key);
+                let mode = if k >> 62 != 1 {
+                    Mode::Opaque
+                } else if self.pending_add.get(i).copied().unwrap_or(false) {
+                    Mode::Add
+                } else {
+                    Mode::Blend
+                };
                 (
                     self.pending_tex.get(i).copied().flatten(),
                     self.pending_tris[i],
                     self.pending_surf.get(i).copied().flatten(),
-                    k >> 62 == 1,
+                    mode,
                 )
             })
             .collect();
@@ -4816,12 +4871,13 @@ impl PcRenderer {
         self.push_gpu_runs(&ids, true);
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_add.clear();
         self.pending_surf.clear();
     }
 
     /// Append `order`'s triangles as GPU vertices and commands, a command
     /// per run of one texture and pipeline.
-    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>, bool)]) {
+    fn push_tri_runs(&mut self, order: &[(Option<TexKey>, ScreenTri, Option<SurfTri>, Mode)]) {
         let rgba = |c: Color| {
             [
                 c.r as f32 / 255.0,
@@ -4830,12 +4886,14 @@ impl PcRenderer {
                 c.a as f32 / 255.0,
             ]
         };
-        let kind = |s: &Option<SurfTri>, blend: bool| match s {
-            None if blend => TriKind::PlainBlend,
-            None => TriKind::Plain,
-            Some(s) if s.water => TriKind::Water,
-            Some(_) if blend => TriKind::LitBlend,
-            Some(_) => TriKind::Lit,
+        let kind = |s: &Option<SurfTri>, mode: Mode| match (s, mode) {
+            (Some(s), _) if s.water => TriKind::Water,
+            (None, Mode::Opaque) => TriKind::Plain,
+            (None, Mode::Blend) => TriKind::PlainBlend,
+            (None, Mode::Add) => TriKind::PlainAdd,
+            (Some(_), Mode::Opaque) => TriKind::Lit,
+            (Some(_), Mode::Blend) => TriKind::LitBlend,
+            (Some(_), Mode::Add) => TriKind::LitAdd,
         };
         let mut run_start = self.tri_verts.len() as u32;
         let mut run = order.first().map(|(t, _, s, b)| (*t, kind(s, *b)));
@@ -5204,6 +5262,16 @@ impl PcRenderer {
         }
     }
 
+    /// Record whether the `added` triangles appended at `before` add
+    /// (`Blend::Add`; the list is only materialized once one does).
+    fn tag_add(&mut self, before: usize, added: usize, blend: trino_core::Blend) {
+        let add = blend == trino_core::Blend::Add;
+        if add || !self.pending_add.is_empty() {
+            self.pending_add.resize(before, false);
+            self.pending_add.extend(std::iter::repeat_n(add, added));
+        }
+    }
+
     /// Record the texture of the `added` triangles appended at `before`
     /// (the tag list is only materialized once a textured draw joins).
     fn tag_pending(&mut self, before: usize, added: usize, key: Option<TexKey>) {
@@ -5486,7 +5554,10 @@ impl PcRenderer {
         };
         if segments.iter().any(|s| match s {
             Segment::Tris { kind, .. } => {
-                matches!(kind, TriKind::Lit | TriKind::LitBlend | TriKind::Water)
+                matches!(
+                    kind,
+                    TriKind::Lit | TriKind::LitBlend | TriKind::LitAdd | TriKind::Water
+                )
             }
             Segment::Meshes { first, count, .. } => gpu_lit(*first, *count),
             Segment::Sprites { .. } => false,
@@ -6073,6 +6144,9 @@ impl PcRenderer {
                 &self.blend_pipelines[0],
                 &self.blend_pipelines[1],
                 &self.blend_pipelines[2],
+                &self.add_pipelines[0],
+                &self.add_pipelines[1],
+                &self.add_pipelines[2],
             ],
         };
         let mut draws = 0;
@@ -6163,6 +6237,12 @@ impl PcRenderer {
                             pass.set_bind_group(2, &self.lights_bg, &[]);
                             (pipes[6], 11)
                         }
+                        TriKind::LitAdd => {
+                            pass.set_bind_group(2, &self.lights_bg, &[]);
+                            (pipes[9], 14)
+                        }
+                        TriKind::PlainAdd if texture.is_some_and(|t| t.clamp) => (pipes[8], 13),
+                        TriKind::PlainAdd => (pipes[7], 12),
                         TriKind::Plain if texture.is_some_and(|t| t.clamp) => (pipes[2], 2),
                         TriKind::Plain => (pipes[1], 1),
                         TriKind::PlainBlend if texture.is_some_and(|t| t.clamp) => (pipes[5], 10),
@@ -6589,6 +6669,7 @@ impl Renderer for PcRenderer {
         self.tri_verts.clear();
         self.pending_tris.clear();
         self.pending_tex.clear();
+        self.pending_add.clear();
         self.pending_surf.clear();
         self.locals = LightList::EMPTY;
         self.poses.clear();
@@ -7302,6 +7383,7 @@ impl Renderer for PcRenderer {
         }
         let added = self.pending_tris.len() - before;
         self.tag_pending(before, added, texkey);
+        self.tag_add(before, added, params.blend);
     }
 
     fn draw_mesh(&mut self, mesh: &DynamicMesh<'_>, matrix: &Mat34, params: &ModelParams) {
@@ -8304,7 +8386,7 @@ mod batch_order_tests {
             tex(5, true),
             tex(7, false),
         ];
-        let keys = batch_keys(&tris, &texs, &[], |id| id == 5);
+        let keys = batch_keys(&tris, &texs, &[], &[], |id| id == 5);
         let order: Vec<usize> = keys
             .iter()
             .map(|&(_, k)| trino_core::render3d::painter_index(k))

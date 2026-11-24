@@ -47,7 +47,7 @@ pub mod steam;
 pub mod ui;
 
 pub use library::{Library, ModelBounds};
-pub use material::{DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};
+pub use material::{BlendDef, DetailDef, FilterDef, MaterialDef, ShadingDef, WaterDef};
 pub use platform::{PlatformVariants, Target, Variant};
 pub use prefab::{Override, Prefab, PrefabInstance};
 pub use resolve::{DrawItem, LodDraw, LodItem, Resolved, resolve, resolve_for};

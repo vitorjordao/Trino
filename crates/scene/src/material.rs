@@ -89,6 +89,40 @@ pub struct MaterialDef {
     /// vertex alpha and `tint`'s alpha.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub water: Option<WaterDef>,
+    /// `Add`: light added to the frame (sparks, flames, glows; ADR 0043
+    /// §2); `Alpha` (the default) blends by alpha where it isn't opaque.
+    #[serde(default, skip_serializing_if = "BlendDef::is_default")]
+    pub blend: BlendDef,
+}
+
+/// Mirror of `trino_core::Blend`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BlendDef {
+    #[default]
+    Alpha,
+    Add,
+}
+
+impl BlendDef {
+    pub const ALL: [BlendDef; 2] = [BlendDef::Alpha, BlendDef::Add];
+
+    pub fn core(self) -> trino_core::Blend {
+        match self {
+            BlendDef::Alpha => trino_core::Blend::Alpha,
+            BlendDef::Add => trino_core::Blend::Add,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == BlendDef::Alpha
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BlendDef::Alpha => "Alpha",
+            BlendDef::Add => "Additive",
+        }
+    }
 }
 
 /// Mirror of `trino_core::Water` (serde lives here, not in the core).
@@ -236,6 +270,7 @@ impl Default for MaterialDef {
             filter: FilterDef::Default,
             detail: None,
             water: None,
+            blend: BlendDef::Alpha,
         }
     }
 }
@@ -291,6 +326,7 @@ impl MaterialDef {
                 )
             }),
             water: self.water.map(|w| w.core()),
+            blend: self.blend.core(),
             ..ModelParams::DEFAULT
         }
     }
@@ -316,6 +352,23 @@ mod tests {
             MaterialDef::from_ron("(version: 9)")
                 .unwrap_err()
                 .contains("update")
+        );
+    }
+
+    #[test]
+    fn blend_round_trips_and_defaults_to_alpha() {
+        let m = MaterialDef {
+            blend: BlendDef::Add,
+            ..MaterialDef::default()
+        };
+        let text = m.to_ron();
+        assert!(text.contains("blend: Add"), "{text}");
+        let back = MaterialDef::from_ron(&text).unwrap();
+        assert_eq!(back.params(None).blend, trino_core::Blend::Add);
+        assert!(!MaterialDef::default().to_ron().contains("blend"));
+        assert_eq!(
+            MaterialDef::default().params(None).blend,
+            trino_core::Blend::Alpha
         );
     }
 

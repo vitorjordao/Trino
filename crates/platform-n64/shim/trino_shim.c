@@ -826,6 +826,26 @@ static __attribute__((noinline)) uint32_t trino_3d_water_body(void* sprite, void
     return dt != NULL;
 }
 
+// Additive triangles (Blend::Add, ADR 0043 §2): over the mode just bound
+// (trino_3d_begin, trino_3d_texture_ex), the RDP's additive blender
+// (IN_RGB * IN_ALPHA + MEMORY_RGB; the RDP doesn't saturate, so a sum past
+// white wraps), z compared, not written. on = 0: the caches forget the
+// mode, so the next 3D draw binds its own again.
+void trino_3d_additive(uint32_t on)
+{
+    if (on) {
+        rdpq_mode_blender(RDPQ_BLENDER_ADDITIVE);
+        rdpq_mode_zbuf(true, false);
+        rdpq_mode_alphacompare(0);
+        return;
+    }
+    trino_mode_3d = 0;
+    trino_t3_mode = 0;
+    trino_w_mode = 0;
+    trino_2d_ready = 0;
+    trino_fill_ready = 0;
+}
+
 // Shadows (ADR 0025): blob and planar shadow triangles blend the shade's
 // color over the 3D by its alpha, z-tested and never written, like water
 // (the core moved them a few z steps in front of their receiver).

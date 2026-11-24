@@ -36,7 +36,8 @@ pub enum GpuReject {
     /// More vertices than 16-bit indices address.
     TooManyVertices,
     // The draw.
-    /// A tint with alpha below 255.
+    /// A tint with alpha below 255, or an additive draw
+    /// ([`Blend::Add`](crate::Blend::Add)).
     Translucent,
     /// A palette on a mesh with color slots.
     Palette,
@@ -186,7 +187,7 @@ pub fn gpu_check_mv(
     if params.water.is_some() {
         return Err(GpuReject::Water);
     }
-    if params.tint.a < 255 {
+    if params.tint.a < 255 || params.blend != crate::render::Blend::Alpha {
         return Err(GpuReject::Translucent);
     }
     if params.palette.is_some() && mesh.has_slots() {

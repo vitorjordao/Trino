@@ -10,9 +10,9 @@ use trino_core::HwTier;
 use trino_core::PrecompileRequest;
 use trino_core::math3d::{cos, sin};
 use trino_core::{
-    BakedScene, BillboardParams, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT, DetailTexture,
-    Effect, Emitter, EntityStore, FontId, Impostor, InputState, Instance, Light, LocalLight,
-    Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, QualityPreset,
+    BakedScene, BillboardParams, Blend, BlobId, Camera3, Cells, Color, DEFAULT_LIGHT,
+    DetailTexture, Effect, Emitter, EntityStore, FontId, Impostor, InputState, Instance, Light,
+    LocalLight, Material, ModelId, ModelParams, Palette, ParticleSystem, Platform, QualityPreset,
     QualitySettings, Rect, Renderer, Screen, Shading, ShadowCast, ShadowPlane, ShadowSettings,
     ShadowTier, SpriteId, SpriteParams, TexFilter, TextBuf, TextParams, Transform3, Vec2, Vec3,
 };
@@ -110,6 +110,12 @@ pub fn engine_checks(
         MipProbe::Skipped => "TRINO_STEP:mipmaps skipped (no read_pixel)\n",
         MipProbe::LevelZero => "TRINO_STEP:mipmaps level 0 only on this target\n",
     });
+    platform.log("TRINO_STEP:additive\n");
+    if additive(renderer)? {
+        platform.log("TRINO_STEP:additive probed four quadrants\n");
+    } else {
+        platform.log("TRINO_STEP:additive skipped (no read_pixel)\n");
+    }
     platform.log("TRINO_STEP:local lights\n");
     if local_lights(renderer)? {
         platform.log("TRINO_STEP:local lights probed\n");
@@ -2675,6 +2681,99 @@ pub fn mipmaps(renderer: &mut dyn Renderer) -> Result<MipProbe, &'static str> {
         }
     }
     Ok(MipProbe::Probed)
+}
+
+/// Additive draws ([`Blend::Add`](trino_core::Blend::Add), Bongo-Kart
+/// #179, ADR 0043 §2): the card, dimmed, in front of a big dim backdrop
+/// card. Three frames read the same four probes (one per quadrant of the
+/// small card): the backdrop alone, the card alone over black, then the
+/// card added over the backdrop — which must read their sum. Dim on
+/// purpose: the N64's blender wraps a sum past white. The card leaves the
+/// RSP and the PICA200 (their rules) and its triangles take each target's
+/// additive mode (the RDP's blender, `GPU_BLEND_ADD`, a wgpu blend state).
+/// `Ok(false)` where `read_pixel` is unsupported.
+#[inline(never)]
+pub fn additive(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    let px = 80.0;
+    let card = Transform3 {
+        scale: Vec3::new(px * 1.2 / focal, px * 1.2 / focal, 1.0),
+        ..Transform3::default()
+    };
+    let back = Transform3 {
+        position: Vec3::new(0.0, 0.0, 1.0),
+        scale: Vec3::new(screen.x * 2.2 / focal, screen.x * 2.2 / focal, 1.0),
+        ..Transform3::default()
+    };
+    let dim = |v: u8, blend| ModelParams {
+        shading: Shading::Unlit,
+        tint: Color::rgb(v, v, v),
+        filter: TexFilter::Point,
+        blend,
+        ..ModelParams::DEFAULT
+    };
+    let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+    let q = px * 0.25;
+    let probes = [
+        (cx - q, cy - q),
+        (cx + q, cy - q),
+        (cx - q, cy + q),
+        (cx + q, cy + q),
+    ];
+    let read = |renderer: &mut dyn Renderer, backdrop: bool, front: Option<Blend>| {
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            if backdrop {
+                renderer.draw_model(CARD, &back, Material::VertexLit, &dim(60, Blend::Alpha));
+            }
+            if let Some(b) = front {
+                renderer.draw_model(CARD, &card, Material::VertexLit, &dim(110, b));
+            }
+            renderer.end_frame();
+        }
+        let mut out = [Color::BLACK; 4];
+        for (o, &(x, y)) in out.iter_mut().zip(&probes) {
+            *o = renderer.read_pixel(x as u32, y as u32)?;
+        }
+        Some(out)
+    };
+    let Some(bg) = read(renderer, true, None) else {
+        return Ok(false);
+    };
+    let card_alone = read(renderer, false, Some(Blend::Alpha)).ok_or("additive: no read")?;
+    let sum = read(renderer, true, Some(Blend::Add)).ok_or("additive: no read")?;
+    let opaque = read(renderer, true, Some(Blend::Alpha)).ok_or("additive: no read")?;
+    // The N64's 16-bit framebuffer quantizes and dithers each term.
+    let tol = 20;
+    let near = |a: u8, b: i32| (a as i32 - b).abs() <= tol;
+    for k in 0..4 {
+        let (b, c, s, o) = (bg[k], card_alone[k], sum[k], opaque[k]);
+        let want = |x: u8, y: u8| (x as i32 + y as i32).min(255);
+        if !(near(s.r, want(b.r, c.r)) && near(s.g, want(b.g, c.g)) && near(s.b, want(b.b, c.b))) {
+            return Err("additive: the card is not the backdrop plus its light");
+        }
+        if !(near(o.r, c.r as i32) && near(o.g, c.g as i32) && near(o.b, c.b as i32)) {
+            return Err("additive: the plain card does not cover the backdrop");
+        }
+    }
+    // Something to add: the backdrop shows under the probes.
+    if bg
+        .iter()
+        .all(|c| c.r as u32 + c.g as u32 + c.b as u32 <= 3 * tol as u32)
+    {
+        return Err("additive: the backdrop is black under the probes");
+    }
+    Ok(true)
 }
 
 /// The AO probe panel, with ambient occlusion baked into its vertex colors.

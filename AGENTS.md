@@ -537,6 +537,15 @@ since #122.
   `Caps::mipmaps` (PC native, Web), 2D draws and the console profiles keep level 0
   (`set_mipmaps`, `TRINO_MIPS=0`). Tests: `crates/platform-pc/tests/mipmaps.rs` (far-floor
   moiré per quality preset), `crates/asset-pipeline/tests/mipmaps.rs`, the `mipmaps` step.
+- **Additive blending (2026-11-23, ADR 0043 §2, Bongo-Kart #179):** `ModelParams::blend`
+  (`Blend::Alpha` default, `Blend::Add` = `dst + src·a`, depth tested, never written;
+  water ignores it), `blend: Add` in materials, TSCN's reserved surface byte. Additive
+  draws leave the RSP, the PICA200 and the PC's GPU T&L (`PcGpuReject::Additive`) and the
+  N64 memo; their CPU triangles take each target's mode: PC/Web three scene pipelines
+  sorted among the blended triangles, N64 a bucket with `RDPQ_BLENDER_ADDITIVE`
+  (`trino_3d_additive`; the RDP wraps a sum past white: keep it dim), 3DS a bucket with
+  `GPU_BLEND_ADD`. Tests: `crates/platform-pc/tests/additive.rs`, `crates/core/tests/
+  blend.rs`, the `additive` step.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -1755,6 +1764,11 @@ cargo test --workspace
   streak left gaps between the composite's taps, eight stepped copies at strength 0.8.
   Gather the full-strength sub-streak everywhere and let the composite's taps overlap;
   hold the frame to a one-pass CPU reference (`SpeedBlur::gather`), not to the eye.
+- **The PC's N64 look stores one bit of alpha** (`quantize_5551`: alpha ≥ 0.5 or 0). A
+  pipeline that blends by the source alpha in that look (shadows, additive) returns the
+  full alpha beside the quantized color (`fs_shadow`, `fs_tri_add`), as the RDP's blender
+  weighs by the combiner's alpha; otherwise soft sparks turn into hard, saturated stars
+  in the N64 profile only (Bongo-Kart #179).
 - **Trino's vertex colors are 8-bit, so "HDR" is only per-pixel light** (local lights,
   highlights, the wet floor, issue #64): bloom thresholds in linear light with a soft
   knee and defaults to 0.8 so an unlit white glows; a threshold of 1.0 blooms almost

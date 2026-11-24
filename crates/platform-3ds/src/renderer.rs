@@ -17,9 +17,10 @@ use trino_core::shadow::{self as sh, BLOB_TEXTURE_SIZE, PlanarDraw, SHADOW_Z_STE
 use trino_core::stereo::{Eye, LayerDepth, StereoCmd, StereoFrame, StereoMono, StereoSettings};
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
-    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34, Material,
-    ModelId, ModelParams, Renderer, Ripple, Screen, ShadowFrame, ShadowPlane, ShadowSettings,
-    ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2, Vec3, WaterState,
+    BillboardParams, Blend, Caps, Color, FontId, FrameStats, LightList, LocalLight, Mat34,
+    Material, ModelId, ModelParams, Renderer, Ripple, Screen, ShadowFrame, ShadowPlane,
+    ShadowSettings, ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
+    Vec3, WaterState,
 };
 
 use crate::ffi;
@@ -127,6 +128,13 @@ pub struct N3dsRenderer {
     /// writing depth.
     pending_water: Vec<ScreenTri>,
     pending_water_tex: Vec<Option<TexBind>>,
+    /// The batch's additive triangles (`Blend::Add`, ADR 0043 §2) and what
+    /// each samples: drawn last (`GPU_BLEND_ADD`, depth tested, not
+    /// written).
+    pending_add: Vec<ScreenTri>,
+    pending_add_tex: Vec<Option<TexBind>>,
+    /// Inside [`Self::draw_additive`]: the draw underneath is the plain one.
+    adding: bool,
     /// Water meshes copied for the GPU water program (`water.v.pica`), by
     /// model, made on their first water draw (null: no linear memory).
     gpu_water_meshes: BTreeMap<u32, *mut c_void>,
@@ -173,6 +181,11 @@ struct GpuShadow {
     uniforms: [f32; GPU_UNIFORM_FLOATS],
     mark: Option<([ScreenTri; 7], usize)>,
 }
+
+/// `trino_3d_material` flags of a run: bit 8 water (ADR 0015), bit 14
+/// additive (`Blend::Add`, ADR 0043 §2).
+const MATERIAL_WATER: u32 = 1 << 8;
+const MATERIAL_ADD: u32 = 1 << 14;
 
 /// `trino_3d_material` flags of the shadow draws (ADR 0025): bit 9 a
 /// shadow, bits 10..12 the stencil's part, bit 13 the blob texture.
@@ -237,6 +250,9 @@ impl N3dsRenderer {
             water_state: WaterState::NONE,
             pending_water: Vec::new(),
             pending_water_tex: Vec::new(),
+            pending_add: Vec::new(),
+            pending_add_tex: Vec::new(),
+            adding: false,
             gpu_water_meshes: BTreeMap::new(),
             pending_gpu_water: Vec::new(),
             frame_no: 0,
@@ -403,6 +419,58 @@ impl N3dsRenderer {
         self.flush_shadows();
         self.flush_gpu_water();
         self.flush_water();
+        self.flush_additive();
+    }
+
+    /// The batch's additive triangles, last (adding commutes: grouped by
+    /// texture, no depth order).
+    fn flush_additive(&mut self) {
+        if self.pending_add.is_empty() {
+            return;
+        }
+        self.frame_stats.tris += self.pending_add.len() as u32;
+        self.order.clear();
+        for (i, tri) in self.pending_add.iter().enumerate() {
+            let group = self.pending_add_tex[i].map_or(0, |t| t.group());
+            self.order.push((group, painter_key(tri.depth, i)));
+        }
+        self.order.sort_unstable();
+        let mut run: Option<Option<TexBind>> = None;
+        self.verts.clear();
+        for k in 0..self.order.len() {
+            let i = painter_index(self.order[k].1);
+            let tex = self.pending_add_tex[i].filter(|t| self.sprites.contains_key(&t.id));
+            if run != Some(tex) {
+                if let Some(prev) = run {
+                    self.draw_run_with(prev, MATERIAL_ADD);
+                }
+                run = Some(tex);
+            }
+            push_tri(&mut self.verts, &self.pending_add[i], tex.is_some());
+        }
+        if let Some(prev) = run {
+            self.draw_run_with(prev, MATERIAL_ADD);
+        }
+        self.pending_add.clear();
+        self.pending_add_tex.clear();
+        self.sprite_depth = SPRITE_DEPTH_HUD;
+    }
+
+    /// An additive draw (`Blend::Add`): the CPU T&L draws it like any other
+    /// (`gpu_check` never takes one), then its triangles move to the
+    /// additive bucket.
+    fn draw_additive(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        let before = self.pending_tris.len();
+        self.adding = true;
+        self.draw_model_matrix(model, matrix, Material::VertexLit, params);
+        self.adding = false;
+        let at = before.min(self.pending_tris.len());
+        for (k, tri) in self.pending_tris.drain(at..).enumerate() {
+            self.pending_add.push(tri);
+            let tex = self.pending_tex.get(at + k).copied().flatten();
+            self.pending_add_tex.push(tex);
+        }
+        self.pending_tex.truncate(at);
     }
 
     /// The batch's shadows, over its opaque 3D: the CPU's (blobs, then
@@ -628,14 +696,14 @@ impl N3dsRenderer {
             let tex = self.pending_water_tex[i].filter(|t| self.sprites.contains_key(&t.id));
             if run != Some(tex) {
                 if let Some(prev) = run {
-                    self.draw_run_with(prev, true);
+                    self.draw_run_with(prev, MATERIAL_WATER);
                 }
                 run = Some(tex);
             }
             push_tri(&mut self.verts, &self.pending_water[i], tex.is_some());
         }
         if let Some(prev) = run {
-            self.draw_run_with(prev, true);
+            self.draw_run_with(prev, MATERIAL_WATER);
         }
         self.pending_water.clear();
         self.pending_water_tex.clear();
@@ -686,17 +754,17 @@ impl N3dsRenderer {
 
     /// Hand the staged vertices to the shim as one citro3d draw.
     fn draw_run(&mut self, tex: Option<TexBind>) {
-        self.draw_run_with(tex, false);
+        self.draw_run_with(tex, 0);
     }
 
     /// [`Self::draw_run`], as water (`water`: ADR 0015's material) or not.
     /// The material is set for every run, so water never leaks into the
     /// next draw.
-    fn draw_run_with(&mut self, tex: Option<TexBind>, water: bool) {
+    fn draw_run_with(&mut self, tex: Option<TexBind>, material: u32) {
         if self.verts.is_empty() {
             return;
         }
-        let water_bit = (water as u32) << 8;
+        let water_bit = material;
         let (sheet, clamp) = match tex.and_then(|t| self.sprites.get(&t.id).map(|e| (e, t))) {
             Some((entry, t)) => {
                 let detail = t
@@ -1278,6 +1346,10 @@ impl Renderer for N3dsRenderer {
             return;
         }
         trino_core::zone!("draw");
+        if params.blend == Blend::Add && params.water.is_none() && !self.adding {
+            self.draw_additive(model, matrix, params);
+            return;
+        }
         if params.anim.is_some_and(|a| a.pose != 0) {
             self.prepare_pose(model, params);
         }

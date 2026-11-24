@@ -23,8 +23,8 @@ use trino_core::render3d::{
 use trino_core::shadow::{self as sh, BLOB_TEXTURE_SIZE, ShadowPlan};
 use trino_core::text::{BitmapFont, GlyphIndex};
 use trino_core::{
-    BillboardParams, Caps, Color, FontId, FrameStats, LightList, LocalLight, MAX_RIPPLES, Mat34,
-    Material, ModelId, ModelParams, Renderer, Ripple, Shading, ShadowFrame, ShadowPlane,
+    BillboardParams, Blend, Caps, Color, FontId, FrameStats, LightList, LocalLight, MAX_RIPPLES,
+    Mat34, Material, ModelId, ModelParams, Renderer, Ripple, Shading, ShadowFrame, ShadowPlane,
     ShadowSettings, ShadowTier, SpriteId, SpriteParams, TexFilter, TextParams, Transform3, Vec2,
     Vec3, WaterState,
 };
@@ -186,6 +186,14 @@ pub struct N64Renderer {
     batch_floor: u32,
     /// Buffers the trim shrank since boot (the self-test logs it).
     trims: u32,
+    /// The batch's additive triangles (`Blend::Add`, ADR 0043 §2) and what
+    /// each samples: drawn last, with the RDP's additive blender, z-tested
+    /// and not written. Last in the struct: the hot fields keep their
+    /// offsets.
+    pending_add: Vec<ScreenTri>,
+    pending_add_tex: Vec<Option<TexBind>>,
+    /// Inside [`Self::draw_additive`]: the draw underneath is the plain one.
+    adding: bool,
 }
 
 /// Batch buffer groups [`N64Renderer::trim`] follows: the CPU triangles
@@ -283,6 +291,8 @@ impl N64Renderer {
         drop_empty(&mut self.pending_ring_rsp);
         drop_empty(&mut self.pending_blobs);
         drop_empty(&mut self.pending_shadow);
+        drop_empty(&mut self.pending_add);
+        drop_empty(&mut self.pending_add_tex);
         // And the heap's free top back to sbrk, so the next big block can
         // use it (`runtime::heap_trim`).
         crate::runtime::heap_trim();
@@ -383,6 +393,8 @@ impl N64Renderer {
             + b(&self.pending_water_tex)
             + b(&self.pending_water_rsp)
             + b(&self.pending_ring_rsp)
+            + b(&self.pending_add)
+            + b(&self.pending_add_tex)
     }
 
     pub fn start_profile(&mut self) {
@@ -497,6 +509,9 @@ impl N64Renderer {
             trim: TrimWindow::new(TRIM_FRAMES),
             batch_floor: 0,
             trims: 0,
+            pending_add: Vec::new(),
+            pending_add_tex: Vec::new(),
+            adding: false,
         }
     }
 
@@ -514,6 +529,9 @@ impl N64Renderer {
         }
         self.flush_shadows();
         self.flush_water();
+        if !self.pending_add.is_empty() {
+            self.flush_additive();
+        }
         // What follows (2D, the next frame) changes the mode and TMEM.
         self.water_bound = [0; 4];
     }
@@ -723,6 +741,69 @@ impl N64Renderer {
         self.charge(t1, |s| &mut s.submit);
         self.pending_water.clear();
         self.pending_water_tex.clear();
+    }
+
+    /// The batch's additive triangles (`Blend::Add`), after everything else
+    /// in it: grouped by texture (adding commutes, so no depth order), each
+    /// texture's mode bound, then the RDP's additive blender over it.
+    #[inline(never)]
+    fn flush_additive(&mut self) {
+        self.frame_stats.tris += self.pending_add.len() as u32;
+        self.order.clear();
+        for (i, tri) in self.pending_add.iter().enumerate() {
+            let group = self.pending_add_tex.get(i).copied().flatten();
+            let group = group.map_or(0, |t| t.group());
+            self.order.push((group, painter_key(tri.depth, i)));
+        }
+        self.order.sort_unstable();
+        let mut bound: Option<Option<TexBind>> = None;
+        for &(_, key) in &self.order {
+            let i = painter_index(key);
+            let tex = self.pending_add_tex.get(i).copied().flatten();
+            let sprite = tex.and_then(|t| self.sprites.get(&t.id).map(|e| (e, t)));
+            if bound != Some(tex) {
+                match sprite {
+                    Some((entry, t)) => {
+                        let flags = t.clamp as u32 | ((t.filter == TexFilter::Point) as u32) << 1;
+                        unsafe {
+                            ffi::trino_3d_texture_ex(entry.ptr, core::ptr::null_mut(), flags)
+                        };
+                    }
+                    None => unsafe { ffi::trino_3d_begin() },
+                }
+                unsafe { ffi::trino_3d_additive(1) };
+                bound = Some(tex);
+            }
+            if sprite.is_some() {
+                emit_tri_tex(&self.pending_add[i]);
+            } else {
+                emit_tri(&self.pending_add[i]);
+            }
+        }
+        // The next draw sets its own mode (the opaque one).
+        unsafe { ffi::trino_3d_additive(0) };
+        self.pending_add.clear();
+        self.pending_add_tex.clear();
+    }
+
+    /// An additive draw (`Blend::Add`): the CPU T&L draws it like any other
+    /// (the RSP never takes one), then its triangles move to the additive
+    /// bucket.
+    #[inline(never)]
+    fn draw_additive(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
+        let before = self.pending_tris.len();
+        let rsp = core::mem::replace(&mut self.rsp_on, false);
+        self.adding = true;
+        self.draw_model_matrix(model, matrix, Material::VertexLit, params);
+        self.adding = false;
+        self.rsp_on = rsp;
+        let at = before.min(self.pending_tris.len());
+        for (k, tri) in self.pending_tris.drain(at..).enumerate() {
+            self.pending_add.push(tri);
+            let tex = self.pending_tex.get(at + k).copied().flatten();
+            self.pending_add_tex.push(tex);
+        }
+        self.pending_tex.truncate(at);
     }
 
     /// A water draw (`ModelParams::water`): the CPU T&L displaces and
@@ -1492,6 +1573,10 @@ impl N64Renderer {
             self.draw_water(model, matrix, params);
             return true;
         }
+        if params.blend == Blend::Add && !self.adding {
+            self.draw_additive(model, matrix, params);
+            return true;
+        }
         if params.anim.is_some_and(|a| a.pose != 0) {
             self.prepare_pose(model, params);
         }
@@ -1943,6 +2028,7 @@ impl Renderer for N64Renderer {
         if params.water.is_some()
             || params.anim.is_some()
             || params.shadow.casts()
+            || params.blend != Blend::Alpha
             || (self.rsp_on && !self.rsp_rigid.is_empty())
         {
             if self.draw_model_special(model, matrix, params) {

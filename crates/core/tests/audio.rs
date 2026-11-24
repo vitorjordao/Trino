@@ -293,3 +293,59 @@ fn ambience_survives_a_mixer_without_free_voices() {
     assert_eq!(amb.active(), 1);
     assert_eq!(a.voices.len(), 1);
 }
+
+/// Pitch, music control and bus filters (Bongo-Kart #175, #177) on the
+/// four-method backend: it reports no features, a crossfade is a cut, the
+/// layers play their first, and nothing reads back.
+#[test]
+fn music_control_degrades_to_the_basics() {
+    use trino_core::{AudioFeatures, Bus, BusFilter};
+    let mut a = Basic::default();
+    let theme = MusicId::from_path("music/theme");
+    let drums = MusicId::from_path("music/drums");
+    let dyn_a: &mut dyn Audio = &mut a;
+    assert_eq!(dyn_a.audio_features(), AudioFeatures::NONE);
+    dyn_a.set_voice_pitch(VoiceId(1), 2.0);
+    dyn_a.play_music(theme, true);
+    dyn_a.pause_music();
+    assert!(!dyn_a.music_paused());
+    dyn_a.resume_music();
+    assert_eq!(dyn_a.music_position(), None);
+    dyn_a.crossfade_music(drums, false, 500, true);
+    dyn_a.play_music_layers(&[theme, drums], true);
+    dyn_a.set_music_layer(1, 1.0, 100);
+    assert_eq!(dyn_a.music_layer(0), None);
+    dyn_a.set_bus_filter(Bus::Sfx, Some(BusFilter::LowPass { cutoff_hz: 800.0 }));
+    assert_eq!(dyn_a.bus_filter(Bus::Sfx), None);
+    assert_eq!(a.music, Some((theme, true)), "the layers' first");
+    a.play_music_layers(&[], true);
+    assert_eq!(a.music, Some((theme, true)), "no layers: nothing changes");
+}
+
+#[test]
+fn pitch_and_cutoff_stay_in_the_backends_range() {
+    use trino_core::{BusFilter, PITCH_MAX, PITCH_MIN, clamp_pitch};
+    assert_eq!(SoundParams::DEFAULT.pitch, 1.0);
+    assert_eq!(SoundParams::DEFAULT.rate(), 1.0);
+    for (p, want) in [
+        (0.1, PITCH_MIN),
+        (0.5, 0.5),
+        (1.25, 1.25),
+        (9.0, PITCH_MAX),
+        (f32::NAN, 1.0),
+        (f32::INFINITY, PITCH_MAX),
+        (-1.0, PITCH_MIN),
+    ] {
+        assert_eq!(clamp_pitch(p), want, "{p}");
+        let params = SoundParams {
+            pitch: p,
+            ..SoundParams::DEFAULT
+        };
+        assert_eq!(params.rate(), want);
+    }
+    let lp = |hz| BusFilter::LowPass { cutoff_hz: hz }.cutoff();
+    assert_eq!(lp(800.0), 800.0);
+    assert_eq!(lp(1.0), 20.0);
+    assert_eq!(lp(1e6), 20_000.0);
+    assert_eq!(lp(f32::NAN), 20_000.0);
+}

@@ -31,6 +31,8 @@ web-sys = { workspace = true, features = [
     "AudioParam",
     "AudioScheduledSourceNode",
     "BaseAudioContext",
+    "BiquadFilterNode",
+    "BiquadFilterType",
     "CssStyleDeclaration",
     "Document",
     "DomRect",

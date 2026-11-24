@@ -55,6 +55,15 @@ repeat until they fit). Masters above 44.1 kHz bake at 44.1 kHz. A sound plays o
 channel at a time: re-triggering restarts it. `codec = { n64 = "opus" }` links libopus
 (+99 KB of ROM) and costs ~4.6 ms of a 60 Hz frame while it plays; keep it for long music.
 
+**Pitched sounds** (`SoundParams::pitch`, ADR 0044): an engine loop, skids or coins that
+vary by pitch. The N64 plays a channel at most at the output's 44.1 kHz, so bake them
+with `sample_rate = { n64 = 22050 }` to keep the full 2× there (a 44.1 kHz sound can only
+go down). Streamed sounds (music) ignore pitch on every target: give a pitched loop
+`stream = false`. On the N64 several pooled emitters of one sound restart each other (one
+channel per sound): give each kart its own copy (`[sounds.engine_2]` with the same `file`).
+Check a backend with `Audio::audio_features()`; hear the features with
+`cargo test --release -p trino-platform-pc --test audio_evidence -- --ignored`.
+
 ```rust
 pub const ENEMY: SpriteId = SpriteId::from_path("sprites/enemy");
 pub const JUMP: SoundId = SoundId::from_path("sounds/jump");

@@ -46,6 +46,10 @@ fn pcm16(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
         .map(|&b| i16::from_le_bytes(b) as f32 / 32767.0)
 }
 
+/// How far before a seek's target lewton's page seek lands (a page's
+/// granularity, and the first packet after it only primes the decoder).
+const SEEK_MARGIN: u64 = 8192;
+
 enum Source {
     Vorbis(Box<OggStreamReader<Cursor<Rc<[u8]>>>>),
     /// PCM16 bytes and the next sample.
@@ -167,6 +171,87 @@ impl StreamDecoder {
             self.carry.clear();
         }
         n
+    }
+
+    /// Go to sample `frame`: the next read starts there exactly (a synced
+    /// crossfade, Bongo-Kart #177). Vorbis seeks by page, then decodes and
+    /// drops the few packets up to it; near the start (a page seek can land
+    /// on the headers) or the end (the padded last packet can't be placed)
+    /// it seeks a page further back, else decodes from the top. False past
+    /// the end or on a damaged stream (the decoder is then at its start).
+    pub fn seek(&mut self, frame: usize) -> bool {
+        if frame >= self.frames || self.rewind().is_err() {
+            return false;
+        }
+        if let Source::Pcm(at) = &mut self.source {
+            *at = frame * 2;
+            self.left = self.frames - frame;
+            return true;
+        }
+        let mut back = (frame as u64).saturating_sub(SEEK_MARGIN);
+        for _ in 0..2 {
+            if back == 0 {
+                break;
+            }
+            let landed = match &mut self.source {
+                Source::Vorbis(r) => r.seek_absgp_pg(back).is_ok(),
+                Source::Pcm(_) => false,
+            };
+            if landed && self.drop_to(None, frame) {
+                return true;
+            }
+            back = back.saturating_sub(1 << 16);
+            if self.rewind().is_err() {
+                return false;
+            }
+        }
+        if self.rewind().is_ok() && self.drop_to(Some(0), frame) {
+            return true;
+        }
+        let _ = self.rewind();
+        false
+    }
+
+    /// Decode and drop up to `frame`, keeping the rest of its packet in the
+    /// carry. `known` is the position when known (the start); after a page
+    /// seek it is learned when a packet ends a page (lewton's last granule).
+    fn drop_to(&mut self, mut known: Option<usize>, frame: usize) -> bool {
+        let Source::Vorbis(reader) = &mut self.source else {
+            return false;
+        };
+        let mut buf: Vec<f32> = Vec::new();
+        loop {
+            let packet = match reader.read_dec_packet_generic::<InterleavedSamples<f32>>() {
+                Ok(Some(p)) => p,
+                Ok(None) | Err(_) => return false,
+            };
+            let c = packet.channel_count.max(1);
+            buf.extend(
+                packet
+                    .samples
+                    .chunks(c)
+                    .map(|f| f.iter().sum::<f32>() / c as f32),
+            );
+            let end = match known {
+                Some(at) => at + buf.len(),
+                None => match reader.get_last_absgp() {
+                    Some(g) if g as usize >= self.frames => return false,
+                    Some(g) => g as usize,
+                    None => continue,
+                },
+            };
+            if end > frame {
+                let start = end.saturating_sub(buf.len());
+                let from = frame.saturating_sub(start).min(buf.len());
+                let to = buf.len().min(self.frames.saturating_sub(start)).max(from);
+                self.carry.clear();
+                self.carry.extend_from_slice(&buf[from..to]);
+                self.left = self.frames.saturating_sub(start + from);
+                return true;
+            }
+            known = Some(end);
+            buf.clear();
+        }
     }
 
     /// Back to the first sample (a loop).
@@ -373,5 +458,62 @@ mod vorbis_tests {
         }
         assert_eq!(&streamed[..pcm.len()], &whole.samples[..]);
         assert_eq!(&streamed[pcm.len()..pcm.len() + 100], &whole.samples[..100]);
+    }
+
+    /// A synced crossfade's seek (Bongo-Kart #177) lands on the exact sample:
+    /// from there the stream reads what the whole decode holds, at the
+    /// start (headers), mid-way (a page seek) and in the last page; a PCM
+    /// seek too; past the end it is refused and reads from the top.
+    #[test]
+    fn a_stream_seeks_to_the_exact_sample() {
+        let pcm = tone(16_000, 12.0);
+        let ogg = ap::vorbis::encode(&pcm, 16_000, 4.0, 1).unwrap();
+        let vblob = tsn2(&ogg, 16_000, pcm.len());
+        let b = SoundBlob::parse(&vblob).unwrap();
+        let whole = decode(&b).unwrap().samples;
+        let n = whole.len();
+        for at in [1usize, 777, 8_193, 20_000, 50_000, 123_457, n - 300] {
+            let mut d =
+                StreamDecoder::open(b.codec, b.sample_rate, b.frames, b.payload.into()).unwrap();
+            assert!(d.seek(at), "{at}");
+            let mut got = Vec::new();
+            d.fill(&mut got, 4096, false);
+            let want = &whole[at..(at + 4096).min(n)];
+            assert_eq!(got.len(), want.len(), "{at}");
+            let worst = got
+                .iter()
+                .zip(want)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 1e-5, "{at}: off by {worst}");
+        }
+        let mut d =
+            StreamDecoder::open(b.codec, b.sample_rate, b.frames, b.payload.into()).unwrap();
+        assert!(!d.seek(n));
+        let mut got = Vec::new();
+        d.fill(&mut got, 64, false);
+        assert_eq!(got, whole[..64]);
+        // PCM.
+        let bytes: Vec<u8> = (0..1000i16).flat_map(|s| s.to_le_bytes()).collect();
+        let mut pb = SoundBlob {
+            codec: SoundCodec::Pcm16,
+            bus: trino_core::Bus::Music,
+            looped: false,
+            stream: true,
+            sample_rate: 8000,
+            frames: 1000,
+            payload: &bytes,
+        }
+        .header()
+        .to_vec();
+        pb.extend_from_slice(&bytes);
+        let p = SoundBlob::parse(&pb).unwrap();
+        let mut d =
+            StreamDecoder::open(p.codec, p.sample_rate, p.frames, p.payload.into()).unwrap();
+        assert!(d.seek(990));
+        let mut got = Vec::new();
+        d.fill(&mut got, 64, false);
+        assert_eq!(got.len(), 10);
+        assert!((got[0] - 990.0 / 32767.0).abs() < 1e-6);
     }
 }

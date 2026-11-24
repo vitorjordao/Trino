@@ -557,6 +557,25 @@ since #122.
   LUT's grading in the composite (`post::grade_mix`, the Full tier only). Tests:
   `crates/{core,platform-pc}/tests/light_terms.rs`, `post.rs`'s `two_luts_*`, the
   `light terms` and `lut mix` steps.
+- **Audio: pitch, music control, bus filters, positional voices (2026-11-24, ADR 0044,
+  Bongo-Kart #175, #177, #179):** `Audio::audio_features()` (`AudioFeatures`) says what a
+  backend does; every new method has a default.
+  - **Pitch:** `SoundParams::pitch` (0.5..=2, `clamp_pitch`), `set_voice_pitch`. PC: a
+    fractional mixer cursor (pitch 1 keeps the integer path); Web `playbackRate`; N64
+    `mixer_ch_set_freq` up to the output's 44.1 kHz (a 22.05 kHz sound reaches 2×); 3DS
+    the DSP's rate. Streamed sounds ignore it.
+  - **Music (PC, Web):** `pause_music`/`resume_music`/`music_paused`, `music_position`,
+    `crossfade_music(id, looped, fade_ms, sync)` (sync starts the new track where the old
+    one is; streams seek: lewton page seek + decode-and-drop), `play_music_layers` (≤ 4,
+    `set_music_layer(i, gain, fade_ms)`, `music_layer`). The 3DS pauses; the consoles cut
+    and play the first layer.
+  - **Bus filters (PC, Web):** `set_bus_filter(bus, Some(BusFilter::LowPass {
+    cutoff_hz }))`: a biquad per bus on the PC, a `BiquadFilterNode` on the Web.
+  - **`VoicePool<N>`** (core, every target): `SoundEmitter` (position, velocity, radius,
+    priority, pitch, bus) through `play_voice_at`; priority then loudness, the backend's
+    voice limit, virtual loops, `Doppler`; `update` once a frame.
+  - Tests: `crates/core/tests/{voices,audio}.rs`, `crates/platform-pc/tests/audio_music.rs`,
+    the `audio control` step; WAVs from `crates/platform-pc/tests/audio_evidence.rs`.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -1607,6 +1626,25 @@ cargo test --workspace
 
 ## Pitfalls
 
+- **lewton's `seek_absgp_pg` lands on a page, not a sample** (ADR 0044 §3), and resets
+  the position until a packet ends a page (`get_last_absgp`). Near the start it can land
+  on the header pages (decode errors), and in the last page the padded last packet can't
+  be placed. Seek a page earlier, decode and drop to the sample, and fall back to decoding
+  from the top (`VorbisDecode::seek`, `StreamDecoder::seek`).
+- **`PcAudio::render` offline fills a stream's ring once per call:** one call for seconds
+  of output drains the half-second ring and the rest is silence. Render device-sized
+  buffers (256–1024 frames) in tests (`audio_music.rs::render`).
+- **On the N64 a sound plays on one channel at a time** (one wav64 cursor): two pooled
+  emitters of the same sound restart each other. Give each kart its own engine asset there.
+- **libdragon keeps a channel's rate when the same waveform plays again** (`mixer_ch_play`
+  resets it only for another waveform): after a 2× splash the next 1× one played at 2×.
+  The N64 backend sends the rate after every play (`N64Audio::set_rate`, `rates` unknown
+  after `start`).
+- **An N64 mixer channel keeps its sample buffer after its first play** (heap for the rest
+  of the run): the `audio control` step's two extra voice channels and its code took the
+  base console's top block from 59 816 to 31 528 bytes and failed a 16 KB allocation at the
+  palette meshes. Steps that play on new channels run last on the N64. The audio's ~13 KB
+  of code still left 46.7 KB there and failed: the base memo went 640 → 576 slots.
 - **A GPU copy keyed by model id must follow every rewrite of its blob.** The PC
   renderer uploads a model's GPU stream at its first GPU draw and keeps it; a blob
   rewritten while the GPU path is off (`TRINO_PC_TNL=cpu`, `set_hw_tnl(false)`) and drawn
@@ -1916,7 +1954,7 @@ cargo test --workspace
   no hole for their 79 KB triangle batch (`memory allocation of 90112 bytes failed`,
   then `display_init` asserts and the run stalls) although 250 KB were free. Read
   `TRINO_HEAP … top=`, not the free bytes; the draw memo is the biggest boot allocation
-  (768 slots on the base tier), and big batches are sized once with
+  (576 slots on the base tier since ADR 0044), and big batches are sized once with
   `N64Renderer::reserve_batch` (build-n64 skill › assets).
 - **The PC `gamepad` feature is on in workspace builds, off in `-p` builds.** `apps/pc`
   enables it by default, so `cargo test --workspace` unifies it into

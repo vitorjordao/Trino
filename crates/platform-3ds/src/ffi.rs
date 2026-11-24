@@ -152,6 +152,11 @@ unsafe extern "C" {
     /// floats after an int are unsafe across the N64's o32/o64 boundary.
     pub fn trino_ch_volume(channel: u32, lvol_q16: u32, rvol_q16: u32);
     pub fn trino_ch_playing(channel: u32) -> i32;
+    /// A playing channel's pitch, fixed point (65536 = 1.0): its sound's
+    /// rate times it.
+    pub fn trino_ch_rate(channel: u32, rate_q16: u32);
+    /// Hold a channel where it is (1) or let it go on (0).
+    pub fn trino_ch_pause(channel: u32, paused: u32);
 
     /// Path is romfs-relative, e.g. `/index.tsv` (no `romfs:/`).
     pub fn trino_file_exists(romfs_relative_path: *const c_char) -> i32;

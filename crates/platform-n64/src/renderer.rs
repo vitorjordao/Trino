@@ -246,14 +246,17 @@ const GRAVE_FRAMES: u32 = 4;
 /// memo of 1024 slots left ~5 pairs of a 100-draw frame sharing a slot,
 /// rebuilding each other every frame (GitHub #139).
 const MEMO_SLOTS: usize = 1024;
-/// The memo on the base N64 (4 MB): 640 slots (~195 KB instead of ~312 KB),
-/// 160 sets of [`memo::WAYS`]. The gated scenes draw at most ~70–100 draws
+/// The memo on the base N64 (4 MB): 576 slots (~176 KB instead of ~312 KB),
+/// 144 sets of [`memo::WAYS`]. The gated scenes draw at most ~70–100 draws
 /// a frame (Solid Eleven's match; castle64 ~27), and a set's LRU keeps a
-/// frame's draws (GitHub #139). 768 direct-mapped slots of 308 bytes had
-/// fit; the 4-byte LRU stamp left the self-test's top free block 40 KB on
-/// CI's layout, under the palette meshes' 16 KB plus fragmentation, so the
-/// slots went down rather than the margin (#110, #67).
-const MEMO_SLOTS_BASE: usize = 640;
+/// frame's draws (GitHub #139): 100 draws over 144 sets leave a set with
+/// more than four about once in ten frames' layouts. 768 direct-mapped
+/// slots of 308 bytes had fit; the 4-byte LRU stamp left the self-test's
+/// top free block 40 KB on CI's layout, under the palette meshes' 16 KB
+/// plus fragmentation, so the slots went down rather than the margin (#110,
+/// #67). 640 → 576 paid for the audio's code (Bongo-Kart #175–#179: the
+/// top block 46.7 → 66 KB before the palette meshes).
+const MEMO_SLOTS_BASE: usize = 576;
 /// A memo entry: the command, then `RspPan` (s, q, r2) and the view
 /// translation the command was made for, as float bits, then a colored
 /// command's color words (`rsp::color_words`) or a textured command's

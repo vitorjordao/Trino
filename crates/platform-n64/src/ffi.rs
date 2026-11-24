@@ -176,6 +176,9 @@ unsafe extern "C" {
     /// floats after an int are unsafe across the N64's o32/o64 boundary.
     pub fn trino_ch_volume(channel: u32, lvol_q16: u32, rvol_q16: u32);
     pub fn trino_ch_playing(channel: u32) -> i32;
+    /// A playing channel's pitch, fixed point (65536 = 1.0): its sound's
+    /// rate times it, at most the output's 44.1 kHz.
+    pub fn trino_ch_freq(channel: u32, rate_q16: u32);
     pub fn trino_mixer_set_vol(vol_q16: u32);
     /// Bit n set = mixer channel n plays.
     pub fn trino_audio_playing_mask() -> u32;

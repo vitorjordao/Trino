@@ -7,6 +7,12 @@
 //! steerable voices ([`VoiceId`] = channel + generation), 14 music, 15
 //! stingers (the music ducks to 30% while one plays, like the PC).
 //!
+//! **Pitch and pause** (Bongo-Kart #175, #177): [`SoundParams::pitch`] sets
+//! a channel's rate (`ndspChnSetRate`, the DSP resamples) and the music
+//! pauses where it is (`ndspChnSetPaused`; a stream's queued chunks wait).
+//! Position, crossfades, layers and bus filters are the trait's defaults
+//! ([`Audio::audio_features`]).
+//!
 //! **Buses:** every channel remembers its bus and its own gains (volume,
 //! pan); a [`BusMixer`] gives each bus its gain (master × bus × ducking,
 //! mutes). [`N3dsAudio::poll`] — once per frame — advances the duck ramps
@@ -16,8 +22,8 @@ use alloc::collections::BTreeMap;
 use core::ffi::c_void;
 
 use trino_core::{
-    Audio, AudioStats, Bus, BusMixer, BusSet, DuckRule, MixerConfig, MusicId, SoundId, SoundParams,
-    VoiceId,
+    Audio, AudioFeatures, AudioStats, Bus, BusMixer, BusSet, DuckRule, MixerConfig, MusicId,
+    SoundId, SoundParams, VoiceId,
 };
 
 use crate::{ffi, runtime};
@@ -35,6 +41,8 @@ const DUCK: f32 = 0.3;
 fn q16(v: f32) -> u32 {
     (v.clamp(0.0, 2.0) * 65536.0) as u32
 }
+
+const Q16_ONE: u32 = 65536;
 
 /// A loaded sound and the bus it was baked for.
 #[derive(Clone, Copy)]
@@ -59,6 +67,9 @@ pub struct N3dsAudio {
     channels: [Option<Playing>; CHANNELS],
     /// The q16 gains last sent per channel.
     sent: [(u32, u32); CHANNELS],
+    /// Each channel's pitch, q16 (a play resets it to 1).
+    rates: [u32; CHANNELS],
+    music_paused: bool,
     buses: BusMixer,
     last_us: Option<u32>,
 }
@@ -72,6 +83,8 @@ impl N3dsAudio {
             generations: [0; VOICE_COUNT],
             channels: [None; CHANNELS],
             sent: [(u32::MAX, u32::MAX); CHANNELS],
+            rates: [Q16_ONE; CHANNELS],
+            music_paused: false,
             buses: BusMixer::new(),
             last_us: None,
         }
@@ -166,13 +179,32 @@ impl N3dsAudio {
     fn start(&mut self, ch: u32, clip: Clip, looped: bool, bus: Bus, gains: (f32, f32)) {
         unsafe { ffi::trino_wav_play(clip.wav, ch, looped as u32) }
         self.channels[ch as usize] = Some(Playing { bus, gains });
+        // ndspChnReset put the rate back, and unpaused it.
+        self.rates[ch as usize] = Q16_ONE;
+        if ch == MUSIC_CHANNEL {
+            self.music_paused = false;
+        }
         // ndspChnReset put the mix back to full: send ours again.
         self.sent[ch as usize] = (u32::MAX, u32::MAX);
         self.refresh();
     }
 
+    /// Channel `ch`'s pitch, sent when it changed.
+    #[inline(never)]
+    fn set_rate(&mut self, ch: u32, rate: f32) {
+        let q = q16(trino_core::clamp_pitch(rate));
+        if self.rates[ch as usize] != q {
+            self.rates[ch as usize] = q;
+            unsafe { ffi::trino_ch_rate(ch, q) }
+        }
+    }
+
     fn stop(&mut self, ch: u32) {
         unsafe { ffi::trino_channel_stop(ch) }
+        if ch == MUSIC_CHANNEL && self.music_paused {
+            unsafe { ffi::trino_ch_pause(ch, 0) }
+            self.music_paused = false;
+        }
         self.channels[ch as usize] = None;
         // The music comes back from under a stopped stinger.
         self.refresh();
@@ -214,6 +246,7 @@ impl Audio for N3dsAudio {
             self.next_channel = (self.next_channel + 1) % ONESHOT_CHANNELS;
             let bus = params.bus.unwrap_or(clip.bus);
             self.start(channel, clip, false, bus, params.gains());
+            self.set_rate(channel, params.pitch);
         }
     }
 
@@ -229,6 +262,7 @@ impl Audio for N3dsAudio {
         self.generations[slot] = self.generations[slot].wrapping_add(1);
         let bus = params.bus.unwrap_or(clip.bus);
         self.start(ch, clip, looped, bus, params.gains());
+        self.set_rate(ch, params.pitch);
         Some(VoiceId(ch | (self.generations[slot] as u32) << 8))
     }
 
@@ -238,7 +272,40 @@ impl Audio for N3dsAudio {
         {
             p.gains = params.gains();
             self.refresh();
+            self.set_rate(ch, params.pitch);
         }
+    }
+
+    fn set_voice_pitch(&mut self, voice: VoiceId, pitch: f32) {
+        if let Some(ch) = self.voice(voice) {
+            self.set_rate(ch, pitch);
+        }
+    }
+
+    fn audio_features(&self) -> AudioFeatures {
+        AudioFeatures {
+            pitch: true,
+            music_pause: true,
+            ..AudioFeatures::NONE
+        }
+    }
+
+    fn pause_music(&mut self) {
+        if self.channels[MUSIC_CHANNEL as usize].is_some() && !self.music_paused {
+            unsafe { ffi::trino_ch_pause(MUSIC_CHANNEL, 1) }
+            self.music_paused = true;
+        }
+    }
+
+    fn resume_music(&mut self) {
+        if self.music_paused {
+            unsafe { ffi::trino_ch_pause(MUSIC_CHANNEL, 0) }
+            self.music_paused = false;
+        }
+    }
+
+    fn music_paused(&self) -> bool {
+        self.music_paused
     }
 
     fn stop_voice(&mut self, voice: VoiceId) {

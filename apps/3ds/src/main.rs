@@ -459,6 +459,29 @@ mod n3ds {
                 return;
             }
         }
+        // Pitch through the DSP's rate, a voice pool over its four voice
+        // channels, the music's pause (Bongo-Kart #175, #177, #179).
+        runtime::log("TRINO_STEP:audio control\n");
+        let control = castle64::selftest::audio_control(audio, |a| {
+            a.poll();
+            trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+            trino_core::Renderer::end_frame(renderer);
+            runtime::now_us()
+        });
+        match control {
+            Ok(t) => runtime::log(&format!(
+                "TRINO_STEP:audio control ok: pitch 2x {} us, 1x {} us, 0.5x {} us\n",
+                t[0], t[1], t[2]
+            )),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                while runtime::running() {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+                return;
+            }
+        }
         runtime::log("TRINO_STEP:input\n");
         if let Err(e) = castle64::selftest::idle_input_checks(&mut N3dsInput::new()) {
             runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));

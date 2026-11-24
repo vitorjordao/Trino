@@ -328,6 +328,30 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — positional voices with a budget (2026-11-24, branch `feat/audio-pitch-voices-music`, Bongo-Kart #179 voice half, ADR 0044 §2)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::VoicePool<N>`, `SoundEmitter`, `PoolVoice`, `PoolStats`, `Doppler` (physical, scaled, off): priority then loudness, the backend's voice limit, virtual loops, range, doppler pitch, generations; no allocation, no backend code | `core/tests/voices.rs` (5 tests over a mixer with a fixed voice count) |
+| The pool over every backend's real voices | the `audio control` self-test step: `engine_checks`, ares (both tiers), Azahar, browsers; the WAV `doppler_pass_by.wav` (`platform-pc/tests/audio_evidence.rs`) |
+
+Not done: on the N64 a sound plays on one channel at a time, so pooled emitters of the
+same sound restart each other there (give each its own asset); occlusion (a wall between
+emitter and listener) is the game's, through `SoundEmitter::volume` or a bus filter.
+
+## Done — pitch, music control and bus filters (2026-11-24, branch `feat/audio-pitch-voices-music`, Bongo-Kart #175 and #177, ADR 0044 §1, §3, §4)
+
+| Item | Evidence |
+|---|---|
+| `SoundParams::pitch` (0.5..=2, `rate()`, `clamp_pitch`), `Audio::set_voice_pitch`, `Audio::audio_features` (`AudioFeatures`) | `core/tests/audio.rs` (defaults, clamps), `platform-pc/tests/audio_music.rs` (pitch per voice, bent), PC mixer unit tests (fractional cursor, the old integer path at pitch 1) |
+| Pitch on every target: PC fractional cursor, Web `playbackRate`, N64 `trino_ch_freq` (≤ 44.1 kHz), 3DS `trino_ch_rate` | the `audio control` step: 2×, 1×, 0.5× last in order on PC, ares, Azahar, browsers |
+| `pause_music`, `resume_music`, `music_paused`, `music_position`, `crossfade_music(.., sync)`, `play_music_layers`, `set_music_layer`, `music_layer` on the PC and the Web; pause on the 3DS; cut and first layer elsewhere | `platform-pc/tests/audio_music.rs` (8 tests), the `audio control` step; WAVs `pause_resume`, `crossfade`, `layers` |
+| Stream seeks for a synced start (lewton page seek + decode-and-drop) on the PC and the Web | `a_vorbis_job_started_mid_way_plays_the_whole_decodes_samples_from_there`, `a_stream_seeks_to_the_exact_sample` (error < 1e-5 at the start, mid-way, in the last page), `a_synced_crossfade_seeks_a_stream` |
+| `set_bus_filter` / `bus_filter` (`BusFilter::LowPass`): PC biquad per bus, Web `BiquadFilterNode` | `a_bus_low_pass_cuts_high_tones_and_only_on_its_bus`, `a_bus_filter_is_set_read_and_taken_off`, the step's read-back; WAV `bus_low_pass` |
+
+Not done: music position, crossfades and layers on the consoles (the N64 has no pause
+either); more filter kinds; pitch on streamed sounds.
+
 ## Done — two-color ambient, rim light and a mix of two LUTs (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #181, ADR 0043 §3)
 
 | Item | Evidence |

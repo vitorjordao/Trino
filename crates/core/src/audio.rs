@@ -19,6 +19,16 @@
 //!   the baked `assets/audio.toml` (bus defaults and duck rules), and
 //!   [`BusSettings`] packs a player's volumes for a console save.
 //!
+//! - **Pitch** per playback ([`SoundParams::pitch`], Bongo-Kart #175): an
+//!   engine's revs, wind, a doppler shift; [`crate::voices::VoicePool`] places
+//!   sounds in the world with a voice budget, priorities and doppler (#179).
+//! - **Music control** (Bongo-Kart #177): pause and resume, the position,
+//!   a crossfade to another track, layered tracks (stems) mixed live, and a
+//!   low-pass filter on a bus (underwater, a muffled pause menu).
+//!   [`Audio::audio_features`] says what a backend does: the PC and the Web
+//!   do all of it; the consoles pitch, pause and report the position, and
+//!   fall back to a cut for a crossfade and to the first layer.
+//!
 //! Every method beyond the original four has a default, so backends and
 //! test doubles that only implement the basics keep working (silently).
 
@@ -57,6 +67,25 @@ pub struct SoundParams {
     /// else [`Bus::Sfx`] for sounds and [`Bus::Music`] for music). Read when
     /// the playback starts: `set_voice` doesn't move a voice.
     pub bus: Option<Bus>,
+    /// Playback rate (Bongo-Kart #175): 1 = as baked, 2 = an octave up in
+    /// half the time, 0.5 = an octave down in twice the time; kept within
+    /// [`PITCH_MIN`]..=[`PITCH_MAX`] ([`SoundParams::rate`]). Per playback:
+    /// it never changes another's. `set_voice` applies it too. Sounds
+    /// streamed from storage (`stream = true`) and music ignore it.
+    pub pitch: f32,
+}
+
+/// The lowest and highest [`SoundParams::pitch`] every backend plays.
+pub const PITCH_MIN: f32 = 0.5;
+pub const PITCH_MAX: f32 = 2.0;
+
+/// A pitch within [`PITCH_MIN`]..=[`PITCH_MAX`] (NaN plays at 1).
+pub fn clamp_pitch(pitch: f32) -> f32 {
+    if pitch.is_nan() {
+        1.0
+    } else {
+        pitch.clamp(PITCH_MIN, PITCH_MAX)
+    }
 }
 
 impl SoundParams {
@@ -64,7 +93,13 @@ impl SoundParams {
         volume: 1.0,
         pan: 0.0,
         bus: None,
+        pitch: 1.0,
     };
+
+    /// The pitch a backend plays ([`clamp_pitch`]).
+    pub fn rate(&self) -> f32 {
+        clamp_pitch(self.pitch)
+    }
 
     /// These params on `bus`.
     pub const fn on(self, bus: Bus) -> Self {
@@ -652,6 +687,69 @@ pub struct AudioStats {
     pub streamed_frames: u32,
 }
 
+/// A filter on a bus ([`Audio::set_bus_filter`], Bongo-Kart #177).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BusFilter {
+    /// A 12 dB/octave low-pass (a Butterworth biquad): what is under water,
+    /// behind a wall or under a pause menu. `cutoff_hz` is kept within
+    /// 20..=20 000 Hz.
+    LowPass { cutoff_hz: f32 },
+}
+
+impl BusFilter {
+    /// The cutoff a backend uses (NaN reads 20 kHz: the filter does nothing
+    /// you'd hear).
+    pub fn cutoff(&self) -> f32 {
+        match *self {
+            BusFilter::LowPass { cutoff_hz } if cutoff_hz.is_nan() => 20_000.0,
+            BusFilter::LowPass { cutoff_hz } => cutoff_hz.clamp(20.0, 20_000.0),
+        }
+    }
+}
+
+/// Most layers [`Audio::play_music_layers`] plays together.
+pub const MAX_MUSIC_LAYERS: usize = 4;
+
+/// What a backend's audio does beyond the basics ([`Audio::audio_features`]):
+/// a game asks before it leans on one, and a test knows what to expect.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct AudioFeatures {
+    /// [`SoundParams::pitch`] and [`Audio::set_voice_pitch`] change the rate.
+    pub pitch: bool,
+    /// [`Audio::pause_music`] / [`Audio::resume_music`] hold the track where
+    /// it is.
+    pub music_pause: bool,
+    /// [`Audio::music_position`] reports the track's time.
+    pub music_position: bool,
+    /// [`Audio::crossfade_music`] fades (else it cuts to the new track).
+    pub crossfade: bool,
+    /// Tracks [`Audio::play_music_layers`] plays together (1: the first
+    /// only).
+    pub music_layers: u8,
+    /// [`Audio::set_bus_filter`] filters.
+    pub bus_filter: bool,
+}
+
+impl AudioFeatures {
+    pub const NONE: AudioFeatures = AudioFeatures {
+        pitch: false,
+        music_pause: false,
+        music_position: false,
+        crossfade: false,
+        music_layers: 1,
+        bus_filter: false,
+    };
+    /// The PC's and the Web's.
+    pub const ALL: AudioFeatures = AudioFeatures {
+        pitch: true,
+        music_pause: true,
+        music_position: true,
+        crossfade: true,
+        music_layers: MAX_MUSIC_LAYERS as u8,
+        bus_filter: true,
+    };
+}
+
 pub trait Audio {
     /// Fire-and-forget playback of a sound effect.
     fn play_sound(&mut self, sound: SoundId);
@@ -756,6 +854,74 @@ pub trait Audio {
     fn audio_stats(&self) -> AudioStats {
         AudioStats::default()
     }
+
+    /// What this backend does of the calls below ([`AudioFeatures`]).
+    fn audio_features(&self) -> AudioFeatures {
+        AudioFeatures::NONE
+    }
+
+    /// A voice's pitch alone ([`SoundParams::pitch`]), keeping its volume
+    /// and pan.
+    fn set_voice_pitch(&mut self, voice: VoiceId, pitch: f32) {
+        let _ = (voice, pitch);
+    }
+
+    /// Hold the music (every layer) where it is; [`Audio::resume_music`]
+    /// goes on from there. A stinger plays on.
+    fn pause_music(&mut self) {}
+
+    fn resume_music(&mut self) {}
+
+    fn music_paused(&self) -> bool {
+        false
+    }
+
+    /// Seconds into the music (the first layer; within the track: a loop
+    /// starts again at 0). `None` with no music or where a backend can't
+    /// tell.
+    fn music_position(&self) -> Option<f32> {
+        None
+    }
+
+    /// Fade the music out over `fade_ms` while `music` fades in; with
+    /// `sync`, `music` starts at the old track's position (versions of the
+    /// same piece: a calmer mix, the last lap's). The default cuts.
+    fn crossfade_music(&mut self, music: MusicId, looped: bool, fade_ms: u32, sync: bool) {
+        let _ = (fade_ms, sync);
+        self.play_music(music, looped);
+    }
+
+    /// Start up to [`MAX_MUSIC_LAYERS`] tracks together, sample-aligned,
+    /// replacing the music: stems of one piece. Layer 0 plays at full gain,
+    /// the others silent until [`Audio::set_music_layer`] brings them in.
+    /// Where [`AudioFeatures::music_layers`] is 1, the first plays alone.
+    fn play_music_layers(&mut self, layers: &[MusicId], looped: bool) {
+        if let Some(&first) = layers.first() {
+            self.play_music(first, looped);
+        }
+    }
+
+    /// Ramp layer `layer`'s gain (0..=1) over `fade_ms`.
+    fn set_music_layer(&mut self, layer: usize, gain: f32, fade_ms: u32) {
+        let _ = (layer, gain, fade_ms);
+    }
+
+    /// Layer `layer`'s gain now (mid-ramp included); `None` without it.
+    fn music_layer(&self, layer: usize) -> Option<f32> {
+        let _ = layer;
+        None
+    }
+
+    /// Filter everything on `bus` (`None` takes the filter off: the bus
+    /// sounds as before, sample for sample).
+    fn set_bus_filter(&mut self, bus: Bus, filter: Option<BusFilter>) {
+        let _ = (bus, filter);
+    }
+
+    fn bus_filter(&self, bus: Bus) -> Option<BusFilter> {
+        let _ = bus;
+        None
+    }
 }
 
 /// Who hears positional sounds: usually the camera.
@@ -790,8 +956,7 @@ pub fn spatialize(listener: &Listener, source: Vec3, radius: f32, volume: f32) -
     if dist_sq >= r * r {
         return SoundParams {
             volume: 0.0,
-            pan: 0.0,
-            bus: None,
+            ..SoundParams::DEFAULT
         };
     }
     let dist = crate::math3d::sqrt(dist_sq);
@@ -804,7 +969,7 @@ pub fn spatialize(listener: &Listener, source: Vec3, radius: f32, volume: f32) -
     SoundParams {
         volume: volume * t * t,
         pan,
-        bus: None,
+        ..SoundParams::DEFAULT
     }
 }
 

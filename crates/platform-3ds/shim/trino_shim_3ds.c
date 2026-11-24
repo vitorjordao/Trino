@@ -1510,6 +1510,8 @@ typedef struct {
 } trino_stream_t;
 
 static ndspWaveBuf s_wavebufs[TRINO_NDSP_CHANNELS];
+// Each channel's sound rate (trino_ch_rate multiplies it).
+static u32 s_ch_rate[TRINO_NDSP_CHANNELS];
 static ndspAdpcmData s_wavectx[TRINO_NDSP_CHANNELS];
 static trino_stream_t s_streams[TRINO_MAX_STREAMS];
 static int s_stream_of[TRINO_NDSP_CHANNELS];
@@ -1874,6 +1876,7 @@ void trino_wav_play(void* wav_ptr, uint32_t channel, uint32_t looped)
     ndspChnReset((int)channel);
     ndspChnSetInterp((int)channel, NDSP_INTERP_LINEAR);
     ndspChnSetRate((int)channel, (float)w->sample_rate);
+    s_ch_rate[channel] = w->sample_rate;
     ndspChnSetFormat((int)channel, w->adpcm ? NDSP_FORMAT_MONO_ADPCM : NDSP_FORMAT_MONO_PCM16);
     if (w->adpcm) ndspChnSetAdpcmCoefs((int)channel, w->coefs);
     if (w->stream) {
@@ -1892,6 +1895,22 @@ void trino_wav_play(void* wav_ptr, uint32_t channel, uint32_t looped)
         buf->adpcm_data = &s_wavectx[channel];
     }
     ndspChnWaveBufAdd((int)channel, buf);
+}
+
+// A channel's pitch (65536 = 1.0, Bongo-Kart #175): its sound's rate times
+// it (the DSP resamples). After trino_wav_play, which resets the rate.
+void trino_ch_rate(uint32_t channel, uint32_t rate_q16)
+{
+    if (channel >= TRINO_NDSP_CHANNELS || !s_ch_rate[channel]) return;
+    ndspChnSetRate((int)channel, (float)s_ch_rate[channel] * (rate_q16 / 65536.0f));
+}
+
+// Hold a channel where it is, or let it go on (the music's pause; a stream
+// keeps its queued chunks and the audio thread waits for them).
+void trino_ch_pause(uint32_t channel, uint32_t paused)
+{
+    if (channel >= TRINO_NDSP_CHANNELS) return;
+    ndspChnSetPaused((int)channel, paused != 0);
 }
 
 // Per-channel left/right volume (pan + attenuation, music ducking): the

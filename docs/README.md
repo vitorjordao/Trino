@@ -93,6 +93,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0041](adr/0041-netplay-follow-ups.md) | Netplay follow-ups: local seats, spectators, NAT traversal and a relay, the consoles' lockstep over the 3DS's local wireless, snapshot recordings |
 | [0042](adr/0042-dynamic-meshes.md) | Dynamic meshes: geometry the game rewrites every frame (`Renderer::draw_mesh`), drawn through the model path from a TMDL blob in a per-frame slot; the PC and the Web now, the consoles later |
 | [0043](adr/0043-bongo-kart-render-study.md) | What Bongo Kart's study asked of the renderer: mipmap chains on the PC and the Web, additive blending, a two-color ambient with rim light, a mix of two grading LUTs |
+| [0044](adr/0044-bongo-kart-audio-study.md) | What Bongo Kart's study asked of the audio: per-voice pitch, positional voices with a budget and doppler (`VoicePool`), music pause/position/crossfades/layers, bus low-pass filters |
 
 ## Plans and history
 

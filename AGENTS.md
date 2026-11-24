@@ -2121,6 +2121,16 @@ cargo test --workspace
   overflowed it in the self-test. `Box::new(big())` still builds the temporary in the
   caller's frame, so put such steps in their own `#[inline(never)]` function.
   `check_stack` fails the self-test above 60 KB.
+- **An `n64_main!` game keeps the whole `N64Host` on its 64 KB stack**
+  (`N64Host::main`'s frame, 7.9 KB), and `N64Host::measure` sits under the
+  game's update and render too. A new `N64Platform` or `N64Renderer` field is
+  stack for every such game: the football template's self-test peaked 96 bytes
+  past the 60 KB guard when #159 added rumble and clock state (`measure` now
+  reads the 2 KB profile in place: `end_profile`/`profile`/`clear_profile`).
+  Don't fix it by boxing platform state at boot: ~200 bytes boxed moved the base
+  N64's heap layout and castle64's palette meshes then failed a 10 KB
+  allocation with 55 KB free. List the frames with `mips64-elf-objdump -d -C`
+  (the `addiu sp,sp,-N` prologues).
 - **Renderer state (camera, light) outlives frames and games.** A game that never
   calls `set_light` inherits the last one. On consoles the self-test's showcase
   fog leaked into castle64. Set both every frame.

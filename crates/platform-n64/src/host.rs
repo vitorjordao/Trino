@@ -173,13 +173,15 @@ impl N64Host {
             let spent = runtime::now_us().wrapping_sub(t0);
             sums[10] += crate::renderer::take_drain_us() as u64;
             sums[9] += trino_core::Renderer::stats(&self.renderer).sprites as u64;
-            let p = self.renderer.take_profile();
+            // Read in place: a profile is 2 KB of a 64 KB stack.
+            self.renderer.end_profile();
+            let p = self.renderer.profile();
             if trino_core::trace::ENABLED {
                 for (c, v) in counters.iter_mut().zip(crate::prof::window()) {
                     *c = c.wrapping_add(v);
                 }
             }
-            let wait = p.as_ref().map_or(0, |p| p.stages.begin);
+            let wait = p.map_or(0, |p| p.stages.begin);
             let us = spent.saturating_sub(wait);
             total += us as u64;
             max = max.max(us);
@@ -217,6 +219,7 @@ impl N64Host {
                     }
                 }
             }
+            self.renderer.clear_profile();
         }
         crate::prof::end_scene();
         let vblanks = runtime::vblanks().wrapping_sub(v0);

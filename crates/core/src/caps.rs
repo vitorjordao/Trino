@@ -221,6 +221,13 @@ pub struct Caps {
     /// (and on the PC's console profiles, which draw what the consoles
     /// draw).
     pub max_dynamic_vertices: u32,
+    /// Does a texture uploaded with a mipmap chain sample it (Bongo-Kart
+    /// #178, [`crate::mip`])? The PC's native profile and the Web: 3D
+    /// textures at a distance read the smaller level that fits the pixel.
+    /// `false` on the consoles (one level in TMEM, one in the 3DS's
+    /// linear memory) and the PC's console profiles, which sample level 0
+    /// so they draw what the consoles draw.
+    pub mipmaps: bool,
 }
 
 /// How a texture's texels sit in texture memory: the N64 formats the
@@ -350,6 +357,7 @@ impl Caps {
         max_collision_tris: 4096,
         capsule_bodies: false,
         max_dynamic_vertices: 0,
+        mipmaps: false,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -409,6 +417,7 @@ impl Caps {
         max_collision_tris: 16_384,
         capsule_bodies: false,
         max_dynamic_vertices: 0,
+        mipmaps: false,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -467,6 +476,7 @@ impl Caps {
         max_collision_tris: 1_000_000,
         capsule_bodies: false,
         max_dynamic_vertices: 65_536,
+        mipmaps: true,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -515,6 +525,7 @@ impl Caps {
         max_collision_tris: 1_000_000,
         capsule_bodies: false,
         max_dynamic_vertices: 65_536,
+        mipmaps: true,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔

@@ -120,8 +120,7 @@ pub(crate) fn load(
     for e in entries {
         match e.kind {
             Kind::Sprite => {
-                let (w, h, px) = pack::read_sprite(e.bytes)?;
-                renderer.upload_sprite(SpriteId(e.id), w, h, px);
+                upload_tspr(renderer, SpriteId(e.id), e.bytes)?;
                 let n = renderer.sprite_bytes(SpriteId(e.id)) as u32;
                 platform.groups.memory.add(MemoryCategory::Textures, n);
                 r.sprites += 1;
@@ -188,8 +187,26 @@ pub(crate) fn load(
     Ok(r)
 }
 
+/// Upload a `TSPR`/`TSPM` sprite: a `TSPM` with its mipmap chain
+/// (Bongo-Kart #178).
+pub(crate) fn upload_tspr(
+    renderer: &mut PcRenderer,
+    id: SpriteId,
+    blob: &[u8],
+) -> Result<(), String> {
+    let (w, h, px, mips) = pack::read_sprite_mips(blob)?;
+    if mips {
+        renderer.upload_sprite_mipmapped(id, w, h, px);
+    } else {
+        renderer.upload_sprite(id, w, h, px);
+    }
+    Ok(())
+}
+
 /// Transcode one KTX2 texture for `target` and upload it: `true` when it
-/// went up block-compressed, `false` when decoded to RGBA8.
+/// went up block-compressed, `false` when decoded to RGBA8. A KTX2 with a
+/// mipmap chain (Bongo-Kart #178) goes up with every level; decoded to
+/// RGBA8, its chain is made again from level 0.
 pub(crate) fn upload_ktx2(
     renderer: &mut PcRenderer,
     id: SpriteId,
@@ -216,10 +233,17 @@ pub(crate) fn upload_ktx2(
     let h = out.get(1).as_f64().unwrap_or(0.0) as u32;
     let alpha = out.get(2).as_bool().unwrap_or(true);
     let data = js_sys::Uint8Array::new(&out.get(3)).to_vec();
-    if let Some(format) = format
-        && renderer.upload_sprite_compressed(id, w, h, format, &data, Some(alpha.into()))
-    {
-        return Ok(true);
+    // Levels 1.. follow level 0 in the answer (one entry for one level).
+    let more: Vec<Vec<u8>> = (4..out.length())
+        .map(|i| js_sys::Uint8Array::new(&out.get(i)).to_vec())
+        .collect();
+    let chained = !more.is_empty();
+    if let Some(format) = format {
+        let mut levels: Vec<&[u8]> = vec![&data];
+        levels.extend(more.iter().map(|l| &l[..]));
+        if renderer.upload_sprite_compressed_levels(id, w, h, format, &levels, Some(alpha.into())) {
+            return Ok(true);
+        }
     }
     let rgba = if format.is_some() {
         // The device refused the format after all: decode instead.
@@ -229,7 +253,11 @@ pub(crate) fn upload_ktx2(
     } else {
         data
     };
-    renderer.upload_sprite(id, w, h, &rgba);
+    if chained {
+        renderer.upload_sprite_mipmapped(id, w, h, &rgba);
+    } else {
+        renderer.upload_sprite(id, w, h, &rgba);
+    }
     Ok(false)
 }
 

@@ -104,6 +104,12 @@ pub fn engine_checks(
         DynamicProbe::Skipped => platform.log("TRINO_STEP:dynamic mesh skipped (no read_pixel)\n"),
         DynamicProbe::NoneHere => platform.log("TRINO_STEP:dynamic mesh none on this target\n"),
     }
+    platform.log("TRINO_STEP:mipmaps\n");
+    platform.log(match mipmaps(renderer)? {
+        MipProbe::Probed => "TRINO_STEP:mipmaps probed the far checker at its mean light\n",
+        MipProbe::Skipped => "TRINO_STEP:mipmaps skipped (no read_pixel)\n",
+        MipProbe::LevelZero => "TRINO_STEP:mipmaps level 0 only on this target\n",
+    });
     platform.log("TRINO_STEP:local lights\n");
     if local_lights(renderer)? {
         platform.log("TRINO_STEP:local lights probed\n");
@@ -2596,6 +2602,79 @@ pub fn dynamic_mesh(renderer: &mut dyn Renderer) -> Result<DynamicProbe, &'stati
         return Err("dynamic mesh: last frame's quad still shows");
     }
     Ok(DynamicProbe::Probed)
+}
+
+/// A 32×32 one-texel black and white checker with `mipmaps = true`
+/// (Bongo-Kart #178).
+pub const MIPS_CHECKER: SpriteId = SpriteId::from_path("sprites/selftest_mips");
+
+/// What the `mipmaps` step saw.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MipProbe {
+    /// The minified checker read its mean light everywhere.
+    Probed,
+    /// It drew; no `read_pixel` here (the browsers).
+    Skipped,
+    /// The target samples level 0 only (`Caps::mipmaps` off: the consoles
+    /// and the PC's console profiles): nothing to probe.
+    LevelZero,
+}
+
+/// Mipmap chains ([`trino_core::mip`], Bongo-Kart #178): the card textured
+/// with a one-texel checker, drawn about 12 pixels wide so each pixel
+/// covers ~2.7 texels. With the chain every probe reads the checker's mean
+/// light, sRGB 188 (made in linear light); level 0 alone would alias to
+/// anything between black and white. Only where [`Caps::mipmaps`] is on
+/// (the PC's native profile, the Web): the consoles keep level 0 and draw
+/// what they always drew.
+#[inline(never)]
+pub fn mipmaps(renderer: &mut dyn Renderer) -> Result<MipProbe, &'static str> {
+    let caps = *renderer.caps();
+    if !caps.mipmaps {
+        return Ok(MipProbe::LevelZero);
+    }
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    // 12 pixels across at 1.2 m.
+    let scale = 12.0 * 1.2 / focal;
+    let params = ModelParams {
+        shading: Shading::Unlit,
+        texture: Some(MIPS_CHECKER),
+        filter: TexFilter::Bilinear,
+        ..ModelParams::DEFAULT
+    };
+    let at = Transform3 {
+        scale: Vec3::new(scale, scale, scale),
+        ..Transform3::default()
+    };
+    // Several identical frames, like every step.
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&camera);
+        renderer.set_light(&DEFAULT_LIGHT);
+        renderer.draw_model(CARD, &at, Material::VertexLit, &params);
+        renderer.end_frame();
+    }
+    // The card's middle: 3×3 probes a pixel and a half apart.
+    let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+    for dy in [-1.5f32, 0.0, 1.5] {
+        for dx in [-1.5f32, 0.0, 1.5] {
+            let Some(c) = renderer.read_pixel((cx + dx) as u32, (cy + dy) as u32) else {
+                return Ok(MipProbe::Skipped);
+            };
+            let near = |v: u8| (v as i32 - 188).abs() <= 28;
+            if !(near(c.r) && near(c.g) && near(c.b)) {
+                return Err("mipmaps: the far checker is not its mean light");
+            }
+        }
+    }
+    Ok(MipProbe::Probed)
 }
 
 /// The AO probe panel, with ambient occlusion baked into its vertex colors.

@@ -337,6 +337,18 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
 - Live reload re-uploads changed boot assets; a grouped asset's new bytes show the next
   time its group loads.
 
+## Mipmaps (Bongo-Kart #178, ADR 0043 §1)
+
+- `mipmaps = true` on a `[sprites.*]` entry: a chain on the PC and the Web for textures
+  that tile far surfaces (water, roads, floors). Both sides must be powers of two (the
+  bake says which size it got); +33 % of its memory; the consoles ignore it.
+- Only bilinear 3D draws sample the chain (`TexFilter::Bilinear` or the platform's
+  default); 2D draws and `Point` draws keep level 0. `TRINO_MIPS=0` turns chains off for an
+  A/B screenshot.
+- The anisotropic presets (Medium and up) keep a sharper level along the view: a texture
+  with detail at the texel scale (a one-texel checker) keeps some moiré there. Soften the
+  master's finest detail if a surface still shimmers.
+
 ## Accessibility data (issue #60, ADR 0027)
 
 - Captions on a sound or a music track: `caption = "cap.x"` (a key in every

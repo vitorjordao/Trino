@@ -328,6 +328,18 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — mipmap chains on the PC and the Web (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #178, ADR 0043 §1)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::mip` (linear-light, alpha-weighted 2×2 chain down to 4 texels), `Caps::mipmaps` (PC, Web on; consoles off) | 4 unit tests (a checker averages to sRGB 188, transparent texels don't tint, flat colors stay, chain sizes) |
+| `mipmaps = true` on a sprite: `TSPM` master, BC chain in `<id>.bc`, KTX2 levels (Basis user mipmaps, `basis_to_ktx2` per level), the loader's `LoadedSprite::{mipmaps, compressed_levels}`; power-of-two sizes only | `asset-pipeline/tests/mipmaps.rs` (3 tests), the KTX2 chain test; the consoles' bakes unchanged |
+| `PcRenderer::{upload_sprite_mipmapped, upload_sprite_compressed_levels, set_mipmaps, samples_mipmaps, sprite_levels}`, trilinear samplers, level-0 views for 2D and console profiles; the PC runner, the editor and the Web (pack, groups, `glue.js` per-level transcode) upload chains; `TRINO_MIPS=0` | `platform-pc/tests/mipmaps.rs` (5 tests): far-floor moiré 51.1 → 0.5 and its light 127 → 187; per preset Low 22.6 → 0.0, Medium 23.5 → 11.4, High 18.3 → 13.8, Ultra 12.9 → 12.8; console profiles and 2D byte for byte; BC chain within 2/255 |
+| castle64's `mipmaps` self-test step | `engine_checks` (both T&L paths; fails with the chain off; console profiles report level 0) |
+
+Not done: chains on the consoles (no TMEM for them on the N64; the 3DS could take them in
+`tex3ds` later); auto-mipmaps for every 3D texture (opt-in keeps memory and goldens).
+
 ## Done — radial speed blur in the post stack (2026-11-21, branch `feat/post-speed-blur`, ADR 0033 §7)
 
 | Item | Evidence |

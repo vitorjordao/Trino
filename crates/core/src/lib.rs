@@ -41,6 +41,7 @@ pub mod math;
 pub mod math3d;
 pub mod mem;
 pub mod memo;
+pub mod mip;
 pub mod netpad;
 pub mod options;
 pub mod pad;

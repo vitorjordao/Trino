@@ -11,7 +11,9 @@
 //! a `.basis` file; [`basis_to_ktx2`] moves its data into the KTX2
 //! container the way the encoder's own `create_ktx2_file` does: the ETC1S
 //! codebooks and Huffman tables become the BasisLZ global data, the slices
-//! become level 0. The browser side is Binomial's transcoder compiled to
+//! become level 0 (and, for a sprite with `mipmaps = true`, Bongo-Kart
+//! #178, the chain [`trino_core::mip`] makes becomes levels 1..: the
+//! encoder takes them as user mipmaps). The browser side is Binomial's transcoder compiled to
 //! WebAssembly (`apps/web/vendor/basis`), the same code as
 //! [`decode`]'s, so the PSNR the bake measures is what a browser shows.
 
@@ -75,6 +77,29 @@ static TRANSCODER: Once = Once::new();
 /// decode. Deterministic (one encoder thread, fixed settings), so bakes
 /// write the same bytes every time.
 pub fn encode(mode: Ktx2Mode, width: u32, height: u32, rgba: &[u8]) -> Result<Encoded, String> {
+    encode_levels(mode, width, height, rgba, false)
+}
+
+/// [`encode`] with a mipmap chain (Bongo-Kart #178): the levels
+/// [`trino_core::mip`] makes from `rgba` (the PC's BC chain is the same
+/// pixels), one KTX2 level each. `decoded` stays level 0. A size that
+/// can't carry a chain encodes one level.
+pub fn encode_mipmapped(
+    mode: Ktx2Mode,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<Encoded, String> {
+    cached(mode, width, height, rgba, true)
+}
+
+fn encode_levels(
+    mode: Ktx2Mode,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    mipmaps: bool,
+) -> Result<Encoded, String> {
     assert_eq!(rgba.len(), (width * height * 4) as usize);
     let mut params = CompressorParams::new();
     params.set_basis_format(match mode {
@@ -89,6 +114,23 @@ pub fn encode(mode: Ktx2Mode, width: u32, height: u32, rgba: &[u8]) -> Result<En
     params.set_generate_mipmaps(false);
     params.set_print_status_to_stdout(false);
     params.source_image_mut(0).init(rgba, width, height, 4);
+    if mipmaps && trino_core::mip::chainable(width, height) {
+        let mut chain = vec![0u8; trino_core::mip::rgba8_chain_bytes(width, height)];
+        chain[..rgba.len()].copy_from_slice(rgba);
+        trino_core::mip::fill_rgba8_chain(&mut chain, width, height);
+        // The encoder's user mipmaps are levels 1.. (level 0 is the source
+        // image).
+        for l in 1..trino_core::mip::levels(width, height) {
+            let (lw, lh) = trino_core::mip::level_size(width, height, l);
+            let at = trino_core::mip::rgba8_level_offset(width, height, l);
+            params.source_mipmap_image_mut(0, l - 1).init(
+                &chain[at..at + (lw * lh * 4) as usize],
+                lw,
+                lh,
+                4,
+            );
+        }
+    }
     let mut compressor = Compressor::new(1);
     // SAFETY: the parameters are the crate's own setters on one RGBA8
     // image of the size given; nothing else is configured.
@@ -124,20 +166,30 @@ pub fn encode_cached(
     height: u32,
     rgba: &[u8],
 ) -> Result<Encoded, String> {
+    cached(mode, width, height, rgba, false)
+}
+
+fn cached(
+    mode: Ktx2Mode,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    mipmaps: bool,
+) -> Result<Encoded, String> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    type Key = (Ktx2Mode, u32, u32, u64);
+    type Key = (Ktx2Mode, u32, u32, u64, bool);
     static CACHE: OnceLock<Mutex<HashMap<Key, Encoded>>> = OnceLock::new();
     // FNV-1a over the pixels (and their length through the size).
     let hash = rgba.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
         (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
-    let key = (mode, width, height, hash);
+    let key = (mode, width, height, hash, mipmaps);
     let cache = CACHE.get_or_init(Default::default);
     if let Some(e) = cache.lock().unwrap().get(&key) {
         return Ok(e.clone());
     }
-    let e = encode(mode, width, height, rgba)?;
+    let e = encode_levels(mode, width, height, rgba, mipmaps)?;
     let mut map = cache.lock().unwrap();
     if map.len() > 512 {
         map.clear();
@@ -218,9 +270,9 @@ const TRANSFER_SRGB: u32 = 2;
 const UASTC_RGB: u32 = 0;
 const UASTC_RGBA: u32 = 3;
 
-/// Move a one-image, one-level `.basis` file into a KTX2 container
-/// (`basis_compressor::create_ktx2_file`, without its optional key/value
-/// data).
+/// Move a one-image `.basis` file (one level, or a mipmap chain) into a
+/// KTX2 container (`basis_compressor::create_ktx2_file`, without its
+/// optional key/value data).
 pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8>, String> {
     // basis_file_header (basisu_file_headers.h), packed little-endian.
     if le(basis, 0, 2)? != u64::from(u16::from_le_bytes(*b"sB")) {
@@ -239,33 +291,49 @@ pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8
             .ok_or_else(|| "truncated .basis file".to_string())
     };
 
-    // basis_slice_desc: 23 bytes each. One image: an RGB slice and, with
-    // alpha (ETC1S), an alpha slice.
-    let mut level = Vec::new();
-    // ktx2_etc1s_image_desc: flags, rgb offset/length, alpha offset/length.
-    let mut image = [0u32; 5];
+    // basis_slice_desc: 23 bytes each. One image: per level an RGB slice
+    // and, with alpha (ETC1S), an alpha slice. Each level's data is its
+    // slices one after the other; the ETC1S image descriptors point into
+    // it.
+    let mut levels: Vec<Vec<u8>> = Vec::new();
+    // ktx2_etc1s_image_desc per level: flags, rgb offset/length, alpha
+    // offset/length.
+    let mut images: Vec<[u32; 5]> = Vec::new();
     let (mut width, mut height) = (0, 0);
     for s in 0..total_slices {
         let d = slices_at + s * 23;
-        if le(basis, d, 3)? != 0 || le(basis, d + 3, 1)? != 0 {
-            return Err("only one image of one level converts".into());
+        if le(basis, d, 3)? != 0 {
+            return Err("only one image converts".into());
+        }
+        let l = le(basis, d + 3, 1)? as usize;
+        if l > 15 {
+            return Err(format!("level {l}: too many levels"));
+        }
+        if l >= levels.len() {
+            levels.resize(l + 1, Vec::new());
+            images.resize(l + 1, [0; 5]);
         }
         let flags = le(basis, d + 4, 1)?;
-        width = le(basis, d + 5, 2)? as u32;
-        height = le(basis, d + 7, 2)? as u32;
+        if l == 0 {
+            width = le(basis, d + 5, 2)? as u32;
+            height = le(basis, d + 7, 2)? as u32;
+        }
         let (at, len) = (
             le(basis, d + 13, 4)? as usize,
             le(basis, d + 17, 4)? as usize,
         );
-        let offset = level.len() as u32;
-        level.extend_from_slice(range(at, len)?);
+        let offset = levels[l].len() as u32;
+        levels[l].extend_from_slice(range(at, len)?);
         if flags & 1 != 0 {
-            image[3] = offset;
-            image[4] = len as u32;
+            images[l][3] = offset;
+            images[l][4] = len as u32;
         } else {
-            image[1] = offset;
-            image[2] = len as u32;
+            images[l][1] = offset;
+            images[l][2] = len as u32;
         }
+    }
+    if levels.is_empty() || levels.iter().any(|l| l.is_empty()) {
+        return Err("a .basis file with a level missing".into());
     }
 
     let mut sgd = Vec::new();
@@ -275,8 +343,10 @@ pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8
         for v in [ep_len, sel_len, tab_len, 0] {
             sgd.extend_from_slice(&(v as u32).to_le_bytes());
         }
-        for v in image {
-            sgd.extend_from_slice(&v.to_le_bytes());
+        for image in &images {
+            for v in image {
+                sgd.extend_from_slice(&v.to_le_bytes());
+            }
         }
         sgd.extend_from_slice(range(ep_at, ep_len)?);
         sgd.extend_from_slice(range(sel_at, sel_len)?);
@@ -305,9 +375,12 @@ pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8
         set(&mut dfd, 7, w7);
     }
 
-    // Header (80 bytes), one level index entry (24), the DFD, the global
-    // data (8-aligned), the level (16-aligned when not supercompressed).
-    let mut out = vec![0u8; 80 + 24];
+    // Header (80 bytes), a level index entry per level (24), the DFD, the
+    // global data (8-aligned), the levels smallest first (16-aligned when
+    // not supercompressed: UASTC levels are whole 16-byte blocks, so one
+    // pad before the first keeps every one aligned).
+    let index_len = 24 * levels.len();
+    let mut out = vec![0u8; 80 + index_len];
     let dfd_at = out.len();
     out.extend_from_slice(&dfd);
     let sgd_at = if sgd.is_empty() {
@@ -321,8 +394,11 @@ pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8
     if mode == Ktx2Mode::Uastc {
         out.resize(out.len().next_multiple_of(16), 0);
     }
-    let level_at = out.len();
-    out.extend_from_slice(&level);
+    let mut level_at = vec![0usize; levels.len()];
+    for l in (0..levels.len()).rev() {
+        level_at[l] = out.len();
+        out.extend_from_slice(&levels[l]);
+    }
 
     let scheme = match mode {
         Ktx2Mode::Etc1s => SS_BASISLZ,
@@ -339,7 +415,7 @@ pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8
         0,
         0,
         1,
-        1,
+        levels.len() as u32,
         scheme,
         dfd_at as u32,
         dfd.len() as u32,
@@ -352,11 +428,14 @@ pub fn basis_to_ktx2(basis: &[u8], mode: Ktx2Mode, alpha: bool) -> Result<Vec<u8
     header.extend_from_slice(&(sgd.len() as u64).to_le_bytes());
     debug_assert_eq!(header.len(), 80);
     out[..80].copy_from_slice(&header);
-    // Level 0: offset, length, uncompressed length (0 for BasisLZ).
-    out[80..88].copy_from_slice(&(level_at as u64).to_le_bytes());
-    out[88..96].copy_from_slice(&(level.len() as u64).to_le_bytes());
-    let uncompressed = if scheme == SS_NONE { level.len() } else { 0 };
-    out[96..104].copy_from_slice(&(uncompressed as u64).to_le_bytes());
+    // Each level: offset, length, uncompressed length (0 for BasisLZ).
+    for (l, data) in levels.iter().enumerate() {
+        let e = 80 + 24 * l;
+        out[e..e + 8].copy_from_slice(&(level_at[l] as u64).to_le_bytes());
+        out[e + 8..e + 16].copy_from_slice(&(data.len() as u64).to_le_bytes());
+        let uncompressed = if scheme == SS_NONE { data.len() } else { 0 };
+        out[e + 16..e + 24].copy_from_slice(&(uncompressed as u64).to_le_bytes());
+    }
     Ok(out)
 }
 
@@ -368,18 +447,30 @@ pub struct Ktx2Info {
     pub mode: Ktx2Mode,
     /// The DFD carries an alpha channel.
     pub alpha: bool,
+    /// Mip levels: 1, or a sprite's chain (`mipmaps = true`, Bongo-Kart
+    /// #178: [`trino_core::mip::levels`] of them).
+    pub levels: u32,
 }
 
-/// Read a KTX2 file's header and DFD: a one-level 2D Basis Universal
-/// texture, or an error naming what isn't.
+/// Read a KTX2 file's header and DFD: a 2D Basis Universal texture of one
+/// level or a whole mipmap chain, or an error naming what isn't.
 pub fn parse(file: &[u8]) -> Result<Ktx2Info, String> {
     if file.len() < 104 || file[..12] != KTX2_MAGIC {
         return Err("not a KTX2 file".into());
     }
     let u32_at = |at: usize| u32::from_le_bytes(file[at..at + 4].try_into().unwrap());
     let (width, height) = (u32_at(20), u32_at(24));
-    if u32_at(12) != 0 || u32_at(28) != 0 || u32_at(36) != 1 || u32_at(40) != 1 {
-        return Err("only one-level 2D Basis Universal KTX2 textures load".into());
+    let levels = u32_at(40);
+    if u32_at(12) != 0 || u32_at(28) != 0 || u32_at(36) != 1 || levels == 0 {
+        return Err("only 2D Basis Universal KTX2 textures load".into());
+    }
+    if levels != 1 && levels != trino_core::mip::levels(width, height) {
+        return Err(format!(
+            "{levels} levels are not the {width}x{height} mipmap chain"
+        ));
+    }
+    if file.len() < 80 + 24 * levels as usize {
+        return Err("truncated KTX2 level index".into());
     }
     let (dfd_at, dfd_len) = (u32_at(48) as usize, u32_at(52) as usize);
     let dfd = file
@@ -394,25 +485,29 @@ pub fn parse(file: &[u8]) -> Result<Ktx2Info, String> {
         (SS_NONE, 0xA6) => (Ktx2Mode::Uastc, (dfd[31] & 0xF) as u32 == UASTC_RGBA),
         (s, m) => return Err(format!("not Basis Universal (scheme {s}, model {m})")),
     };
-    let level_at = u64::from_le_bytes(file[80..88].try_into().unwrap()) as usize;
-    let level_len = u64::from_le_bytes(file[88..96].try_into().unwrap()) as usize;
-    if level_at
-        .checked_add(level_len)
-        .is_none_or(|end| end > file.len())
-    {
-        return Err("truncated KTX2 level".into());
+    for l in 0..levels as usize {
+        let e = 80 + 24 * l;
+        let level_at = u64::from_le_bytes(file[e..e + 8].try_into().unwrap());
+        let level_len = u64::from_le_bytes(file[e + 8..e + 16].try_into().unwrap());
+        if level_at
+            .checked_add(level_len)
+            .is_none_or(|end| end > file.len() as u64)
+        {
+            return Err("truncated KTX2 level".into());
+        }
     }
     Ok(Ktx2Info {
         width,
         height,
         mode,
         alpha,
+        levels,
     })
 }
 
 /// A KTX2 file of [`encode`]'s back to its `.basis` form, for the native
-/// transcoder (tests and tools: the container round trip). One image, one
-/// level.
+/// transcoder (tests and tools: the container round trip). One image, its
+/// level 0 (a chain's other levels stay behind).
 pub fn ktx2_to_basis(file: &[u8]) -> Result<Vec<u8>, String> {
     let info = parse(file)?;
     // Every offset and length comes from the file: a span outside it is an
@@ -431,8 +526,10 @@ pub fn ktx2_to_basis(file: &[u8]) -> Result<Vec<u8>, String> {
     match info.mode {
         Ktx2Mode::Uastc => slices.push((0, level)),
         Ktx2Mode::Etc1s => {
+            // The header, then an image descriptor per level (level 0's
+            // first), then the codebooks.
             let desc = 20;
-            let books = desc + 20;
+            let books = desc + 20 * info.levels as usize;
             if sgd.len() < books {
                 return Err("truncated KTX2 supercompression data".into());
             }
@@ -578,6 +675,7 @@ mod tests {
                         height: 32,
                         mode,
                         alpha,
+                        levels: 1,
                     },
                     "{mode:?} alpha={alpha}"
                 );
@@ -590,6 +688,39 @@ mod tests {
                     Ktx2Mode::Uastc => 38.0,
                 };
                 assert!(db > floor, "{mode:?} alpha={alpha}: {db:.1} dB");
+            }
+        }
+    }
+
+    #[test]
+    fn a_mipmapped_texture_carries_its_chain_level_by_level() {
+        // Bongo-Kart #178: the KTX2 holds every level of the chain, the
+        // smallest first in the file, level 0 decoding as before.
+        for mode in Ktx2Mode::ALL {
+            for alpha in [false, true] {
+                let rgba = image(64, 32, alpha);
+                let m = encode_mipmapped(mode, 64, 32, &rgba).unwrap();
+                let info = parse(&m.ktx2).unwrap();
+                assert_eq!(info.levels, trino_core::mip::levels(64, 32), "{mode:?}");
+                assert_eq!(info.levels, 4, "64x32 .. 8x4");
+                let plain = encode(mode, 64, 32, &rgba).unwrap();
+                assert_eq!(m.decoded, plain.decoded, "{mode:?} {alpha}: level 0");
+                assert_eq!(decode(&m.ktx2).unwrap(), m.decoded, "{mode:?} {alpha}");
+                let entry = |l: usize| {
+                    let e = 80 + 24 * l;
+                    let at = u64::from_le_bytes(m.ktx2[e..e + 8].try_into().unwrap());
+                    let len = u64::from_le_bytes(m.ktx2[e + 8..e + 16].try_into().unwrap());
+                    (at, len)
+                };
+                for l in 1..info.levels as usize {
+                    let (at, len) = entry(l);
+                    assert!(len > 0, "{mode:?} level {l}");
+                    assert!(at < entry(l - 1).0, "{mode:?}: level {l} before {}", l - 1);
+                }
+                assert!(
+                    m.ktx2.len() > plain.ktx2.len(),
+                    "{mode:?}: the chain costs bytes"
+                );
             }
         }
     }
@@ -617,7 +748,7 @@ mod tests {
         let mut f = encode(Ktx2Mode::Uastc, 8, 8, &image(8, 8, false))
             .unwrap()
             .ktx2;
-        f[40] = 2; // two levels
+        f[40] = 3; // three levels: not an 8x8 chain (8, 4)
         assert!(parse(&f).is_err());
         let truncated = &encode(Ktx2Mode::Etc1s, 8, 8, &image(8, 8, false))
             .unwrap()

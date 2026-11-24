@@ -32,7 +32,22 @@ pub struct SpriteAsset {
     /// The PC's BCn blocks (the bake's `compressed`): the Game view's PC
     /// profile draws them decoded, what any BC GPU samples.
     pub compressed: Option<pipeline::CompressedSprite>,
+    /// The manifest's `mipmaps = true` (Bongo-Kart #178): the views upload
+    /// its chain, which only the PC profile samples.
+    pub mipmaps: bool,
     pub thumb: Option<egui::TextureHandle>,
+}
+
+impl SpriteAsset {
+    /// Upload the master (and its mipmap chain when it has one).
+    fn upload_master(&self, r: &mut PcRenderer) {
+        let id = trino_core::SpriteId(self.id);
+        if self.mipmaps {
+            r.upload_sprite_mipmapped(id, self.width, self.height, &self.rgba);
+        } else {
+            r.upload_sprite(id, self.width, self.height, &self.rgba);
+        }
+    }
 }
 
 pub struct ModelAsset {
@@ -224,6 +239,7 @@ impl Project {
                     rgba: s.rgba,
                     preview_3ds: s.preview_3ds,
                     compressed: s.compressed,
+                    mipmaps: s.mipmaps,
                     thumb: None,
                 },
             );
@@ -333,7 +349,7 @@ impl Project {
             r.set_texture_format(trino_core::SpriteId(id), Some(f));
         }
         for s in self.sprites.values() {
-            r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
+            s.upload_master(r);
         }
         for m in self.models.values() {
             r.upload_mesh(ModelId(m.id), m.tmdl_for(r));
@@ -361,10 +377,19 @@ impl Project {
     pub fn upload_platform_sprites(&self, r: &mut PcRenderer, target: trino_scene::Target) {
         if target == trino_scene::Target::Pc {
             for s in self.sprites.values() {
-                if let Some(c) = &s.compressed
-                    && let Some(px) = c.format.decode(s.width, s.height, &c.data)
+                let level0 = s
+                    .compressed
+                    .as_ref()
+                    .and_then(|c| Some((c, c.format.levels(s.width, s.height, &c.data)?[0])));
+                if let Some((c, l0)) = level0
+                    && let Some(px) = c.format.decode(s.width, s.height, l0)
                 {
-                    r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &px);
+                    let id = trino_core::SpriteId(s.id);
+                    if s.mipmaps {
+                        r.upload_sprite_mipmapped(id, s.width, s.height, &px);
+                    } else {
+                        r.upload_sprite(id, s.width, s.height, &px);
+                    }
                 }
             }
             return;
@@ -396,7 +421,7 @@ impl Project {
             if let Some(s) = self.sprites.get(l) {
                 let format = self.n64_formats.get(&s.id).copied();
                 r.set_texture_format(trino_core::SpriteId(s.id), format);
-                r.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, &s.rgba);
+                s.upload_master(r);
             }
             if let Some(m) = self.models.get(l) {
                 r.upload_mesh(ModelId(m.id), m.tmdl_for(r));

@@ -528,6 +528,15 @@ since #122.
   the PC's console profiles (counted in `FrameStats::dynamic_rejected`). Tests:
   `crates/core/tests/dynamic_mesh.rs`, `crates/platform-pc/tests/dynamic_mesh.rs`
   (byte for byte the baked model's frame on both paths), the `dynamic mesh` step.
+- **Mipmaps (2026-11-23, ADR 0043 §1, Bongo-Kart #178):** `mipmaps = true` on a sprite
+  gives the PC and the Web a chain (`trino_core::mip`: 2×2 means in linear light, alpha
+  weighted, down to 4 texels; powers of two only). The PC's `<id>.bc` holds every level and
+  the master's magic is `TSPM`; the Web's KTX2 carries the levels (Basis user mipmaps,
+  transcoded level by level in `glue.js`). `PcRenderer::upload_sprite_mipmapped` /
+  `upload_sprite_compressed_levels`; bilinear 3D draws sample the chain where
+  `Caps::mipmaps` (PC native, Web), 2D draws and the console profiles keep level 0
+  (`set_mipmaps`, `TRINO_MIPS=0`). Tests: `crates/platform-pc/tests/mipmaps.rs` (far-floor
+  moiré per quality preset), `crates/asset-pipeline/tests/mipmaps.rs`, the `mipmaps` step.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`

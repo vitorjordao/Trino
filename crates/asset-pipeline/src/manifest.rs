@@ -351,6 +351,13 @@ pub struct SpriteDecl {
     /// (issue #64), like a model's `grading`.
     #[serde(default)]
     pub grading: Option<String>,
+    /// Give the PC and the Web a mipmap chain (Bongo-Kart #178,
+    /// `trino_core::mip`): a texture that tiles a floor, a sea or a wall
+    /// seen from far stops shimmering. Both sides must be powers of two
+    /// (the bake fails otherwise); +33 % of its memory. The consoles ignore
+    /// it.
+    #[serde(default)]
+    pub mipmaps: bool,
 }
 
 #[derive(Debug, Deserialize)]

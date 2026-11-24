@@ -47,7 +47,14 @@ fn pc_target_on(
     };
     for s in assets.sprites {
         let px = s.pixels_for(target);
-        renderer.upload_sprite(trino_core::SpriteId(s.id), s.width, s.height, px);
+        let id = trino_core::SpriteId(s.id);
+        // A mipmapped sprite goes up with its chain, as the PC runner does
+        // (the console profiles sample its level 0 anyway).
+        if s.mipmaps {
+            renderer.upload_sprite_mipmapped(id, s.width, s.height, px);
+        } else {
+            renderer.upload_sprite(id, s.width, s.height, px);
+        }
     }
     for f in assets.fonts {
         renderer.upload_font(trino_core::FontId(f.id), f.table);
@@ -198,6 +205,34 @@ fn the_dynamic_mesh_step_draws_on_the_native_profile_only() {
                 "GPU path {gpu}"
             );
         }
+    }
+}
+
+/// The `mipmaps` step (Bongo-Kart #178): the native profile reads the far
+/// checker's mean light on both T&L paths, and level 0 would alias (the
+/// step fails with the chain off); the console profiles keep level 0.
+#[test]
+fn the_mipmaps_step_reads_the_mean_light_on_the_native_profile_only() {
+    use castle64::selftest::{MipProbe, mipmaps};
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        if profile != SimProfile::Native {
+            assert_eq!(mipmaps(&mut renderer), Ok(MipProbe::LevelZero));
+            continue;
+        }
+        for gpu in [true, false] {
+            renderer.set_hw_tnl(gpu);
+            assert_eq!(
+                mipmaps(&mut renderer),
+                Ok(MipProbe::Probed),
+                "GPU path {gpu}"
+            );
+        }
+        renderer.set_mipmaps(false);
+        assert!(mipmaps(&mut renderer).is_err(), "level 0 alone must fail");
     }
 }
 

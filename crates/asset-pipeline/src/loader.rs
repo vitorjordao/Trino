@@ -33,7 +33,8 @@ struct IndexEntry {
     n64_format: Option<String>,
 }
 
-/// A sprite's PC blocks (`<id>.bc`, `crate::texture::BcFormat`).
+/// A sprite's PC blocks (`<id>.bc`, `crate::texture::BcFormat`): level 0,
+/// or a mipmapped sprite's whole chain ([`CompressedSprite::levels`]).
 pub struct CompressedSprite {
     pub format: crate::texture::BcFormat,
     pub data: Vec<u8>,
@@ -54,18 +55,30 @@ pub struct LoadedSprite {
     /// The Web's KTX2 file (a Web bake whose format for the sprite is
     /// KTX2): what a browser loads instead of the master.
     pub ktx2: Option<Vec<u8>>,
+    /// The manifest asked for a mipmap chain (`mipmaps = true`, Bongo-Kart
+    /// #178; the master's `TSPM` magic): the PC's native profile uploads
+    /// the BC chain, or makes one from the pixels.
+    pub mipmaps: bool,
 }
 
 impl LoadedSprite {
+    /// The BC blocks of every level ([`CompressedSprite`]): one level, or
+    /// a mipmapped sprite's chain.
+    pub fn compressed_levels(&self) -> Option<Vec<&[u8]>> {
+        let c = self.compressed.as_ref()?;
+        c.format.levels(self.width, self.height, &c.data)
+    }
+
     /// What the PC's native profile shows on a GPU without BC: the blocks
     /// decoded (the same pixels a BC GPU samples), or the master.
     pub fn pc_pixels(&self) -> std::borrow::Cow<'_, [u8]> {
-        match &self.compressed {
-            Some(c) => c.format.decode(self.width, self.height, &c.data).map_or(
+        let level0 = self.compressed_levels().and_then(|l| l.first().copied());
+        match (&self.compressed, level0) {
+            (Some(c), Some(level0)) => c.format.decode(self.width, self.height, level0).map_or(
                 std::borrow::Cow::Borrowed(&self.rgba[..]),
                 std::borrow::Cow::Owned,
             ),
-            None => std::borrow::Cow::Borrowed(&self.rgba),
+            _ => std::borrow::Cow::Borrowed(&self.rgba),
         }
     }
 
@@ -314,7 +327,9 @@ fn push_entry(
     match kind {
         "sprite" => {
             // A truncated file must be an error, not a `split_at` panic.
-            if bytes.len() < 12 || !bytes.starts_with(b"TSPR") {
+            // `TSPM`: the same layout, mipmaps asked for (Bongo-Kart #178).
+            let mipmaps = bytes.starts_with(b"TSPM");
+            if bytes.len() < 12 || !(bytes.starts_with(b"TSPR") || mipmaps) {
                 return Err(format!("{}: bad sprite blob", what()));
             }
             let rest = &bytes[4..];
@@ -351,7 +366,8 @@ fn push_entry(
                     let code = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
                     let format = crate::texture::BcFormat::from_code(code).ok_or_else(bad)?;
                     let data = bytes[16..].to_vec();
-                    if data.len() as u64 != format.texture_bytes(width, height) {
+                    // One level, or (mipmapped) the whole chain.
+                    if format.levels(width, height, &data).is_none() {
                         return Err(bad());
                     }
                     Some(CompressedSprite { format, data })
@@ -374,6 +390,7 @@ fn push_entry(
                 preview_3ds,
                 compressed,
                 ktx2,
+                mipmaps,
             });
         }
         "sound" | "music" => {

@@ -7,7 +7,9 @@
 //! Layout (little-endian): magic `TPAK`, u32 version, u32 count, then per
 //! asset a u8 [`Kind`], u32 id, u32 length and the bytes:
 //!
-//! - [`Kind::Sprite`]: a `TSPR` blob (u32 width, u32 height, RGBA8).
+//! - [`Kind::Sprite`]: a `TSPR` blob (u32 width, u32 height, RGBA8), or
+//!   `TSPM` for a sprite with `mipmaps = true` (Bongo-Kart #178): its
+//!   chain is made at upload ([`read_sprite_mips`]).
 //! - [`Kind::SpriteKtx2`]: a `.ktx2` file (Basis Universal), transcoded at
 //!   load to what the GPU samples.
 //! - [`Kind::Sound`] / [`Kind::Music`]: a `TSN2` blob
@@ -212,7 +214,14 @@ pub fn bundle_url(pack_url: &str, group: &str) -> String {
 
 /// A `TSPR` blob: width, height and its RGBA8 pixels.
 pub fn read_sprite(blob: &[u8]) -> Result<(u32, u32, &[u8]), String> {
-    if blob.len() < 12 || &blob[..4] != b"TSPR" {
+    read_sprite_mips(blob).map(|(w, h, px, _)| (w, h, px))
+}
+
+/// [`read_sprite`], and whether the blob asks for a mipmap chain (`TSPM`,
+/// Bongo-Kart #178).
+pub fn read_sprite_mips(blob: &[u8]) -> Result<(u32, u32, &[u8], bool), String> {
+    let mips = blob.get(..4) == Some(b"TSPM");
+    if blob.len() < 12 || !(mips || &blob[..4] == b"TSPR") {
         return Err("bad sprite blob".into());
     }
     let w = u32::from_le_bytes(blob[4..8].try_into().unwrap());
@@ -226,7 +235,7 @@ pub fn read_sprite(blob: &[u8]) -> Result<(u32, u32, &[u8]), String> {
     {
         return Err("truncated sprite blob".into());
     }
-    Ok((w, h, px))
+    Ok((w, h, px, mips))
 }
 
 #[cfg(test)]

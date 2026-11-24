@@ -1,0 +1,21 @@
+unix_seconds() = 1795495336  (2026-11-24 04:42:16 UTC, weekday 2)
+daily challenge day = day_index(now) = 20781
+pinned (TRINO_UNIX_TIME=1798761600): 1798761600 = 2027-01-01, day 20819
+
+ActionMap defaults:
+  accelerate  keys W / UP         pad A
+  brake       keys S / DOWN       pad B
+  drift       keys SPACE / Z      pad R
+  item        keys X / E          pad X
+  look back   keys B              pad Select
+
+press J for item, slot 2 -> rebind_key(item, 1, J) swapped with None
+press SPACE for item, slot 1 -> swapped with Some(2) (drift)
+  accelerate  keys W / UP         pad A
+  brake       keys S / DOWN       pad B
+  drift       keys X / Z          pad R
+  item        keys SPACE / J      pad X
+  look back   keys B              pad Select
+
+save block (22 bytes): 01 05 15 3d 00 ff 17 3e 01 ff 2f 31 05 ff 02 25 02 ff 1e ff 07 ff
+read back equal: true

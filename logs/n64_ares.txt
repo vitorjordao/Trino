@@ -1,0 +1,15 @@
+# cargo xtask test n64 --expansion-pak both (TRINO_ARES=docker), PR3 head
+[ares] TRINO_HW n64 ram=8M tier=expanded
+[ares] TRINO_MEM: ram=8388608 heap_total=6333984 before_assets=873592 boot_assets=482000
+[ares] TRINO_STEP:clock rumble input
+[ares] TRINO_STEP:clock rumble input ok clock=2026-11-24T04:43 rumble=ready rebind=0 image=0
+[ares] TRINO_HEAP:2113920/6333984 top=4104696 before the palette meshes
+[ares] TRINO_TEST_PASS
+[n64] TEST PASS (with the Expansion Pak)
+[ares] TRINO_HW n64 ram=4M tier=base
+[ares] TRINO_MEM: ram=4194304 heap_total=2139680 before_assets=735608 boot_assets=478256
+[ares] TRINO_STEP:clock rumble input
+[ares] TRINO_STEP:clock rumble input ok clock=2026-11-24T04:44 rumble=ready rebind=0 image=0
+[ares] TRINO_HEAP:1974280/2139680 top=55656 before the palette meshes
+[ares] TRINO_TEST_PASS
+[n64] TEST PASS (without the Expansion Pak)

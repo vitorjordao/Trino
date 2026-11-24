@@ -130,3 +130,93 @@ frame; the console profiles add), evidence `target/evidence/additive/` (a spark 
 and without, per profile), the editor's material widget test, and castle64's `additive`
 self-test step (the card added over a backdrop reads their sum; on PC, ares, Azahar and the
 browsers, `engine_checks` on all three profiles and both T&L paths).
+
+## 3. A two-color ambient, a rim light and a mix of two LUTs (Bongo-Kart #181)
+
+### Context
+
+Bongo Kart lights its karts under one ambient color: a kart's underside reads as bright as
+its roof, and at dusk a kart melts into the track behind it. Two cheap terms fix both:
+
+- a **two-color ambient** (the sky's color on what faces up, the ground's on what faces
+  down), so the shading follows the shape;
+- a **rim light**, so a silhouette separates from the background.
+
+Its time of day and weather wanted a look that passes between two LUTs (#89 of the game)
+without baking one per step.
+
+### Decisions
+
+- **`Light::ground: Option<Color>` and `Light::rim: Rim { color, strength }`**:
+  - Defaults are `None` and `Rim::NONE` (strength 0). `DEFAULT_LIGHT` and `Light::DEFAULT`
+    shade as before, and every golden is unchanged.
+  - `Light::has_terms()` tells whether either is on.
+  - With a ground, `ambient_color` is the sky's. The ambient is mixed from the ground to the
+    sky by `n.y·0.5 + 0.5` of the world normal.
+  - The rim adds `(1 − n·v)²` of its color × strength, where v points from the vertex to
+    the eye. It is a per-vertex Fresnel-like term: no new pass, no new blend.
+- **Where it is evaluated:**
+  - **CPU T&L, every target:** `render3d/lit.rs`'s `Terms`. The per-vertex shade there is
+    out of line (`Terms::light`), and the static path (`tessellate_joints`) is untouched.
+    Its body stays within the N64's 16 KB I-cache guard.
+  - **Dispatch:** `tessellate_with` sends every lit draw under such a light to the lit
+    copy, as it does when a local light reaches one.
+  - **PC and Web:** the GPU T&L evaluates the same terms in `mesh_vertex`
+    (`MeshCtx::{ground, rim, eye}`). The tnl oracle holds the two paths to a mean of
+    0.000/255.
+  - **N64 and 3DS:** the RSP overlays and the PICA200's shader don't know the terms, so a
+    lit draw under them leaves the hardware path (`RspReject::LightTerms`,
+    `GpuReject::LightTerms`, "sky/ground or rim light"). Unlit draws stay on it, and water
+    ignores the terms.
+  - **N64 memo:** `set_light` bumps the memo's generation, so no old command answers a
+    draw the terms moved to the CPU.
+- **Scenes:** `environment.light` takes `ground_color` (written bare: `ground_color: (40, 30,
+  20)`), `rim` and `rim_color`. Unset fields stay out of the file, codegen writes both
+  fields, and the editor's Inspector › Light has Ground and Rim rows. Neither is in TSCN:
+  `BakedScene::light()` returns the one-color ambient.
+- **The rim lights everything under that light**, the ground too, which a camera sees at a
+  grazing angle (`n·v` small). A game gives its characters a rimmed light and the level the
+  plain one, with `set_light` between the two groups of draws. Two caveats:
+  - **The N64 memo:** each light change bumps its generation, so on the N64 two lights a
+    frame rebuild every RSP draw (no memo hits). There, keep one light, or give it the rim
+    only where the characters are the whole picture.
+  - **Big triangles:** a view-dependent color changes across one triangle. On a big
+    triangle crossing the guard band, the CPU path's clipped polygon and the GPU's
+    whole-triangle interpolation differed by up to 11/255. Tests and levels use subdivided
+    floors (as fog already asked).
+- **Two LUTs:**
+  - `PostSettings::grading_to: Option<LutId>` and `grading_mix: f32` (0..=1, clamped;
+    NaN is 0).
+  - The composite samples the second LUT at the same tonemapped color and mixes:
+    `trino_core::post::grade_mix` is the CPU reference. A first LUT that is `None` mixes
+    from the ungraded color.
+  - Weight 0, or a missing second LUT, is the old frame byte for byte. The composite has
+    one more 3D binding (6), and its uniform grows 96 → 104 bytes.
+  - The Full tier only: the consoles' bakes grade by `grading` alone, and the Baked tier
+    ignores the post settings as before.
+  - Scenes' `post` takes `grading_to` and `grading_mix`, the editor has "Mix to" and "Mix",
+    and codegen writes them. They are not in TSCN, like the rest of `post`.
+
+### Tests
+
+- `crates/core/tests/light_terms.rs`:
+  - the default light has no terms;
+  - a ground of the sky's color shades within 1/255 of the old light;
+  - sky on top, ground below;
+  - the rim lights edge-on vertices, not facing ones, and its strength scales;
+  - the RSP and the PICA200 reject lit draws, keep unlit ones, and the PC GPU keeps both.
+- `post.rs`'s `two_luts_mix_by_the_weight`.
+- `crates/platform-pc/tests/light_terms.rs`:
+  - GPU against CPU T&L with the floor under another light;
+  - the old light from a ground of the sky's color, on both paths;
+  - top > middle > bottom and the middle at the expected share, a rim that lights the
+    silhouette and spares the middle, on the native profile (both paths) and the N64 and
+    3DS profiles;
+  - evidence in `target/evidence/light-terms/`: dusk, + sky/ground, + rim on everything,
+    + rim on the objects only, per profile.
+- `post.rs`'s `two_luts_mix_like_the_cpu_reference`: every swatch at weights 0, 0.3, 0.7
+  and 1 against `grade_mix`, from a first LUT or none; weight 0 and a missing LUT are
+  byte for byte the first grading.
+- `authoring.rs`'s round trip; the codegen test (`export.rs`); the editor's post UI test.
+- castle64's `light terms` and `lut mix` self-test steps, on PC (`engine_checks`: three
+  profiles, both T&L paths), ares, Azahar and the browsers.

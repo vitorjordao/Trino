@@ -869,6 +869,9 @@ impl BakedScene {
                 near: rd_f32(self.bytes, e + 28),
                 far: rd_f32(self.bytes, e + 32),
             },
+            // Not in TSCN: a baked scene's light has one ambient color and
+            // no rim (ADR 0043 §3).
+            ..Light::DEFAULT
         }
     }
 

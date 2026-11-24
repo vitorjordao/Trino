@@ -116,6 +116,12 @@ pub fn engine_checks(
     } else {
         platform.log("TRINO_STEP:additive skipped (no read_pixel)\n");
     }
+    platform.log("TRINO_STEP:light terms\n");
+    if light_terms(renderer)? {
+        platform.log("TRINO_STEP:light terms probed sky, ground and rim\n");
+    } else {
+        platform.log("TRINO_STEP:light terms skipped (no read_pixel)\n");
+    }
     platform.log("TRINO_STEP:local lights\n");
     if local_lights(renderer)? {
         platform.log("TRINO_STEP:local lights probed\n");
@@ -127,6 +133,12 @@ pub fn engine_checks(
     platform.log("TRINO_STEP:post\n");
     if post(renderer)? {
         platform.log("TRINO_STEP:post probed grading and glow\n");
+    }
+    platform.log("TRINO_STEP:lut mix\n");
+    if lut_mix(renderer)? {
+        platform.log("TRINO_STEP:lut mix probed\n");
+    } else {
+        platform.log("TRINO_STEP:lut mix skipped (no read_pixel)\n");
     }
     platform.log("TRINO_STEP:shadows\n");
     if shadows(renderer, platform)? {
@@ -2683,6 +2695,78 @@ pub fn mipmaps(renderer: &mut dyn Renderer) -> Result<MipProbe, &'static str> {
     Ok(MipProbe::Probed)
 }
 
+/// One draw of a [`probe_frames`] frame.
+#[derive(Clone, Copy)]
+struct ProbeDraw<'a> {
+    model: ModelId,
+    at: &'a Transform3,
+    params: &'a ModelParams,
+}
+
+/// The frame [`probe_frames`] draws: camera, light and post settings.
+struct ProbeScene<'a> {
+    camera: Camera3,
+    light: &'a Light,
+    post: Option<&'a trino_core::PostSettings>,
+}
+
+/// Draw `draws` in `scene` three times (the consoles' pipelines settle),
+/// then read `probes` into `out`; false where `read_pixel` is unsupported.
+/// Every pixel-probing step of #178–#181 shares it: on the base N64 the
+/// self-test's code is heap, and a closure per step inlined its own copy
+/// of this loop at every call (`additive` alone took 6.4 KB).
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn probe_frames(
+    renderer: &mut dyn Renderer,
+    scene: &ProbeScene<'_>,
+    draws: &[ProbeDraw<'_>],
+    probes: &[(f32, f32)],
+    out: &mut [Color],
+) -> bool {
+    for _ in 0..3 {
+        renderer.begin_frame(Color::BLACK);
+        renderer.set_camera(&scene.camera);
+        renderer.set_light(scene.light);
+        if scene.post.is_some() {
+            renderer.set_post(scene.post);
+        }
+        for d in draws {
+            renderer.draw_model(d.model, d.at, Material::VertexLit, d.params);
+        }
+        renderer.end_frame();
+    }
+    for (o, &(x, y)) in out.iter_mut().zip(probes) {
+        match renderer.read_pixel(x as u32, y as u32) {
+            Some(c) => *o = c,
+            None => return false,
+        }
+    }
+    true
+}
+
+/// An unlit, point-sampled gray: the probe steps' flat surfaces.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn flat_gray(v: u8, blend: Blend) -> ModelParams {
+    ModelParams {
+        shading: Shading::Unlit,
+        tint: Color::rgb(v, v, v),
+        filter: TexFilter::Point,
+        blend,
+        ..ModelParams::DEFAULT
+    }
+}
+
+/// The camera the probe steps share: 1.2 m in front of the origin, 60°.
+fn probe_camera() -> Camera3 {
+    Camera3 {
+        eye: Vec3::new(0.0, 0.0, -1.2),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    }
+}
+
 /// Additive draws ([`Blend::Add`](trino_core::Blend::Add), Bongo-Kart
 /// #179, ADR 0043 §2): the card, dimmed, in front of a big dim backdrop
 /// card. Three frames read the same four probes (one per quadrant of the
@@ -2693,15 +2777,16 @@ pub fn mipmaps(renderer: &mut dyn Renderer) -> Result<MipProbe, &'static str> {
 /// additive mode (the RDP's blender, `GPU_BLEND_ADD`, a wgpu blend state).
 /// `Ok(false)` where `read_pixel` is unsupported.
 #[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
 pub fn additive(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
     let caps = *renderer.caps();
     let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
-    let camera = Camera3 {
-        eye: Vec3::new(0.0, 0.0, -1.2),
-        target: Vec3::ZERO,
-        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    let scene = ProbeScene {
+        camera: probe_camera(),
+        light: &DEFAULT_LIGHT,
+        post: None,
     };
-    let half = camera.fov_y * 0.5;
+    let half = scene.camera.fov_y * 0.5;
     let focal = cos(half) / sin(half) * screen.y * 0.5;
     let px = 80.0;
     let card = Transform3 {
@@ -2713,12 +2798,24 @@ pub fn additive(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         scale: Vec3::new(screen.x * 2.2 / focal, screen.x * 2.2 / focal, 1.0),
         ..Transform3::default()
     };
-    let dim = |v: u8, blend| ModelParams {
-        shading: Shading::Unlit,
-        tint: Color::rgb(v, v, v),
-        filter: TexFilter::Point,
-        blend,
-        ..ModelParams::DEFAULT
+    let (back_p, card_p, add_p) = (
+        flat_gray(60, Blend::Alpha),
+        flat_gray(110, Blend::Alpha),
+        flat_gray(110, Blend::Add),
+    );
+    let backdrop = ProbeDraw {
+        model: CARD,
+        at: &back,
+        params: &back_p,
+    };
+    let plain = ProbeDraw {
+        model: CARD,
+        at: &card,
+        params: &card_p,
+    };
+    let added = ProbeDraw {
+        params: &add_p,
+        ..plain
     };
     let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
     let q = px * 0.25;
@@ -2728,31 +2825,15 @@ pub fn additive(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         (cx - q, cy + q),
         (cx + q, cy + q),
     ];
-    let read = |renderer: &mut dyn Renderer, backdrop: bool, front: Option<Blend>| {
-        for _ in 0..3 {
-            renderer.begin_frame(Color::BLACK);
-            renderer.set_camera(&camera);
-            renderer.set_light(&DEFAULT_LIGHT);
-            if backdrop {
-                renderer.draw_model(CARD, &back, Material::VertexLit, &dim(60, Blend::Alpha));
-            }
-            if let Some(b) = front {
-                renderer.draw_model(CARD, &card, Material::VertexLit, &dim(110, b));
-            }
-            renderer.end_frame();
-        }
-        let mut out = [Color::BLACK; 4];
-        for (o, &(x, y)) in out.iter_mut().zip(&probes) {
-            *o = renderer.read_pixel(x as u32, y as u32)?;
-        }
-        Some(out)
-    };
-    let Some(bg) = read(renderer, true, None) else {
+    let mut bg = [Color::BLACK; 4];
+    if !probe_frames(renderer, &scene, &[backdrop], &probes, &mut bg) {
         return Ok(false);
-    };
-    let card_alone = read(renderer, false, Some(Blend::Alpha)).ok_or("additive: no read")?;
-    let sum = read(renderer, true, Some(Blend::Add)).ok_or("additive: no read")?;
-    let opaque = read(renderer, true, Some(Blend::Alpha)).ok_or("additive: no read")?;
+    }
+    let (mut card_alone, mut sum, mut opaque) =
+        ([Color::BLACK; 4], [Color::BLACK; 4], [Color::BLACK; 4]);
+    probe_frames(renderer, &scene, &[plain], &probes, &mut card_alone);
+    probe_frames(renderer, &scene, &[backdrop, added], &probes, &mut sum);
+    probe_frames(renderer, &scene, &[backdrop, plain], &probes, &mut opaque);
     // The N64's 16-bit framebuffer quantizes and dithers each term.
     let tol = 20;
     let near = |a: u8, b: i32| (a as i32 - b).abs() <= tol;
@@ -2772,6 +2853,180 @@ pub fn additive(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
         .all(|c| c.r as u32 + c.g as u32 + c.b as u32 <= 3 * tol as u32)
     {
         return Err("additive: the backdrop is black under the probes");
+    }
+    Ok(true)
+}
+
+/// A two-color ambient and a rim light ([`Light::ground`], [`Light::rim`],
+/// Bongo-Kart #181, ADR 0043 §3) on the shadows step's green ball. Under
+/// full ambient, a white sky and a black ground: its top reads brighter
+/// than its middle and its middle than its bottom, the middle about half
+/// of the plain ambient's. With no ambient and the sun behind it, a rim
+/// light leaves its middle dark and lights its edge. The N64's RSP and the
+/// 3DS's PICA200 leave these draws to the CPU T&L; the PC's GPU T&L
+/// evaluates the same terms. `Ok(false)` where `read_pixel` is unsupported.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn light_terms(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    let caps = *renderer.caps();
+    let screen = Vec2::new(caps.screen_width as f32, caps.screen_height as f32);
+    let camera = probe_camera();
+    let half = camera.fov_y * 0.5;
+    let focal = cos(half) / sin(half) * screen.y * 0.5;
+    // The ball's radius on the picture, about.
+    let r = 0.35 * focal / 1.2;
+    let (cx, cy) = (screen.x * 0.5, screen.y * 0.5);
+    let lit = ModelParams {
+        shading: Shading::Gouraud,
+        ..ModelParams::DEFAULT
+    };
+    let at = Transform3::default();
+    let ball = [ProbeDraw {
+        model: SHADOW_BALL,
+        at: &at,
+        params: &lit,
+    }];
+    let vertical = [(cx, cy - 0.55 * r), (cx, cy), (cx, cy + 0.55 * r)];
+    let across = [(cx, cy), (cx + 0.8 * r, cy), (cx - 0.8 * r, cy)];
+    let flat = Light {
+        ambient: 1.0,
+        ..DEFAULT_LIGHT
+    };
+    let sky = Light {
+        ground: Some(Color::BLACK),
+        ..flat
+    };
+    // The sun travels toward the camera: the faces it sees are unlit.
+    let dark = Light {
+        ambient: 0.0,
+        dir: Vec3::new(0.0, 0.0, -1.0),
+        ..DEFAULT_LIGHT
+    };
+    let rim = Light {
+        rim: trino_core::Rim {
+            color: Color::WHITE,
+            strength: 2.0,
+        },
+        ..dark
+    };
+    // Each probe's r + g + b under each light.
+    let mut sums = [[0i32; 3]; 4];
+    for (i, (light, probes)) in [
+        (&flat, &vertical),
+        (&sky, &vertical),
+        (&dark, &across),
+        (&rim, &across),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let scene = ProbeScene {
+            camera,
+            light,
+            post: None,
+        };
+        let mut c = [Color::BLACK; 3];
+        if !probe_frames(renderer, &scene, &ball, probes, &mut c) {
+            return Ok(false);
+        }
+        for (o, c) in sums[i].iter_mut().zip(c) {
+            *o = c.r as i32 + c.g as i32 + c.b as i32;
+        }
+    }
+    renderer.begin_frame(Color::BLACK);
+    renderer.set_light(&DEFAULT_LIGHT);
+    renderer.end_frame();
+    let [base, hemi, unlit, edge] = sums;
+    let [top, middle, bottom] = hemi;
+    if base[1] < 150 {
+        return Err("light terms: the ball is not under the probes");
+    }
+    if !(top > middle + 30 && middle > bottom + 30) {
+        return Err("light terms: the sky and the ground don't follow the normal");
+    }
+    if (middle * 2 - base[1]).abs() > base[1] / 4 {
+        return Err("light terms: the ball's middle is not half sky, half ground");
+    }
+    if unlit.iter().any(|&s| s > 45) {
+        return Err("light terms: the ball is lit without the rim");
+    }
+    let [center, right, left] = edge;
+    if center > 70 || right < center + 60 || left < center + 60 {
+        return Err("light terms: the rim doesn't light the ball's edges alone");
+    }
+    Ok(true)
+}
+
+/// Two LUTs mixed ([`trino_core::PostSettings::grading_to`], Bongo-Kart
+/// #181): the post step's card graded through `luts/selftest`, through
+/// `luts/dusk`, then through the first mixed halfway toward the second. On
+/// the Full tier the mix reads the mean of the two gradings; the Baked tier
+/// (the consoles, the PC's console profiles) draws the card its bake graded
+/// whatever the post settings say. `Ok(false)` without `read_pixel`.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn lut_mix(renderer: &mut dyn Renderer) -> Result<bool, &'static str> {
+    use trino_core::{PostSettings, PostTier};
+    let caps = *renderer.caps();
+    let mut camera = probe_camera();
+    camera.eye = Vec3::new(0.0, 0.0, -1.5);
+    let unlit = ModelParams {
+        double_sided: true,
+        ..flat_gray(255, Blend::Alpha)
+    };
+    let at = Transform3::default();
+    let card = [ProbeDraw {
+        model: POST_CARD,
+        at: &at,
+        params: &unlit,
+    }];
+    let probe = [(
+        caps.screen_width as f32 * 0.5,
+        caps.screen_height as f32 * 0.5,
+    )];
+    let a = PostSettings {
+        grading: Some(POST_LUT),
+        ..PostSettings::DEFAULT
+    };
+    let b = PostSettings {
+        grading: Some(POST_LUT_DUSK),
+        ..PostSettings::DEFAULT
+    };
+    let mixed = PostSettings {
+        grading_to: Some(POST_LUT_DUSK),
+        grading_mix: 0.5,
+        ..a
+    };
+    let mut got = [Color::BLACK; 3];
+    for (o, post) in got.iter_mut().zip([&a, &b, &mixed]) {
+        let scene = ProbeScene {
+            camera,
+            light: &DEFAULT_LIGHT,
+            post: Some(post),
+        };
+        if !probe_frames(renderer, &scene, &card, &probe, core::slice::from_mut(o)) {
+            return Ok(false);
+        }
+    }
+    renderer.begin_frame(Color::BLACK);
+    renderer.end_frame();
+    let [ga, gb, gm] = got;
+    let near = |x: u8, want: i32| (x as i32 - want).abs() <= 10;
+    let mean = |x: u8, y: u8| (x as i32 + y as i32) / 2;
+    if caps.post_tier == PostTier::Full {
+        let apart =
+            ga.r.abs_diff(gb.r) as u32 + ga.g.abs_diff(gb.g) as u32 + ga.b.abs_diff(gb.b) as u32;
+        if apart < 60 {
+            return Err("lut mix: the two LUTs grade alike");
+        }
+        if !(near(gm.r, mean(ga.r, gb.r))
+            && near(gm.g, mean(ga.g, gb.g))
+            && near(gm.b, mean(ga.b, gb.b)))
+        {
+            return Err("lut mix: the mix is not halfway between the gradings");
+        }
+    } else if !(near(gm.r, ga.r as i32) && near(gm.g, ga.g as i32) && near(gm.b, ga.b as i32)) {
+        return Err("lut mix: a baked tier changed the card with the post settings");
     }
     Ok(true)
 }
@@ -2846,6 +3101,8 @@ pub fn ambient_occlusion(renderer: &mut dyn Renderer) -> Result<bool, &'static s
 pub const POST_CARD: ModelId = ModelId::from_path("models/selftest_post");
 /// `luts/selftest`: a channel rotation, `(r, g, b) → (g, b, r)`.
 pub const POST_LUT: trino_core::LutId = trino_core::LutId::of("luts/selftest");
+/// `luts/dusk`: the second look the `lut mix` step mixes toward.
+pub const POST_LUT_DUSK: trino_core::LutId = trino_core::LutId::of("luts/dusk");
 /// The card as it should look graded, on every target.
 pub const POST_GRADED: Color = Color::rgb(60, 20, 200);
 

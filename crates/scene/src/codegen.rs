@@ -72,7 +72,7 @@ pub fn to_rust_graded(
     );
     let _ = writeln!(
         out,
-        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Blend, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId, NodeOutline, node_access,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
+        "#[allow(unused_imports)]\nuse trino_core::{{\n    AmbientOcclusion, AoQuality, Blend, Camera3, ClipId, Collider, Color, DetailTexture, Fog, Impostor,\n    Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,\n    ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,\n    StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,\n    PostSettings, Tonemap, Bloom, LutId, NodeOutline, Rim, node_access,\n}};\n#[allow(unused_imports)]\nuse trino_core::physics::{{Character, RampDir}};\n"
     );
     let env = &scene.environment;
     let cam = env.core_camera();
@@ -95,7 +95,7 @@ pub fn to_rust_graded(
     );
     let _ = writeln!(
         out,
-        "pub const LIGHT: Light = Light {{\n    dir: Vec3::new({}, {}, {}),\n    ambient: {},\n    color: {},\n    ambient_color: {},\n    fog: Fog {{ color: {}, near: {}, far: {} }},\n}};\n",
+        "pub const LIGHT: Light = Light {{\n    dir: Vec3::new({}, {}, {}),\n    ambient: {},\n    color: {},\n    ambient_color: {},\n    fog: Fog {{ color: {}, near: {}, far: {} }},\n    ground: {},\n    rim: Rim {{ color: {}, strength: {} }},\n}};\n",
         f(light.dir.x),
         f(light.dir.y),
         f(light.dir.z),
@@ -104,7 +104,13 @@ pub fn to_rust_graded(
         color(light.ambient_color),
         color(light.fog.color),
         f(light.fog.near),
-        f(light.fog.far)
+        f(light.fog.far),
+        match light.ground {
+            Some(c) => format!("Some({})", color(c)),
+            None => "None".into(),
+        },
+        color(light.rim.color),
+        f(light.rim.strength)
     );
     // Screen-space AO (PC native; consoles ignore it — their AO is baked
     // into the models).
@@ -163,7 +169,7 @@ pub fn to_rust_graded(
     // every frame (the PC and the Web run it; the consoles ignore it).
     let post = match env.core_post() {
         Some(p) => format!(
-            "Some(PostSettings {{\n    exposure: {},\n    tonemap: Tonemap::{:?},\n    bloom: {},\n    grading: {},\n    vignette: {},\n    grain: {},\n}})",
+            "Some(PostSettings {{\n    exposure: {},\n    tonemap: Tonemap::{:?},\n    bloom: {},\n    grading: {},\n    grading_to: {},\n    grading_mix: {},\n    vignette: {},\n    grain: {},\n}})",
             f(p.exposure),
             p.tonemap,
             match p.bloom {
@@ -179,6 +185,11 @@ pub fn to_rust_graded(
                 Some(l) => format!("Some(LutId({:#010x}))", l.0),
                 None => "None".into(),
             },
+            match p.grading_to {
+                Some(l) => format!("Some(LutId({:#010x}))", l.0),
+                None => "None".into(),
+            },
+            f(p.grading_mix),
             f(p.vignette),
             f(p.grain)
         ),

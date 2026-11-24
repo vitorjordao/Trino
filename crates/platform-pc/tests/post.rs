@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use trino_asset_pipeline::{Pivot, Primitive, Shape};
-use trino_core::post::{Lut, tone};
+use trino_core::post::{Lut, grade_mix, tone};
 use trino_core::render3d::{Camera3, Light};
 use trino_core::{
     AmbientOcclusion, Bloom, Color, CvdMode, Fog, LocalLight, LutId, Material, ModelId,
@@ -145,6 +145,7 @@ const SUN: Light = Light {
     color: Color::WHITE,
     ambient_color: Color::WHITE,
     fog: Fog::NONE,
+    ..Light::DEFAULT
 };
 
 fn swatch_pos(i: usize) -> Vec3 {
@@ -440,6 +441,81 @@ fn the_lut_grades_like_the_cpu_and_a_missing_one_is_skipped() {
     assert!(r.upload_lut(LUT, b"TLUT nope").is_err());
 }
 
+/// A warm 9³ LUT: red up, blue down (a sunset look to mix toward).
+fn warm_lut() -> Vec<u8> {
+    let n = 9u8;
+    let mut v = Lut::header(n).to_vec();
+    for b in 0..n as u32 {
+        for g in 0..n as u32 {
+            for r in 0..n as u32 {
+                let (r, g, b) = (Lut::neutral(n, r), Lut::neutral(n, g), Lut::neutral(n, b));
+                v.extend([r / 2 + 128, g, b / 2]);
+            }
+        }
+    }
+    v
+}
+
+/// Two LUTs mixed (`PostSettings::grading_to`, `grading_mix`, Bongo-Kart
+/// #181): every swatch at weights 0, 0.3, 0.7 and 1 equals the CPU
+/// reference `grade_mix`; weight 0 is the first grading byte for byte,
+/// a missing second LUT grades by the first alone, and a mix without a
+/// first LUT starts from the ungraded picture.
+#[test]
+fn two_luts_mix_like_the_cpu_reference() {
+    let _g = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    const WARM: LutId = LutId::of("luts/test-warm");
+    let (ba, bb) = (rotate_lut(), warm_lut());
+    r.upload_lut(WARM, &bb).unwrap();
+    let (a, b) = (Lut::parse(&ba).unwrap(), Lut::parse(&bb).unwrap());
+    let first = PostSettings {
+        tonemap: Tonemap::Aces,
+        grading: Some(LUT),
+        ..PostSettings::DEFAULT
+    };
+    let only_a = frame(&mut r, Some(Some(first)), Extra::default());
+    for (from, la) in [(Some(LUT), Some(&a)), (None, None)] {
+        for mix in [0.0f32, 0.3, 0.7, 1.0] {
+            let post = PostSettings {
+                grading: from,
+                grading_to: Some(WARM),
+                grading_mix: mix,
+                ..first
+            };
+            let img = frame(&mut r, Some(Some(post)), Extra::default());
+            if from.is_some() && mix == 0.0 {
+                assert_eq!(max_diff(&img, &only_a), 0, "weight 0 is the first grading");
+            }
+            if from.is_some() {
+                shots(&r, &format!("lut_mix_{mix}"), &img);
+            }
+            for (i, c) in COLORS.iter().enumerate() {
+                let toned = tone(&post, c.map(|v| v as f32 / 255.0));
+                let want = grade_mix(la, Some(&b), mix, toned).map(|v| (v * 255.0 + 0.5) as u8);
+                let got = px(&r, &img, swatch_pos(i));
+                for k in 0..3 {
+                    assert!(
+                        got[k].abs_diff(want[k]) <= 3,
+                        "from {from:?}, mix {mix}, swatch {i}: {got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+    }
+    // A second LUT nobody uploaded: the first grading alone.
+    let missing = PostSettings {
+        grading_to: Some(LutId::of("luts/missing")),
+        grading_mix: 0.5,
+        ..first
+    };
+    let img = frame(&mut r, Some(Some(missing)), Extra::default());
+    assert_eq!(max_diff(&img, &only_a), 0);
+}
+
 #[test]
 fn bloom_glows_around_the_emissive_lamp_and_the_hud_stays_untouched() {
     let _g = gpu();
@@ -633,6 +709,7 @@ fn the_native_golden_with_bloom_grading_and_vignette() {
         grading: Some(LUT),
         vignette: 0.3,
         grain: 0.0,
+        ..PostSettings::DEFAULT
     };
     let img = frame(
         &mut r,

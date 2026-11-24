@@ -382,6 +382,10 @@ groups = ["level1"]              # default ["boot"]: loaded at boot, always resi
   shows the result. Unlit colors match the PC exactly; lit ones are graded before the
   light (close, not equal).
 - `lut inspect <file|luts/x>` says how far a LUT moves colors (`identity` for a neutral).
+- Two LUTs mixed (Bongo-Kart #181): `PostSettings { grading: Some(a), grading_to: Some(b),
+  grading_mix: t, .. }` grades through both and mixes by `t` on the PC and the Web
+  (`trino_core::post::grade_mix` is the reference). Declare both as `[luts.*]`; the
+  consoles keep their baked `grading`.
 
 ## Verify
 

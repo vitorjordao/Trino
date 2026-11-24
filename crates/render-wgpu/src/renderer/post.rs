@@ -208,7 +208,7 @@ const SLOTS: u64 = 2 + 2 * MAX_LEVELS as u64;
 /// The speed blur's gather, after them.
 const SPEED_SLOT: u64 = SLOTS;
 /// The composite's uniform block (`Comp` in `post.wgsl`).
-const COMP_BYTES: u64 = 96;
+const COMP_BYTES: u64 = 104;
 /// The bloom chain's deepest level count.
 pub(super) const MAX_LEVELS: u32 = 6;
 
@@ -223,6 +223,8 @@ pub(super) struct PostFrame<'a> {
     /// starts at half the picture's size (else a quarter); `None`: no bloom.
     pub bloom_cap: Option<(u32, bool)>,
     pub lut: Option<&'a LutTex>,
+    /// The LUT the grading mixes toward (`PostSettings::grading_to`).
+    pub lut_b: Option<&'a LutTex>,
     /// The upscale's sharpening (a scaled scene smaller than the picture).
     pub sharpen: f32,
     pub seed: u32,
@@ -360,6 +362,7 @@ impl PostPass {
                 sampler_entry(3),
                 uniform_entry(4),
                 tex_entry(5, wgpu::TextureViewDimension::D2),
+                tex_entry(6, wgpu::TextureViewDimension::D3),
             ],
         });
         let layout = |bgl: &wgpu::BindGroupLayout, label: &str| {
@@ -737,6 +740,7 @@ impl PostPass {
             _ => &self.no_bloom,
         };
         let lut_view = frame.lut.map_or(&self.no_lut, |l| &l.view);
+        let lut_b_view = frame.lut_b.map_or(&self.no_lut, |l| &l.view);
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trino-post-comp-bg"),
             layout: &self.comp_bgl,
@@ -769,6 +773,10 @@ impl PostPass {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(speed_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(lut_b_view),
+                },
             ],
         });
         Self::draw(
@@ -782,7 +790,7 @@ impl PostPass {
         work
     }
 
-    fn comp_words(&self, frame: &PostFrame<'_>, bloom: f32) -> [u32; 24] {
+    fn comp_words(&self, frame: &PostFrame<'_>, bloom: f32) -> [u32; 26] {
         let s = frame.settings;
         let scene = frame.scene;
         let (ew, eh) = (scene.extent.0 as f32, scene.extent.1 as f32);
@@ -820,6 +828,9 @@ impl PostPass {
             f(1.0 / SpeedBlur::FADE_PIXELS),
             f(frame.dst.1.0 as f32),
             f(frame.dst.1.1 as f32),
+            // The second LUT: 0 texels skips it.
+            f(frame.lut_b.map_or(0.0, |l| l.size as f32)),
+            f(s.grading_mix),
         ]
     }
 }
@@ -850,7 +861,7 @@ mod tests {
     }
 
     /// The uniform blocks the pass writes have the sizes the shader reads:
-    /// the composite's `COMP_BYTES` (the 24 words of `comp_words`), and
+    /// the composite's `COMP_BYTES` (the 26 words of `comp_words`), and
     /// the blur and gather blocks inside the 64 bytes their bind group
     /// gives them.
     #[test]
@@ -865,7 +876,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("no struct {name}"))
         };
         assert_eq!(size("Comp"), COMP_BYTES);
-        assert_eq!(COMP_BYTES, 24 * 4, "comp_words' length");
+        assert_eq!(COMP_BYTES, 26 * 4, "comp_words' length");
         assert!(size("Blur") <= 64);
         assert_eq!(size("Speed"), 64);
         const { assert!(COMP_BYTES <= SLOT && SPEED_SLOT >= SLOTS) };

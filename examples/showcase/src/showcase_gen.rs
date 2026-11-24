@@ -7,7 +7,7 @@ use trino_core::{
     Light, LodLevel, Lods, Mat34, ModelId, ModelParams, NO_CELL, SceneNode, ShadowCast,
     ShadowPlane, ShadowSettings, ShadowTier, Shading, Shape, SoundId, SoundSource, SpriteId,
     StereoPolicy, StereoSettings, Tags, TexFilter, Vec2, Vec3, VisVolume, Water, Glow, GlowMode,
-    PostSettings, Tonemap, Bloom, LutId, NodeOutline, node_access,
+    PostSettings, Tonemap, Bloom, LutId, NodeOutline, Rim, node_access,
 };
 #[allow(unused_imports)]
 use trino_core::physics::{Character, RampDir};
@@ -24,6 +24,8 @@ pub const LIGHT: Light = Light {
     color: Color::rgba(255, 244, 225, 255),
     ambient_color: Color::rgba(190, 210, 255, 255),
     fog: Fog { color: Color::rgba(132, 178, 226, 255), near: 16.0, far: 42.0 },
+    ground: None,
+    rim: Rim { color: Color::rgba(255, 255, 255, 255), strength: 0.0 },
 };
 
 pub const AO: Option<AmbientOcclusion> = None;

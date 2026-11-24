@@ -54,6 +54,10 @@ pub enum GpuReject {
     NonUniformScale,
     /// A local light reaches it: the per-vertex lights are the CPU's.
     LocalLight,
+    /// Lit under a two-color ambient or a rim light
+    /// ([`Light::ground`](crate::Light::ground), [`Light::rim`](crate::Light::rim)):
+    /// the CPU T&L's lit copy evaluates them.
+    LightTerms,
     /// A water surface: the water vertex program draws it, or the CPU.
     Water,
     /// The backend found no memory for the GPU copy of the mesh (the 3DS's
@@ -80,12 +84,13 @@ impl GpuReject {
         GpuReject::NearPlane,
         GpuReject::NonUniformScale,
         GpuReject::LocalLight,
+        GpuReject::LightTerms,
         GpuReject::Water,
         GpuReject::NoGpuMemory,
     ];
 
     /// Reasons in all ([`GpuReject::ALL`]'s length).
-    pub const COUNT: usize = 15;
+    pub const COUNT: usize = 16;
 
     /// The reason's slot in a per-reason histogram (`[u32; COUNT]`).
     pub const fn index(self) -> usize {
@@ -108,6 +113,7 @@ impl GpuReject {
             GpuReject::NearPlane => "crosses the near plane",
             GpuReject::NonUniformScale => "sheared or uneven scale",
             GpuReject::LocalLight => "local light",
+            GpuReject::LightTerms => "sky/ground or rim light",
             GpuReject::Water => "water surface",
             GpuReject::NoGpuMemory => "no GPU memory",
         }
@@ -215,6 +221,9 @@ pub fn gpu_check_mv(
     }
     if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
         return Err(GpuReject::LocalLight);
+    }
+    if ctx.terms && params.shading != Shading::Unlit {
+        return Err(GpuReject::LightTerms);
     }
     let k = |c: u8| c as f32 / 255.0;
     let t = params.tint;

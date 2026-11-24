@@ -132,7 +132,7 @@ pub use render::{
 };
 pub use render3d::{
     Camera3, ClipInfo, DEFAULT_LIGHT, Fog, Light, MAX_JOINTS, Mesh, MeshError, MeshLayout,
-    PcGpuReject, RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch,
+    PcGpuReject, Rim, RspReject, ScreenTri, SurfaceScratch, SurfaceVert, TnlContext, TnlScratch,
     TnlStats, tessellate, tessellate_surface, tessellate_with,
 };
 pub use replay::{Recorder, Replay, ReplayError, StateHasher};

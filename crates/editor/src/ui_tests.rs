@@ -3221,11 +3221,14 @@ fn post_section_view_modes_glow_and_the_correction_preview() {
     );
     pick(&mut h, "Post tonemap", "AgX");
     pick(&mut h, "Post grading", "luts/dusk");
+    // Bongo-Kart #181: a second LUT to mix toward.
+    pick(&mut h, "Post grading mix", "luts/selftest");
     set_value(&mut h, "Post exposure", 1.5);
     h.run_steps(4);
     let post = h.state().doc.scene.environment.post.clone().unwrap();
     assert_eq!(post.tonemap, trino_scene::TonemapDef::AgX);
     assert_eq!(post.grading.as_deref(), Some("luts/dusk"));
+    assert_eq!(post.grading_to.as_deref(), Some("luts/selftest"));
     assert_eq!(post.exposure, 1.5);
     h.state_mut().cmds.push(Cmd::FocusTab(Tab::Scene));
     h.run_steps(4);
@@ -3238,6 +3241,10 @@ fn post_section_view_modes_glow_and_the_correction_preview() {
     let text = std::fs::read_to_string("scenes/showcase.scene.ron").unwrap();
     assert!(text.contains("post: Some("), "{text}");
     assert!(text.contains("grading: Some(\"luts/dusk\")"), "{text}");
+    assert!(
+        text.contains("grading_to: Some(\"luts/selftest\")"),
+        "{text}"
+    );
 
     // View › Post-processing view: off, then the bloom alone.
     click(&mut h, "View");

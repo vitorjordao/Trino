@@ -5884,6 +5884,7 @@ impl PcRenderer {
             let bloom_cap = self.bloom_cap();
             let speed = self.frame_speed_blur(bloom_only);
             let lut = settings.grading.and_then(|id| self.luts.get(&id));
+            let lut_b = settings.grading_to.and_then(|id| self.luts.get(&id));
             let pass = self
                 .post_pass
                 .get_or_insert_with(|| post::PostPass::new(&self.device, self.hdr_ok));
@@ -5899,6 +5900,7 @@ impl PcRenderer {
                         bloom_only,
                         bloom_cap,
                         lut,
+                        lut_b,
                         sharpen: self.quality.sharpen,
                         seed: self.post_seed,
                         speed,

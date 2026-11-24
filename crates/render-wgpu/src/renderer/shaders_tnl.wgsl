@@ -46,6 +46,13 @@ struct MeshCtx {
     // xyz: the world's up axis in view space (the view matrix's second
     // column): a water vertex lifted by h in the world moves h * view_up.
     view_up: vec4<f32>,
+    // rgb: the two-color ambient's ground (the sky's color without one);
+    // w: 1 when the light has a ground or a rim.
+    ground: vec4<f32>,
+    // rgb: the rim's color x strength; w: 1 when it is on.
+    rim: vec4<f32>,
+    // xyz: the camera in world space.
+    eye: vec4<f32>,
 };
 
 @group(2) @binding(0) var<uniform> ctx: MeshCtx;
@@ -202,7 +209,23 @@ fn mesh_vertex(v: MeshIn, inst: InstIn) -> MeshVert {
     if shading != SHADING_UNLIT {
         let diffuse = -dot(normalize(n), ctx.sun.xyz);
         let d = (1.0 - ctx.sun.w) * select(0.0, diffuse, diffuse > 0.0);
-        if ctx.sun_color.w > 0.5 {
+        if ctx.ground.w > 0.5 {
+            // The two-color ambient and the rim (`Terms::light` in
+            // render3d/lit.rs): the ambient from the ground to the sky by
+            // the normal's height, plus (1 - n.v)^2 of the rim.
+            let nn = normalize(n);
+            let t = clamp(nn.y * 0.5 + 0.5, 0.0, 1.0);
+            let amb = ctx.ground.rgb + (ctx.ambient.rgb - ctx.ground.rgb) * t;
+            k = ctx.sun.w * amb + d * ctx.sun_color.rgb;
+            if ctx.rim.w > 0.5 {
+                let to_eye = ctx.eye.xyz - world;
+                let len2 = dot(to_eye, to_eye);
+                if len2 > 0.0 {
+                    let e = 1.0 - clamp(dot(nn, to_eye) * inverseSqrt(len2), 0.0, 1.0);
+                    k += ctx.rim.rgb * (e * e);
+                }
+            }
+        } else if ctx.sun_color.w > 0.5 {
             k = vec3<f32>(ctx.sun.w + d);
         } else {
             k = ctx.sun.w * ctx.ambient.rgb + d * ctx.sun_color.rgb;

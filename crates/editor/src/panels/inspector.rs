@@ -2171,6 +2171,43 @@ fn scene_settings(app: &mut App, ui: &mut egui::Ui) {
         theme::prop(ui, "Amb. color", |ui| {
             theme::color_rgb(ui, &mut env.light.ambient_color)
         });
+        // Bongo-Kart #181: a two-color ambient (the ambient color is then
+        // the sky's) and a rim light. The N64's RSP and the 3DS's PICA200
+        // leave a lit draw under either to the CPU T&L.
+        let mut ground = env.light.ground_color.is_some();
+        theme::prop(ui, "Ground", |ui| {
+            let r = ui.checkbox(&mut ground, "").on_hover_text(
+                "A two-color ambient: surfaces facing up take the ambient color (the sky), \
+                 facing down this one. Consoles draw it on the CPU.",
+            );
+            r.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    true,
+                    ground,
+                    "Ground ambient",
+                )
+            });
+            if r.changed() {
+                env.light.ground_color = ground.then_some([60, 45, 30]);
+            }
+            if let Some(g) = &mut env.light.ground_color {
+                theme::color_rgb(ui, g);
+            }
+        });
+        theme::prop(ui, "Rim", |ui| {
+            ui.add(egui::Slider::new(&mut env.light.rim, 0.0..=2.0))
+                .on_hover_text(
+                    "A rim light: (1 - n·v)² of its color on what turns away from the camera. \
+                     It lights the ground seen at a grazing angle too: give characters their \
+                     own light in game code.",
+                );
+        });
+        if env.light.rim > 0.0 {
+            theme::prop(ui, "Rim color", |ui| {
+                theme::color_rgb(ui, &mut env.light.rim_color)
+            });
+        }
     });
     theme::component(ui, "env-fog", icon::CLOUD_FOG, c::TEXT_WEAK, "Fog", |ui| {
         let mut on = env.fog.is_some();
@@ -3017,6 +3054,38 @@ fn scene_post(ui: &mut egui::Ui, post: &mut Option<trino_scene::PostDef>, luts: 
                 egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Post grading")
             });
     });
+    // Bongo-Kart #181: a second LUT the grading mixes toward (the PC and
+    // the Web; the consoles' bake grades by the first).
+    theme::prop(ui, "Mix to", |ui| {
+        let current = p.grading_to.clone().unwrap_or_else(|| "None".into());
+        egui::ComboBox::from_id_salt("post-grading-to")
+            .selected_text(&current)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(p.grading_to.is_none(), "None").clicked() {
+                    p.grading_to = None;
+                }
+                for l in luts {
+                    if ui
+                        .selectable_label(p.grading_to.as_ref() == Some(l), l)
+                        .clicked()
+                    {
+                        p.grading_to = Some(l.clone());
+                    }
+                }
+            })
+            .response
+            .on_hover_text(
+                "A second LUT: the picture graded through both, mixed by the weight                  below (a time of day or a weather between two looks). PC and Web.",
+            )
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Post grading mix")
+            });
+    });
+    if p.grading_to.is_some() {
+        theme::prop(ui, "Mix", |ui| {
+            ui.add(egui::Slider::new(&mut p.grading_mix, 0.0..=1.0));
+        });
+    }
     theme::prop(ui, "Vignette", |ui| {
         ui.add(egui::Slider::new(&mut p.vignette, 0.0..=1.0));
     });

@@ -197,6 +197,7 @@ fn light(color: Color, fog: Fog) -> Light {
         color,
         ambient_color: Color::BLACK,
         fog,
+        ..Light::DEFAULT
     }
 }
 

@@ -177,6 +177,78 @@ struct LitSetup<'a> {
     n_pick: usize,
     /// A water draw's constants (`None` for every other draw).
     water: Option<WaterSetup>,
+    /// The light's two-color ambient and rim ([`Terms::OFF`] for water).
+    terms: Terms,
+}
+
+/// The light's two-color ambient and rim light ([`crate::Light::ground`],
+/// [`crate::Light::rim`], Bongo-Kart #181) as factors. Every lit vertex of
+/// a draw under such a light takes [`LitSetup::shade_local`].
+#[derive(Clone, Copy)]
+struct Terms {
+    on: bool,
+    rim_on: bool,
+    /// The ground's ambient color, 0..1 (the sky's when the light has
+    /// none: the mix is then the sky's exactly).
+    ground: [f32; 3],
+    /// The rim's color × strength.
+    rim: [f32; 3],
+}
+
+impl Terms {
+    const OFF: Terms = Terms {
+        on: false,
+        rim_on: false,
+        ground: [0.0; 3],
+        rim: [0.0; 3],
+    };
+
+    fn of(ctx: &TnlContext) -> Terms {
+        if !ctx.terms {
+            return Terms::OFF;
+        }
+        let light = &ctx.light;
+        let f = |c: Color| [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0];
+        let k = light.rim.strength;
+        let r = f(light.rim.color);
+        Terms {
+            on: true,
+            rim_on: k > 0.0,
+            ground: light.ground.map_or(ctx.ac, f),
+            rim: [r[0] * k, r[1] * k, r[2] * k],
+        }
+    }
+
+    /// The light factors of a vertex (world normal `n`, view-space normal
+    /// `nv` and position `p`; `d` the sun's diffuse share): the ambient
+    /// mixed from the ground to the sky by `n.y`, plus the rim. The PC's GPU
+    /// T&L (`shaders_tnl.wgsl`) evaluates the same.
+    #[inline(never)]
+    fn light(&self, s: &Setup, d: f32, n: Vec3, nv: Vec3, p: Vec3) -> [f32; 3] {
+        let a = s.light.ambient;
+        // Constant bounds: never the assert (NaN stays NaN, as before).
+        let clamp01 = |v: f32| v.clamp(0.0, 1.0);
+        let t = clamp01(n.y * 0.5 + 0.5);
+        let (g, sky) = (self.ground, s.ac);
+        let mut k = [
+            a * (g[0] + (sky[0] - g[0]) * t) + d * s.lc[0],
+            a * (g[1] + (sky[1] - g[1]) * t) + d * s.lc[1],
+            a * (g[2] + (sky[2] - g[2]) * t) + d * s.lc[2],
+        ];
+        if self.rim_on {
+            let len2 = p.dot(p);
+            if len2 > 0.0 {
+                // n · v, v the unit vector from the vertex to the eye (the
+                // view space's origin).
+                let e = 1.0 - clamp01(-nv.dot(p) / crate::math3d::sqrt(len2));
+                let e2 = e * e;
+                k[0] += self.rim[0] * e2;
+                k[1] += self.rim[1] * e2;
+                k[2] += self.rim[2] * e2;
+            }
+        }
+        k
+    }
 }
 
 /// The per-draw constants of a water surface ([`crate::water`]).
@@ -327,14 +399,18 @@ impl LitSetup<'_> {
         })
     }
 
-    /// [`Setup::shade`] plus the local lights, from a world-space normal
-    /// `n`, the view-space position `p` and the view depth.
+    /// [`Setup::shade`] plus the local lights and the light's two-color
+    /// ambient and rim, from a world-space normal `n`, the view-space
+    /// position `p` and the view depth.
     fn shade_local(&self, c: Color, n: Vec3, p: Vec3, z: f32) -> Color {
         let s = &self.s;
         let light = s.light;
         let diffuse = -n.dot(s.ldir);
         let d = (1.0 - light.ambient) * if diffuse > 0.0 { diffuse } else { 0.0 };
-        let mut k = if s.white {
+        let nv = self.view.transform_dir(n);
+        let mut k = if self.terms.on {
+            self.terms.light(s, d, n, nv, p)
+        } else if s.white {
             let i = light.ambient + d;
             [i, i, i]
         } else {
@@ -344,7 +420,6 @@ impl LitSetup<'_> {
                 light.ambient * s.ac[2] + d * s.lc[2],
             ]
         };
-        let nv = self.view.transform_dir(n);
         for &i in &self.pick[..self.n_pick] {
             let l = &self.locals[i as usize];
             let v = l.pos - p;
@@ -532,7 +607,7 @@ pub(super) fn tessellate_lit(
         Err(culled) => return Some(culled),
     };
     let (pick, n_pick) = pick(ctx, bound);
-    if n_pick == 0 {
+    if n_pick == 0 && !ctx.terms {
         return None;
     }
     let s = LitSetup {
@@ -542,6 +617,7 @@ pub(super) fn tessellate_lit(
         pick,
         n_pick,
         water: None,
+        terms: Terms::of(ctx),
     };
     let super::TriScratch {
         cache_pos,
@@ -609,6 +685,7 @@ pub(super) fn tessellate_water(
         pick,
         n_pick,
         water: Some(WaterSetup::new(ctx, mesh, model, water, params.gloss)),
+        terms: Terms::OFF,
     };
     let super::TriScratch {
         cache_pos,
@@ -1071,6 +1148,11 @@ pub fn tessellate_surface(
             .water
             .as_ref()
             .map(|w| WaterSetup::new(ctx, mesh, model, w, params.gloss)),
+        terms: if params.water.is_some() {
+            Terms::OFF
+        } else {
+            Terms::of(ctx)
+        },
     };
     let SurfaceScratch {
         cache_pos,
@@ -1287,7 +1369,7 @@ fn joints<
         let col = match s.params.shading {
             Shading::Flat => Color::WHITE,
             Shading::Unlit => s.shade(s.base_color(mesh, i), Vec3::ZERO, p.z),
-            Shading::Gouraud if ls.n_pick > 0 && ls.lit_at(p) => {
+            Shading::Gouraud if ls.terms.on || (ls.n_pick > 0 && ls.lit_at(p)) => {
                 ls.shade_local(s.base_color(mesh, i), world_normal(), p, p.z)
             }
             Shading::Gouraud if !SKINNED && s.local_ldir.is_some() => {
@@ -1354,7 +1436,7 @@ fn joints<
             ];
             core::array::from_fn(|k| {
                 let c = s.base_color(mesh, idx[k]);
-                if ls.n_pick > 0 && ls.lit_at(vs[k]) {
+                if ls.terms.on || (ls.n_pick > 0 && ls.lit_at(vs[k])) {
                     ls.shade_local(c, n, vs[k], vs[k].z)
                 } else {
                     s.shade(c, n, vs[k].z)

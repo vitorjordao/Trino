@@ -1394,7 +1394,8 @@ impl Fog {
     }
 }
 
-/// Directional light + ambient floor + fog — the whole lighting model.
+/// Directional light + ambient floor (one color, or sky and ground) + rim
+/// + fog — the whole lighting model.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Light {
     /// Direction the light travels (world space); normalized by the caller
@@ -1404,9 +1405,56 @@ pub struct Light {
     pub ambient: f32,
     /// Color of the directional light.
     pub color: Color,
-    /// Color of the ambient floor.
+    /// Color of the ambient floor: everywhere, or the sky's half with a
+    /// [`Light::ground`].
     pub ambient_color: Color,
     pub fog: Fog,
+    /// A two-color ambient (Bongo-Kart #181): a vertex whose world normal
+    /// points straight down takes this color as its ambient, one pointing
+    /// up `ambient_color`, and the ones between a mix by the normal's
+    /// height (`t = n.y / 2 + 1/2`). A kart stays readable from below at
+    /// dusk and the ground's bounce tints it, per vertex, at no cost on the
+    /// PC's GPU T&L. `None`: `ambient_color` everywhere, as before. A lit
+    /// draw under a light with it leaves the N64's RSP and the 3DS's
+    /// PICA200 for the CPU T&L ([`RspReject::LightTerms`]).
+    pub ground: Option<Color>,
+    /// Light toward the silhouettes ([`Rim`]); [`Rim::NONE`] by default.
+    pub rim: Rim,
+}
+
+/// A rim light (Bongo-Kart #181): `color × strength × (1 − n·v)²` added to
+/// each lit vertex's light, `n` its normal and `v` the direction from it to
+/// the camera. Nothing where a surface faces the camera, the most where it
+/// turns away: outlines a character against a dark scene. It lights like
+/// the sun (it multiplies the surface's color) and is evaluated per vertex,
+/// so low-poly meshes show it in steps. Set it for the draws that need it
+/// (`set_light` before them, the plain light after): a floor seen at a
+/// grazing angle catches it too.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Rim {
+    pub color: Color,
+    /// 0 = off; 1 = the color at full strength on the silhouette.
+    pub strength: f32,
+}
+
+impl Rim {
+    /// No rim light.
+    pub const NONE: Rim = Rim {
+        color: Color::WHITE,
+        strength: 0.0,
+    };
+}
+
+impl Light {
+    /// [`DEFAULT_LIGHT`].
+    pub const DEFAULT: Light = DEFAULT_LIGHT;
+
+    /// A two-color ambient or a rim light is on: lit draws take the lit
+    /// copy of the T&L (`render3d/lit.rs`) on every target but the PC's
+    /// GPU T&L, which evaluates both itself.
+    pub fn has_terms(&self) -> bool {
+        self.ground.is_some() || self.rim.strength > 0.0
+    }
 }
 
 /// The engine's default key light: from above-left-behind the camera.
@@ -1416,6 +1464,8 @@ pub const DEFAULT_LIGHT: Light = Light {
     color: Color::WHITE,
     ambient_color: Color::WHITE,
     fog: Fog::NONE,
+    ground: None,
+    rim: Rim::NONE,
 };
 
 /// A [`LocalLight`] in view space with its per-frame constants (the
@@ -1761,6 +1811,9 @@ pub enum RspReject {
     /// A local light reaches it ([`crate::light`]): the overlay only knows
     /// the global light.
     LocalLight,
+    /// Lit under a two-color ambient or a rim light ([`Light::ground`],
+    /// [`Light::rim`]): the overlay knows one ambient color.
+    LightTerms,
     /// A water surface ([`crate::water`]): the CPU T&L displaces it.
     Water,
 }
@@ -1790,6 +1843,7 @@ impl RspReject {
             RspReject::Flat => "flat shading (too many faces)",
             RspReject::NonUniformScale => "sheared or uneven scale",
             RspReject::LocalLight => "local light",
+            RspReject::LightTerms => "sky/ground or rim light",
             RspReject::Water => "water surface",
         }
     }
@@ -2083,6 +2137,10 @@ pub fn rsp_check_mv(
     // Lit by a local light: only the CPU T&L adds those.
     if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
         return Err(RspReject::LocalLight);
+    }
+    // A two-color ambient or a rim light: the CPU T&L's lit copy too.
+    if ctx.terms && params.shading != Shading::Unlit {
+        return Err(RspReject::LightTerms);
     }
     if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return Err(RspReject::TooScaled);
@@ -2562,6 +2620,9 @@ fn rsp_part_check(
     if ctx.n_locals > 0 && params.shading != Shading::Unlit && ctx.lights_touch(c, r2) {
         return Err(RspReject::LocalLight);
     }
+    if ctx.terms && params.shading != Shading::Unlit {
+        return Err(RspReject::LightTerms);
+    }
     if smax >= RSP_MAX_SCALE * RSP_MAX_SCALE {
         return Err(RspReject::TooScaled);
     }
@@ -2853,6 +2914,8 @@ pub struct TnlContext {
     /// Both light colors white: the single-intensity fast path applies.
     white: bool,
     fog_on: bool,
+    /// [`Light::has_terms`]: lit draws take `render3d/lit.rs`.
+    terms: bool,
     /// Local lights evaluated per vertex ([`TnlContext::with_local_lights`]),
     /// in view space. Last and small: every N64 draw's RSP test reads this
     /// context.
@@ -2892,6 +2955,7 @@ impl TnlContext {
             ],
             white: light.color == Color::WHITE && light.ambient_color == Color::WHITE,
             fog_on: light.fog.enabled(),
+            terms: light.has_terms(),
             n_locals: 0,
             view_locals: [NO_LIGHT; MAX_VERTEX_LIGHTS],
             water: crate::water::WaterState::NONE,
@@ -3188,9 +3252,10 @@ pub fn tessellate_with(
     if let Some(w) = &params.water {
         return lit::tessellate_water(ctx, scratch, mesh, model, params, w, emit);
     }
-    // A local light may reach it: the lit copy of the T&L (render3d/lit.rs),
-    // out of this path's way.
-    if ctx.n_locals > 0
+    // A local light may reach it, or the light has a two-color ambient or
+    // a rim: the lit copy of the T&L (render3d/lit.rs), out of this path's
+    // way.
+    if (ctx.n_locals > 0 || ctx.terms)
         && params.shading != Shading::Unlit
         && let Some(stats) = lit::tessellate_lit(ctx, scratch, mesh, model, params, emit)
     {

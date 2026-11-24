@@ -328,6 +328,20 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — two-color ambient, rim light and a mix of two LUTs (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #181, ADR 0043 §3)
+
+| Item | Evidence |
+|---|---|
+| `Light::ground: Option<Color>` and `Light::rim: Rim { color, strength }` (defaults off: every golden unchanged), `Light::has_terms`, `Light::DEFAULT` | `core/tests/light_terms.rs` (4 tests) |
+| CPU T&L: the lit copy's `Terms::light` (sky to ground by `n.y`, `(1 − n·v)²` rim; `tessellate_joints` untouched); PC/Web GPU T&L: `MeshCtx::{ground, rim, eye}` in `mesh_vertex`; the RSP and the PICA200 leave lit draws under them to the CPU (`RspReject::LightTerms`, `GpuReject::LightTerms`) | `platform-pc/tests/light_terms.rs` (3 tests: the oracle at mean 0.000/255, the old light from a ground of the sky's color, top > middle > bottom and a rim on the silhouette on the native profile's two paths and the console profiles), evidence `target/evidence/light-terms/` |
+| Scenes' `ground_color` (bare), `rim`, `rim_color`; codegen; the editor's Light › Ground and Rim | `the_lights_ground_and_rim_round_trip_and_map_onto_the_core`, `scene_codegen` (`showcase_gen` regenerated) |
+| `PostSettings::{grading_to, grading_mix}`, the composite's second LUT (binding 6, uniform 104 bytes), `post::grade_mix`; scenes' `post`, codegen, the editor's "Mix to"/"Mix" | `two_luts_mix_by_the_weight`, `two_luts_mix_like_the_cpu_reference` (4 weights × 8 swatches against `grade_mix`; weight 0 and a missing LUT byte for byte), `codegen_and_tscn_carry_post_and_glows`, the editor's post UI test |
+| castle64's `light terms` and `lut mix` self-test steps | `engine_checks` (3 profiles; `light terms` on both T&L paths); ares (both tiers), Azahar, browsers |
+
+Not done: the terms on the RSP overlays and the PICA200's shader (lit draws under them run
+the CPU T&L on the consoles); neither is in TSCN. On the N64 a light change per group of
+draws (a rim for the characters only) defeats the draw memo.
+
 ## Done — additive blending (2026-11-23, branch `feat/render-mips-additive-ambient`, Bongo-Kart #179 blend half, ADR 0043 §2)
 
 | Item | Evidence |

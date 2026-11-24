@@ -24,6 +24,7 @@ fn light() -> Light {
         color: Color::WHITE,
         ambient_color: Color::WHITE,
         fog: Fog::NONE,
+        ..Light::DEFAULT
     }
 }
 

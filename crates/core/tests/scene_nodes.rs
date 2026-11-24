@@ -219,6 +219,7 @@ fn level_blob() -> &'static [u8] {
                 near: 5.0,
                 far: 40.0,
             },
+            ..Light::DEFAULT
         },
     };
     let mut crate_ = TscnNode::new("yard/crate").at(Vec3::new(0.0, 0.5, 0.0));

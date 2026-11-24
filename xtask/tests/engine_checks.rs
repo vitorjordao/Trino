@@ -259,6 +259,44 @@ fn the_additive_step_adds_on_every_profile() {
     }
 }
 
+/// The `light terms` step (Bongo-Kart #181) on the native profile (both
+/// T&L paths: the GPU T&L evaluates the sky, the ground and the rim, the CPU
+/// path's lit copy too) and each console profile (the CPU T&L, like the
+/// consoles).
+#[test]
+fn the_light_terms_step_lights_by_the_normal_on_every_profile() {
+    use castle64::selftest::light_terms;
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        for gpu in [true, false] {
+            renderer.set_hw_tnl(gpu);
+            assert_eq!(
+                light_terms(&mut renderer),
+                Ok(true),
+                "{profile:?}, GPU path {gpu}"
+            );
+        }
+    }
+}
+
+/// The `lut mix` step (Bongo-Kart #181): the native profile's composite
+/// mixes two LUTs' gradings, the console profiles draw what their bake
+/// graded whatever the post settings say.
+#[test]
+fn the_lut_mix_step_mixes_on_the_full_tier_and_keeps_the_bake_elsewhere() {
+    use castle64::selftest::lut_mix;
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        assert_eq!(lut_mix(&mut renderer), Ok(true), "{profile:?}");
+    }
+}
+
 /// The `post` step (issue #64) on the native profile and each console
 /// profile: the card is graded alike (the PC's LUT at run time, the
 /// consoles' graded bake) and blooms or glows. Breaking each tier's half

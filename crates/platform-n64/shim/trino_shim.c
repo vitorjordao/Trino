@@ -950,6 +950,55 @@ uint32_t trino_joypad_poll(void)
     return mask;
 }
 
+// Bongo-Kart #182: the cartridge's Joybus clock (Animal Forest's), where the
+// emulator or the flash cart has one (the ROM header declares it:
+// ed64romconfig --rtc), as calendar fields; the Rust side turns them into
+// seconds since 1970. Local time, no zone. Read with two raw Joybus commands
+// on the cartridge port instead of libdragon's rtc.c, whose time() hook links
+// newlib's mktime, tzset and sscanf (~14 KB of the base N64's heap).
+#define TRINO_RTC_PORT 4
+static int8_t trino_rtc_state = -1; // -1 unknown, 0 none, 1 present
+
+static uint8_t trino_bcd(uint8_t v) { return (uint8_t)((v >> 4) * 10 + (v & 15)); }
+
+uint32_t trino_rtc_read(uint8_t* out)
+{
+    if (trino_rtc_state < 0) {
+        // Status (0x06): the identifier 0x0010 answers for a clock.
+        uint8_t cmd = 0x06, rx[3] = {0};
+        joybus_exec_cmd(TRINO_RTC_PORT, 1, 3, &cmd, rx);
+        trino_rtc_state = (((rx[0] << 8) | rx[1]) == JOYBUS_IDENTIFIER_CART_RTC) ? 1 : 0;
+    }
+    if (trino_rtc_state == 0) return 0;
+    // Read block 2 (0x07): second, minute, hour (bit 7: 24-hour mode), day,
+    // weekday, month, year, century, all BCD; then a status byte.
+    uint8_t cmd[2] = {0x07, 2}, rx[9] = {0};
+    joybus_exec_cmd(TRINO_RTC_PORT, 2, 9, cmd, rx);
+    uint32_t year = 1900 + trino_bcd(rx[6]) + 100u * trino_bcd(rx[7]);
+    if (year < 1900 || year > 2155) return 0;
+    out[0] = (uint8_t)(year - 1900);
+    out[1] = trino_bcd(rx[5]);
+    out[2] = trino_bcd(rx[3]);
+    out[3] = trino_bcd(rx[2] & 0x3F);
+    out[4] = trino_bcd(rx[1]);
+    out[5] = trino_bcd(rx[0]);
+    return 1;
+}
+
+// Bongo-Kart #180: the Rumble Pak (an on/off motor; Rust makes strength a
+// duty cycle).
+uint32_t trino_rumble_supported(uint32_t port)
+{
+    if (port >= JOYPAD_PORT_COUNT) return 0;
+    return joypad_get_rumble_supported((joypad_port_t)port) ? 1u : 0u;
+}
+
+void trino_rumble_set(uint32_t port, uint32_t on)
+{
+    if (port >= JOYPAD_PORT_COUNT) return;
+    joypad_set_rumble_active((joypad_port_t)port, on != 0);
+}
+
 uint32_t trino_joypad_port_buttons(uint32_t port)
 {
     if (port >= JOYPAD_PORT_COUNT) return 0;

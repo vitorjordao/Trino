@@ -59,6 +59,11 @@ save = "eeprom16k"
 # base-tier self-test's `TRINO_HEAP … rsp=live/peak`, never with room to spare
 # (unset = the copies share the heap):
 # rsp_arena_kb = 64
+# The header's cartridge clock (Platform::unix_seconds) is on unless the save
+# is an EEPROM, which the EverDrive can't combine with it; the four ports
+# declare a Rumble Pak (Platform::rumble): "rumble", "controller" or "none".
+# rtc = true
+# pak = "rumble"
 
 [3ds]
 package = "{{name}}-3ds"

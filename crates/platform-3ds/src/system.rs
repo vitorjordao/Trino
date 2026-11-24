@@ -82,6 +82,12 @@ impl Platform for N3dsPlatform {
         self.high.get() | now as u64
     }
 
+    fn unix_seconds(&self) -> Option<u64> {
+        // SAFETY: shim call, no arguments.
+        let s = unsafe { crate::ffi::trino_unix_seconds() };
+        (s != 0).then_some(s as u64)
+    }
+
     fn log(&self, message: &str) {
         runtime::log(message);
     }

@@ -4537,6 +4537,7 @@ version = "0.2.0-dev.1"
 dependencies = [
  "js-sys",
  "lewton",
+ "png",
  "trino-asset-pipeline",
  "trino-core",
  "trino-render-wgpu",

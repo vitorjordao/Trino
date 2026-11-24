@@ -40,6 +40,31 @@ pub struct WebPlatform {
     pub players: trino_core::HostedPlayers,
     /// `?lang=`, else `navigator.language` (`crate::language`).
     language: Option<trino_core::LangTag>,
+    /// `?unix=<seconds>`: a wall clock that starts where a test says.
+    pub(crate) clock_pin: Option<trino_core::PinnedClock>,
+    /// The game's key rebinds, applied by the runtime before the next poll
+    /// (Bongo-Kart #183).
+    pub(crate) key_requests: Vec<KeyRequest>,
+    /// The keyboard's bindings as the runtime last published them, and the
+    /// button a rebind waits for.
+    pub(crate) key_labels: [Option<&'static str>; 16],
+    pub(crate) capturing: Option<Button>,
+    /// What each player's motors were asked to play (Bongo-Kart #180) and
+    /// what the pads can do, published by the runtime.
+    pub(crate) rumble: trino_core::HostedRumble,
+    pub(crate) rumble_support: [trino_core::RumbleSupport; trino_core::MAX_PLAYERS],
+}
+
+/// A rebind the game asked for ([`Platform::rebind`], [`Platform::rebind_key`],
+/// …), for the runtime to apply to the keyboard.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeyRequest {
+    /// `button` takes the next bindable key.
+    Capture(Button),
+    /// `button` is this key `code` from now on.
+    Bind(Button, &'static str),
+    Cancel,
+    Reset,
 }
 
 impl WebPlatform {
@@ -63,7 +88,18 @@ impl WebPlatform {
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Local),
             players: trino_core::HostedPlayers::new(),
             language: crate::language::detect(),
+            clock_pin: None,
+            key_requests: Vec::new(),
+            key_labels: crate::keys::WebBindings::default().labels(),
+            capturing: None,
+            rumble: trino_core::HostedRumble::new(),
+            rumble_support: [trino_core::RumbleSupport::Unsupported; trino_core::MAX_PLAYERS],
         }
+    }
+
+    /// The wall clock reads `secs` now and runs from there (`?unix=`).
+    pub fn pin_clock(&mut self, secs: u64) {
+        self.clock_pin = Some(trino_core::PinnedClock::new(secs, self.now_micros()));
     }
 
     /// Replace the system language (a host that knows better).
@@ -254,10 +290,76 @@ impl Platform for WebPlatform {
     }
 
     fn input_info(&self) -> Option<InputInfo> {
-        self.input.or(Some(InputInfo {
+        let info = self.input.unwrap_or(InputInfo {
             gamepad: GamepadStatus::Disconnected,
             capturing: None,
-        }))
+        });
+        Some(InputInfo {
+            capturing: self.capturing.map(|b| (b, BindDevice::Keyboard)),
+            ..info
+        })
+    }
+
+    fn unix_seconds(&self) -> Option<u64> {
+        if let Some(pin) = &self.clock_pin {
+            return Some(pin.read(self.now_micros()));
+        }
+        let ms = js_sys::Date::now();
+        (ms.is_finite() && ms > 0.0).then(|| (ms / 1000.0) as u64)
+    }
+
+    fn rumble(&mut self, player: u8, low: f32, high: f32, ms: u32) {
+        if self.rumble_support(player) == trino_core::RumbleSupport::Unsupported {
+            return;
+        }
+        let scale = self.access.get().rumble_factor();
+        let now = self.now_micros();
+        self.rumble.request(player, low, high, ms, now, scale);
+    }
+
+    fn rumble_state(&self, player: u8) -> trino_core::Rumble {
+        self.rumble.state(player, self.now_micros())
+    }
+
+    fn rumble_support(&self, player: u8) -> trino_core::RumbleSupport {
+        self.rumble_support
+            .get(player as usize)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn rebind_player(&mut self, _player: u8, button: Button, device: BindDevice) {
+        // One keyboard (whoever's seat it is); pads keep the standard
+        // mapping in a browser.
+        if device == BindDevice::Keyboard {
+            self.key_requests.push(KeyRequest::Capture(button));
+        }
+    }
+
+    fn rebind_key(&mut self, player: u8, button: Button, key: trino_core::Key) -> bool {
+        match crate::keys::code_for(key) {
+            Some(code) if (player as usize) < trino_core::MAX_PLAYERS => {
+                self.key_requests.push(KeyRequest::Bind(button, code));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn cancel_rebind(&mut self) {
+        self.key_requests.push(KeyRequest::Cancel);
+    }
+
+    fn reset_bindings(&mut self) {
+        self.key_requests.push(KeyRequest::Reset);
+    }
+
+    fn save_image(&mut self, name: &str, image: &trino_core::RgbaImage) -> Result<(), SaveError> {
+        if !trino_core::image::image_name_ok(name) {
+            return Err(SaveError::Io);
+        }
+        let png = crate::image::encode_png(image).ok_or(SaveError::Io)?;
+        crate::image::download(&format!("{name}.png"), &png)
     }
 
     fn gamepad_name(&self) -> Option<&str> {
@@ -268,24 +370,13 @@ impl Platform for WebPlatform {
         self.pad_family
     }
 
-    fn binding_label(&self, button: Button, device: BindDevice) -> Option<&str> {
-        // The PC's default bindings (`crate::keys`); the Web has no
-        // rebinding screen storage yet, so these are fixed.
-        let key = match button {
-            Button::A => "Z",
-            Button::B => "X",
-            Button::X => "C",
-            Button::Y => "V",
-            Button::L => "Q",
-            Button::R => "E",
-            Button::Start => "ENTER",
-            Button::Select => "RSHIFT",
-            Button::DpadUp => "UP",
-            Button::DpadDown => "DOWN",
-            Button::DpadLeft => "LEFT",
-            Button::DpadRight => "RIGHT",
-            _ => return None,
-        };
+    fn binding_label_for(&self, _player: u8, button: Button, device: BindDevice) -> Option<&str> {
+        // The keyboard's bindings as the runtime published them (one
+        // keyboard: every player's label is the same); pads keep the
+        // standard mapping's names.
+        if device == BindDevice::Keyboard {
+            return self.key_labels[button as usize];
+        }
         let pad = match button {
             Button::A => "A",
             Button::B => "B",
@@ -301,10 +392,7 @@ impl Platform for WebPlatform {
             Button::DpadRight => "D-Right",
             _ => return None,
         };
-        Some(match device {
-            BindDevice::Keyboard => key,
-            BindDevice::Gamepad => pad,
-        })
+        Some(pad)
     }
 }
 

@@ -41,7 +41,7 @@
 
 use trino_core::{
     BindDevice, Button, DeviceKind, GamepadStatus, Input, InputInfo, InputState, Key, MAX_PLAYERS,
-    PadFamily, PlayersInput, PointerButton, Seats, Vec2,
+    PadFamily, PlayersInput, PointerButton, Rumble, RumbleSupport, Seats, Vec2,
 };
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -158,11 +158,9 @@ impl PadButton {
 
 /// The keys a binding may use, with their names (file and screen). Keys
 /// with a fixed role are left out, so a rebind never makes one press do two
-/// things: W/A/S/D (the stick) and the shortcut keys that had a [`Key`]
-/// bit before the full keyboard (Esc, Space, Tab, Delete, Backspace, F1–F8,
-/// 1–3, Page Up/Down, Home, R, T, =/+, −, Ctrl, numpad 1–3/+/−), plus Super
-/// (the OS takes it). Every other key is bindable, though it also sets its
-/// own [`Key`] bit ([`keys_for`]).
+/// things: W/A/S/D (the stick), Escape (cancels a rebind), F1–F8, Delete,
+/// Home, Page Up/Down, =/+, −, Ctrl, numpad 1–3/+/−, plus Super (the OS
+/// takes it). Every key here also sets its own [`Key`] bit ([`keys_for`]).
 const KEYS: &[(KeyCode, &str)] = &[
     (KeyCode::KeyB, "B"),
     (KeyCode::KeyC, "C"),
@@ -325,6 +323,15 @@ pub fn keys_for(code: KeyCode) -> &'static [Key] {
 /// A key's name, if a binding may use it.
 pub fn key_label(code: KeyCode) -> Option<&'static str> {
     KEYS.iter().find(|(k, _)| *k == code).map(|(_, n)| *n)
+}
+
+/// The key a binding to `key` uses ([`Platform::rebind_key`](trino_core::Platform::rebind_key)):
+/// the first bindable key that sets `key`'s bit, so [`Key::Shift`] is the
+/// left Shift. `None` for keys with a fixed role (WASD, Escape, F1–F8, …).
+pub fn key_code_for(key: Key) -> Option<KeyCode> {
+    KEYS.iter()
+        .map(|(c, _)| *c)
+        .find(|c| keys_for(*c).contains(&key))
 }
 
 fn key_from_label(name: &str) -> Option<KeyCode> {
@@ -559,6 +566,8 @@ pub fn players_bindings_from_text(text: &str) -> [Bindings; MAX_PLAYERS] {
 pub enum InputRequest {
     /// Player `.0`'s `button` on `device` takes the next press.
     Rebind(u8, Button, BindDevice),
+    /// Player `.0`'s `button` is key `.2` from now on (no press needed).
+    BindKey(u8, Button, KeyCode),
     Cancel,
     /// Every player's bindings back to the defaults.
     Reset,
@@ -571,6 +580,16 @@ pub struct PcInput {
     state: InputState,
     /// Bindable keys held, in press order.
     held: Vec<KeyCode>,
+    /// Keys pressed since the last poll: a press and release between two
+    /// polls (a tap shorter than a frame) still reads as down for one poll
+    /// (Bongo-Kart #183).
+    tapped: Vec<KeyCode>,
+    /// What each player's motors were last sent (Bongo-Kart #180): the
+    /// tests' view of a rumble, with or without a pad.
+    rumble_sent: [Option<(Rumble, u32)>; MAX_PLAYERS],
+    /// The force-feedback effect playing for each player.
+    #[cfg(feature = "gamepad")]
+    effects: Vec<(u8, gilrs::ff::Effect)>,
     // W, A, S, D held state for the digital stick.
     wasd: [bool; 4],
     /// Each player's bindings (issue #67): a device plays with its seat's.
@@ -685,6 +704,12 @@ impl PcInput {
                 let player = player.min(MAX_PLAYERS as u8 - 1);
                 self.capture = Some((player, button, device));
             }
+            InputRequest::BindKey(player, button, code) => {
+                let player = player.min(MAX_PLAYERS as u8 - 1);
+                self.held.retain(|k| *k != code);
+                self.bindings[player as usize].bind_key(button, code);
+                self.changed = true;
+            }
             InputRequest::Cancel => self.capture = None,
             InputRequest::Reset => {
                 self.capture = None;
@@ -751,6 +776,128 @@ impl PcInput {
         self.pad.as_ref().map(PadIdent::family)
     }
 
+    /// Play player `player`'s pads' motors (already scaled by the player's
+    /// setting; [`Rumble::OFF`] or 0 ms stops them). Returns how many pads
+    /// took it: 0 without the pad layer, a pad, or force feedback.
+    pub fn rumble(&mut self, player: u8, r: Rumble, ms: u32) -> usize {
+        let Some(slot) = self.rumble_sent.get_mut(player as usize) else {
+            return 0;
+        };
+        *slot = Some((r, ms));
+        #[cfg(feature = "gamepad")]
+        {
+            self.play_ff(player, r, ms)
+        }
+        #[cfg(not(feature = "gamepad"))]
+        0
+    }
+
+    /// What player `player`'s motors were last sent, pad or not.
+    pub fn rumble_sent(&self, player: u8) -> Option<(Rumble, u32)> {
+        self.rumble_sent.get(player as usize).copied().flatten()
+    }
+
+    /// Whether player `player` has a pad that rumbles: `Unsupported` without
+    /// the pad layer (the `gamepad` feature, a working gilrs).
+    pub fn rumble_support(&self, player: u8) -> RumbleSupport {
+        #[cfg(feature = "gamepad")]
+        {
+            let Some(g) = self.gilrs.as_ref() else {
+                return RumbleSupport::Unsupported;
+            };
+            let ready = self
+                .player_pads(player)
+                .into_iter()
+                .any(|id| g.connected_gamepad(id).is_some_and(|p| p.is_ff_supported()));
+            if ready {
+                RumbleSupport::Ready
+            } else {
+                RumbleSupport::Disconnected
+            }
+        }
+        #[cfg(not(feature = "gamepad"))]
+        {
+            let _ = player;
+            RumbleSupport::Unsupported
+        }
+    }
+
+    /// The gilrs ids of the pads seated at `player`.
+    #[cfg(feature = "gamepad")]
+    fn player_pads(&self, player: u8) -> Vec<gilrs::GamepadId> {
+        let Some(g) = self.gilrs.as_ref() else {
+            return Vec::new();
+        };
+        g.gamepads()
+            .filter(|(id, _)| {
+                let key = usize::from(*id) as u32;
+                self.seats.devices().iter().any(|d| {
+                    d.kind == DeviceKind::Gamepad
+                        && d.slot as u32 == key
+                        && d.seat.unwrap_or(0) == player
+                })
+            })
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// One force-feedback effect per call on the player's pads: the strong
+    /// (low-frequency) and weak motors for `ms`. The effect replaces the
+    /// player's last one (dropping an effect stops it).
+    #[cfg(feature = "gamepad")]
+    fn play_ff(&mut self, player: u8, r: Rumble, ms: u32) -> usize {
+        use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Repeat, Replay, Ticks};
+        let pads: Vec<_> = self
+            .player_pads(player)
+            .into_iter()
+            .filter(|id| {
+                self.gilrs
+                    .as_ref()
+                    .and_then(|g| g.connected_gamepad(*id))
+                    .is_some_and(|p| p.is_ff_supported())
+            })
+            .collect();
+        // Drop the player's last effect (that stops it).
+        self.effects.retain(|(p, _)| *p != player);
+        if pads.is_empty() || r.is_off() || ms == 0 {
+            return 0;
+        }
+        let Some(g) = self.gilrs.as_mut() else {
+            return 0;
+        };
+        let play = Replay {
+            after: Ticks::from_ms(0),
+            play_for: Ticks::from_ms(ms),
+            with_delay: Ticks::from_ms(0),
+        };
+        let mag = |v: f32| (v.clamp(0.0, 1.0) * u16::MAX as f32) as u16;
+        let effect = EffectBuilder::new()
+            .add_effect(BaseEffect {
+                kind: BaseEffectType::Strong {
+                    magnitude: mag(r.low),
+                },
+                scheduling: play,
+                envelope: Default::default(),
+            })
+            .add_effect(BaseEffect {
+                kind: BaseEffectType::Weak {
+                    magnitude: mag(r.high),
+                },
+                scheduling: play,
+                envelope: Default::default(),
+            })
+            .repeat(Repeat::For(Ticks::from_ms(ms)))
+            .gamepads(&pads)
+            .finish(g);
+        match effect {
+            Ok(e) if e.play().is_ok() => {
+                self.effects.push((player, e));
+                pads.len()
+            }
+            _ => 0,
+        }
+    }
+
     /// The pad layer's first connected pad (`None`: none). The gilrs glue
     /// calls it every poll with copied values; a host without gilrs, or a
     /// test, calls it directly.
@@ -808,6 +955,9 @@ impl PcInput {
             if !self.held.contains(&code) {
                 self.held.push(code);
             }
+            if !self.tapped.contains(&code) {
+                self.tapped.push(code);
+            }
         } else {
             self.held.retain(|k| *k != code);
         }
@@ -833,8 +983,29 @@ impl PcInput {
     /// L2/R2.
     fn keyboard_state(&self, bindings: &Bindings) -> InputState {
         let mut state = self.state;
+        // A key tapped since the last poll reads as down for this one.
+        let mut wasd = self.wasd;
+        for code in &self.tapped {
+            for k in keys_for(*code) {
+                state.set_key(*k, true);
+            }
+            match code {
+                KeyCode::KeyW => wasd[0] = true,
+                KeyCode::KeyA => wasd[1] = true,
+                KeyCode::KeyS => wasd[2] = true,
+                KeyCode::KeyD => wasd[3] = true,
+                _ => {}
+            }
+        }
+        if wasd != self.wasd {
+            state.stick = Vec2::new(
+                (wasd[3] as i8 - wasd[1] as i8) as f32,
+                (wasd[0] as i8 - wasd[2] as i8) as f32,
+            );
+        }
         for (i, button) in BINDABLE.iter().enumerate() {
-            if bindings.keys[i].is_some_and(|k| self.held.contains(&k)) {
+            if bindings.keys[i].is_some_and(|k| self.held.contains(&k) || self.tapped.contains(&k))
+            {
                 state.set(*button, true);
             }
         }
@@ -1120,6 +1291,7 @@ impl Input for PcInput {
         self.pads_now = pads;
         // The wheel is a per-frame delta; everything else is held state.
         self.state.wheel = 0.0;
+        self.tapped.clear();
         *self.seats.finish()
     }
 }

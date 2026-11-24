@@ -1284,12 +1284,15 @@ fn apply_display(ctx: &mut Ctx, profile: SimProfile, file: &Path, s: DisplaySett
     refit(ctx, profile);
 }
 
-/// Apply the game's rebind/cancel/reset, persist bindings that changed
+/// Apply the game's rebinds, key bindings, cancel and reset, send its
+/// rumble, persist bindings that changed
 /// (a rebind completes on a later key or pad press), and tell the game.
 fn apply_input(ctx: &mut Ctx, file: &Path) {
-    if let Some(r) = ctx.platform.take_input_request() {
+    while let Some(r) = ctx.platform.take_input_request() {
         ctx.input.apply(r);
     }
+    // The frame's rumble to the pads (Bongo-Kart #180).
+    ctx.platform.publish_rumble(&mut ctx.input);
     if ctx.input.take_changed() {
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);

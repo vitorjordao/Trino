@@ -40,6 +40,14 @@ pub struct N64Platform {
     /// The four controller ports as players (issue #67), published by the
     /// host before each update.
     pub players: trino_core::HostedPlayers,
+    /// What each port's Rumble Pak was asked to play (Bongo-Kart #180) and
+    /// the duty cycle that plays it: the motor is on or off, so a strength
+    /// is the share of frames it runs ([`tick`](Self::tick)).
+    rumble: trino_core::HostedRumble,
+    rumble_duty: [trino_core::DutyCycle; 4],
+    rumble_on: u8,
+    /// The last clock read: when, and the clock from it (`None`: no RTC).
+    rtc: Cell<Option<(u64, Option<trino_core::PinnedClock>)>>,
 }
 
 /// An unfinished save: the planned body, how much of it is on the EEPROM,
@@ -116,6 +124,30 @@ impl N64Platform {
             access: trino_core::HostedAccess::new(),
             services: trino_core::HostedServices::new(trino_core::ServiceBackend::Session),
             players: trino_core::HostedPlayers::new(),
+            rumble: trino_core::HostedRumble::new(),
+            rumble_duty: [trino_core::DutyCycle::new(); 4],
+            rumble_on: 0,
+            rtc: Cell::new(None),
+        }
+    }
+
+    /// Once a frame (the hosts call it after the game's update): each Rumble
+    /// Pak's motor on or off by its strength's duty cycle (1.0 runs every
+    /// frame, 0.5 every other one).
+    #[inline(never)]
+    #[cfg_attr(target_os = "none", optimize(size))]
+    pub fn tick(&mut self) {
+        let now = self.now_micros();
+        let _ = self.rumble.take_sent();
+        for port in 0..4u8 {
+            let strength = self.rumble.state(port, now).strongest();
+            let on = self.rumble_duty[port as usize].step(strength);
+            let bit = 1u8 << port;
+            if on != (self.rumble_on & bit != 0) {
+                self.rumble_on ^= bit;
+                // SAFETY: shim call, plain integers.
+                unsafe { ffi::trino_rumble_set(port as u32, on as u32) };
+            }
         }
     }
 
@@ -185,6 +217,58 @@ impl Platform for N64Platform {
         }
         self.last_us.set(now);
         self.high.get() | now as u64
+    }
+
+    /// The cartridge clock, read at most once a second (a Joybus command
+    /// blocks the CPU); between reads it runs on the tick counter.
+    #[inline(never)]
+    #[cfg_attr(target_os = "none", optimize(size))]
+    fn unix_seconds(&self) -> Option<u64> {
+        let now = self.now_micros();
+        if let Some((at, clock)) = self.rtc.get()
+            && now.saturating_sub(at) < 1_000_000
+        {
+            return clock.map(|c| c.read(now));
+        }
+        let mut t = [0u8; 6];
+        // SAFETY: the shim writes six bytes.
+        let clock = if unsafe { ffi::trino_rtc_read(t.as_mut_ptr()) } == 0 {
+            None
+        } else {
+            trino_core::clock::unix_from_civil(&trino_core::clock::Civil {
+                year: 1900 + t[0] as u16,
+                month: t[1],
+                day: t[2],
+                hour: t[3],
+                min: t[4],
+                sec: t[5],
+                weekday: 0,
+            })
+        };
+        let clock = clock.map(|secs| trino_core::PinnedClock::new(secs, now));
+        self.rtc.set(Some((now, clock)));
+        clock.map(|c| c.read(now))
+    }
+
+    fn rumble(&mut self, player: u8, low: f32, high: f32, ms: u32) {
+        let scale = self.access.get().rumble_factor();
+        let now = self.now_micros();
+        self.rumble.request(player, low, high, ms, now, scale);
+    }
+
+    fn rumble_state(&self, player: u8) -> trino_core::Rumble {
+        self.rumble.state(player, self.now_micros())
+    }
+
+    fn rumble_support(&self, player: u8) -> trino_core::RumbleSupport {
+        if player >= 4 {
+            return trino_core::RumbleSupport::Unsupported;
+        }
+        // SAFETY: shim call, plain integer.
+        match unsafe { ffi::trino_rumble_supported(player as u32) } {
+            0 => trino_core::RumbleSupport::Disconnected,
+            _ => trino_core::RumbleSupport::Ready,
+        }
     }
 
     fn log(&self, message: &str) {

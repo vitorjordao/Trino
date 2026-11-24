@@ -220,6 +220,11 @@ pub struct AccessSettings {
     /// Off by default, opt-in: a game that already swaps palettes for `cvd`
     /// would be corrected twice. The consoles ignore it.
     pub cvd_filter: bool,
+    /// Controller rumble strength in percent, 0..=[`RUMBLE_MAX`] (Bongo-Kart
+    /// #180): every [`Platform::rumble`](crate::Platform::rumble) is scaled by
+    /// it and 0 plays nothing. 100 by default. A console save keeps it in 2 %
+    /// steps ([`pack`](Self::pack)).
+    pub rumble: u8,
 }
 
 /// The smallest text scale, percent.
@@ -228,6 +233,8 @@ pub const TEXT_SCALE_MIN: u8 = 100;
 pub const TEXT_SCALE_MAX: u8 = 200;
 /// Bytes of [`AccessSettings::pack`].
 pub const PACKED_LEN: usize = 3;
+/// The strongest rumble setting, percent.
+pub const RUMBLE_MAX: u8 = 100;
 
 impl AccessSettings {
     /// Everything off but the flash guard; text at 100 %.
@@ -240,9 +247,10 @@ impl AccessSettings {
         flash_guard: true,
         hold_to_toggle: false,
         cvd_filter: false,
+        rumble: RUMBLE_MAX,
     };
 
-    /// The same, the text scale within its range.
+    /// The same, the text scale and the rumble within their ranges.
     pub const fn clamped(self) -> AccessSettings {
         let t = self.text_scale;
         AccessSettings {
@@ -253,8 +261,18 @@ impl AccessSettings {
             } else {
                 t
             },
+            rumble: if self.rumble > RUMBLE_MAX {
+                RUMBLE_MAX
+            } else {
+                self.rumble
+            },
             ..self
         }
+    }
+
+    /// The rumble setting as a factor (0.0 ..= 1.0).
+    pub fn rumble_factor(&self) -> f32 {
+        self.clamped().rumble as f32 / 100.0
     }
 
     /// The text scale as a factor (1.0 ..= 2.0).
@@ -265,7 +283,9 @@ impl AccessSettings {
     /// Three bytes for a console save (the N64 EEPROM has 512 B or 2 KB):
     /// byte 0 = color vision (bits 0–2), captions (3–4), high contrast (5),
     /// reduce motion (6), flash guard (7); byte 1 = text scale %; byte 2 =
-    /// hold-to-toggle (bit 0), the correction filter (bit 1), the rest zero.
+    /// hold-to-toggle (bit 0), the correction filter (bit 1) and bits 2–7 =
+    /// `(100 − rumble) / 2` (0 = full strength, so saves from before the
+    /// setting load at 100 %; a rumble that isn't 0 never packs as 0).
     pub const fn pack(&self) -> [u8; PACKED_LEN] {
         let s = self.clamped();
         [
@@ -275,7 +295,7 @@ impl AccessSettings {
                 | (s.reduce_motion as u8) << 6
                 | (s.flash_guard as u8) << 7,
             s.text_scale,
-            s.hold_to_toggle as u8 | (s.cvd_filter as u8) << 1,
+            s.hold_to_toggle as u8 | (s.cvd_filter as u8) << 1 | ((RUMBLE_MAX - s.rumble) / 2) << 2,
         ]
     }
 
@@ -288,7 +308,8 @@ impl AccessSettings {
         let Some(captions) = CaptionMode::from_index((b[0] >> 3) & 3) else {
             return None;
         };
-        if b[1] < TEXT_SCALE_MIN || b[1] > TEXT_SCALE_MAX || b[2] & !3 != 0 {
+        let quiet = b[2] >> 2;
+        if b[1] < TEXT_SCALE_MIN || b[1] > TEXT_SCALE_MAX || quiet > RUMBLE_MAX / 2 {
             return None;
         }
         Some(AccessSettings {
@@ -300,6 +321,7 @@ impl AccessSettings {
             flash_guard: b[0] & (1 << 7) != 0,
             hold_to_toggle: b[2] & 1 != 0,
             cvd_filter: b[2] & 2 != 0,
+            rumble: RUMBLE_MAX - quiet * 2,
         })
     }
 
@@ -314,7 +336,8 @@ impl AccessSettings {
         writeln!(out, "reduce_motion={}", on(self.reduce_motion))?;
         writeln!(out, "flash_guard={}", on(self.flash_guard))?;
         writeln!(out, "hold_to_toggle={}", on(self.hold_to_toggle))?;
-        writeln!(out, "cvd_filter={}", on(self.cvd_filter))
+        writeln!(out, "cvd_filter={}", on(self.cvd_filter))?;
+        writeln!(out, "rumble={}", self.rumble)
     }
 
     /// Apply one `key=value` pair; `false` when the key is unknown or the
@@ -349,6 +372,12 @@ impl AccessSettings {
             "flash_guard" => flag(v).map(|b| self.flash_guard = b).is_some(),
             "hold_to_toggle" => flag(v).map(|b| self.hold_to_toggle = b).is_some(),
             "cvd_filter" | "daltonize" => flag(v).map(|b| self.cvd_filter = b).is_some(),
+            "rumble" | "vibration" => v
+                .trim_end_matches('%')
+                .trim()
+                .parse::<u16>()
+                .map(|n| self.rumble = n.min(RUMBLE_MAX as u16) as u8)
+                .is_ok(),
             _ => false,
         }
     }
@@ -442,6 +471,7 @@ mod tests {
                         flash_guard: bits & 4 != 0,
                         hold_to_toggle: bits & 8 != 0,
                         cvd_filter: bits & 16 != 0,
+                        rumble: 100 - (bits % 26) * 4,
                     };
                     assert_eq!(AccessSettings::unpack(s.pack()), Some(s));
                 }
@@ -451,11 +481,32 @@ mod tests {
         assert_eq!(AccessSettings::unpack([0xff, 0xff, 0xff]), None);
         assert_eq!(AccessSettings::unpack([5, 100, 0]), None, "cvd 5");
         assert_eq!(AccessSettings::unpack([3 << 3, 100, 0]), None, "captions 3");
-        assert_eq!(AccessSettings::unpack([0, 150, 4]), None, "reserved bit");
+        assert_eq!(
+            AccessSettings::unpack([0, 150, 51 << 2]),
+            None,
+            "rumble past 0 %"
+        );
+        // Rumble packs in 2 % steps from the top: 55 % reads back 56 %, 1 %
+        // never becomes 0 and 0 stays 0.
+        for (r, back) in [(55, 56), (1, 2), (0, 0), (100, 100)] {
+            let s = AccessSettings {
+                rumble: r,
+                ..AccessSettings::DEFAULT
+            };
+            assert_eq!(
+                AccessSettings::unpack(s.pack()).map(|s| s.rumble),
+                Some(back)
+            );
+        }
         // Saves from before the correction filter (bit 1 clear) still load.
         assert_eq!(
             AccessSettings::unpack([0, 100, 1]).map(|s| (s.hold_to_toggle, s.cvd_filter)),
             Some((true, false))
+        );
+        // Saves from before the rumble setting (bits 2–7 clear) load at 100 %.
+        assert_eq!(
+            AccessSettings::unpack([0, 100, 3]).map(|s| s.rumble),
+            Some(100)
         );
     }
 
@@ -470,6 +521,7 @@ mod tests {
             flash_guard: false,
             hold_to_toggle: true,
             cvd_filter: true,
+            rumble: 35,
         };
         let mut text = crate::text::TextBuf::<256>::new();
         s.write_text(&mut text).unwrap();
@@ -486,12 +538,16 @@ mod tests {
         assert_eq!(r.text_scale, TEXT_SCALE_MAX);
         assert_eq!(r.captions, CaptionMode::All);
         // The comma form of TRINO_ACCESS.
-        let e =
-            AccessSettings::parse_text(AccessSettings::DEFAULT, "cvd=deutan,text=150%,contrast=on");
-        assert_eq!(
-            (e.cvd, e.text_scale, e.high_contrast),
-            (CvdMode::Deuteranopia, 150, true)
+        let e = AccessSettings::parse_text(
+            AccessSettings::DEFAULT,
+            "cvd=deutan,text=150%,contrast=on,rumble=40%",
         );
+        assert_eq!(
+            (e.cvd, e.text_scale, e.high_contrast, e.rumble),
+            (CvdMode::Deuteranopia, 150, true, 40)
+        );
+        let loud = AccessSettings::parse_text(AccessSettings::DEFAULT, "vibration=250");
+        assert_eq!((loud.rumble, loud.rumble_factor()), (100, 1.0));
     }
 
     #[test]

@@ -1907,6 +1907,16 @@ void trino_ch_rate(uint32_t channel, uint32_t rate_q16)
 
 // Hold a channel where it is, or let it go on (the music's pause; a stream
 // keeps its queued chunks and the audio thread waits for them).
+// Bongo-Kart #182: osGetTime() is milliseconds since 1900-01-01 on the
+// console's clock (the player's local time, no zone).
+uint32_t trino_unix_seconds(void)
+{
+    const uint64_t epoch_1970 = 2208988800ULL;
+    uint64_t s = osGetTime() / 1000ULL;
+    if (s < epoch_1970 || s - epoch_1970 > 0xFFFFFFFFULL) return 0;
+    return (uint32_t)(s - epoch_1970);
+}
+
 void trino_ch_pause(uint32_t channel, uint32_t paused)
 {
     if (channel >= TRINO_NDSP_CHANNELS) return;

@@ -428,10 +428,28 @@ impl N64Renderer {
 
     /// Stop profiling and hand back what was measured.
     pub fn take_profile(&mut self) -> Option<RenderProfile> {
+        self.end_profile();
+        self.profile.take()
+    }
+
+    /// Stop profiling and leave what was measured in place: read it with
+    /// [`profile`](Self::profile), then [`clear_profile`](Self::clear_profile).
+    /// A [`RenderProfile`] is 2 KB, and `N64Host::measure` holds its copy
+    /// under the game's whole update and render (the 64 KB stack).
+    pub fn end_profile(&mut self) {
         if self.profile.is_some() {
             prof::end_window();
         }
-        self.profile.take()
+    }
+
+    /// What [`end_profile`](Self::end_profile) stopped.
+    pub fn profile(&self) -> Option<&RenderProfile> {
+        self.profile.as_ref()
+    }
+
+    /// Forget the profile (the next frames aren't timed).
+    pub fn clear_profile(&mut self) {
+        self.profile = None;
     }
 
     fn rebuild_tnl(&mut self) {

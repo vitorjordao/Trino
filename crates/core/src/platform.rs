@@ -171,6 +171,16 @@ pub trait Platform {
     /// Monotonic time in microseconds since an arbitrary epoch.
     fn now_micros(&self) -> u64;
 
+    /// Wall-clock seconds since 1970-01-01 00:00 UTC ([`crate::clock`],
+    /// Bongo-Kart #182): for dates (a daily challenge, a save's timestamp),
+    /// never for timing or inside a simulation a replay repeats (read it once
+    /// and keep it). The PC and the Web read UTC; the 3DS and an N64 with a
+    /// cartridge clock read the player's local time counted as UTC. `None`
+    /// where there is no clock (the default; an N64 cartridge without one).
+    fn unix_seconds(&self) -> Option<u64> {
+        None
+    }
+
     /// Debug logging. Routed to stdout on PC, ISViewer on N64, the debug
     /// channel on 3DS.
     fn log(&self, message: &str);
@@ -479,6 +489,51 @@ pub trait Platform {
 
     /// Back to the default bindings (persisted too).
     fn reset_bindings(&mut self) {}
+
+    /// Bind `button` to `key` on player `player`'s keyboard at once, without
+    /// waiting for a press (a game's own remapping screen, Bongo-Kart #183):
+    /// no other button keeps the key, and the host persists it like a
+    /// [`rebind_player`](Self::rebind_player). `false` where it changes
+    /// nothing: a platform without key bindings (the default, the consoles),
+    /// or a key with a fixed role there (WASD is the stick, Escape, F1–F8,
+    /// …; see `trino_platform_pc::input`). A game's own actions remap on every
+    /// target through [`crate::ActionMap`].
+    fn rebind_key(&mut self, _player: u8, _button: crate::Button, _key: crate::Key) -> bool {
+        false
+    }
+
+    /// Play player `player`'s controller motors ([`crate::rumble`],
+    /// Bongo-Kart #180): `low` the heavy motor, `high` the light one, 0..=1,
+    /// for `ms` milliseconds; a new call replaces the last, 0 ms or both 0
+    /// stops. Scaled by [`AccessSettings::rumble`](crate::AccessSettings::rumble)
+    /// (0 % plays nothing). PC gamepads with force feedback, the Web's
+    /// `vibrationActuator`, the N64's Rumble Pak (on/off, so strength becomes
+    /// a duty cycle); nothing where [`rumble_support`](Self::rumble_support)
+    /// is `Unsupported` (the default, the 3DS).
+    fn rumble(&mut self, _player: u8, _low: f32, _high: f32, _ms: u32) {}
+
+    /// What player `player`'s motors play now, after the setting's scale
+    /// ([`Rumble::OFF`](crate::Rumble::OFF) once the request ran out, and
+    /// always where rumble is unsupported).
+    fn rumble_state(&self, _player: u8) -> crate::Rumble {
+        crate::Rumble::OFF
+    }
+
+    /// Whether player `player`'s rumble can be felt: show the vibration
+    /// option only when it isn't `Unsupported`.
+    fn rumble_support(&self, _player: u8) -> crate::RumbleSupport {
+        crate::RumbleSupport::Unsupported
+    }
+
+    /// Keep an image for the player (Bongo-Kart #183, [`crate::image`]): the
+    /// PC writes `<save folder>/images/<name>.png`, the Web downloads
+    /// `<name>.png`. `name` is 1..=64 ASCII letters, digits, `-`, `_`
+    /// ([`crate::image::image_name_ok`]); a bad name or image is
+    /// `SaveError::Io`. `Unsupported` where nothing can be kept (the
+    /// default, the consoles).
+    fn save_image(&mut self, _name: &str, _image: &crate::RgbaImage) -> Result<(), SaveError> {
+        Err(SaveError::Unsupported)
+    }
 
     /// Start loading an asset group, or poll one ([`crate::group`], issue
     /// #56): never blocks. The first call on an unloaded group queues it and

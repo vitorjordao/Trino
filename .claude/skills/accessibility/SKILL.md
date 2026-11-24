@@ -74,6 +74,11 @@ and the Web run the same thing. The guide with code is `docs/ACCESSIBILITY.md`.
   before the object.
 - `CameraFx` (`apply` to the camera), `ScreenFlash` (`trigger` with the settings, `draw`
   after the world), `HoldToggle::update(input, prev, button, &settings)`.
+- Rumble (ADR 0045 §2): `settings.rumble` (0..=100 %, 0 = off) scales every
+  `Platform::rumble` on its own; offer the option only where
+  `platform.rumble_support(player) != RumbleSupport::Unsupported` (no placebo), and say
+  "no pad that rumbles" for `Disconnected`. It packs into the three bytes' spare bits
+  (old saves read 100 %); `TRINO_ACCESS=rumble=40`.
 - Consoles keep the settings for the session: store `settings.pack()` (3 bytes) in the
   save and `AccessSettings::unpack` on load (`None` for a blank save).
 - PC runs: `TRINO_ACCESS=...` forces settings (nothing saved), `TRINO_CVD=...` shows a

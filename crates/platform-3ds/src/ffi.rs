@@ -157,6 +157,9 @@ unsafe extern "C" {
     pub fn trino_ch_rate(channel: u32, rate_q16: u32);
     /// Hold a channel where it is (1) or let it go on (0).
     pub fn trino_ch_pause(channel: u32, paused: u32);
+    /// The console clock as seconds since 1970 (Bongo-Kart #182): the
+    /// player's local time counted as UTC; 0 when it reads before 1970.
+    pub fn trino_unix_seconds() -> u32;
 
     /// Path is romfs-relative, e.g. `/index.tsv` (no `romfs:/`).
     pub fn trino_file_exists(romfs_relative_path: *const c_char) -> i32;

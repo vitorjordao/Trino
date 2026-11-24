@@ -110,6 +110,10 @@ fake `target/` files (`--no-build`). `#!/bin/sh` stub loaders record `$*` to
 
 Nothing here has run on a physical SummerCart64, EverDrive or 3DS (BACKLOG). Open
 questions for the first hardware session:
+- Does the EverDrive 64 give an EEPROM game no clock, or break its saves, when the
+  header declares both (ed64romconfig warns; `[n64] rtc` is off with an EEPROM by
+  default, ADR 0045)? Does a Rumble Pak's duty-cycled motor (`N64Platform::tick`)
+  feel like a strength, or just buzz?
 - Does Luma's break-on-start (`--gdb-port 4003`, "Force-debug next application at
   launch") catch a `.3dsx` the Homebrew Launcher starts? That is why `--gdb`
   defaults to attach (4000).

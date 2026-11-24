@@ -328,6 +328,20 @@ shipping a 3D game first**, then by cost:
 
 ---
 
+## Done — wall clock, rumble, remapping, images (2026-11-24, branch `feat/platform-clock-rumble-rebind`, Bongo-Kart #180, #182, #183, ADR 0045)
+
+| Item | Evidence |
+|---|---|
+| `Platform::unix_seconds` and `trino_core::clock` (`Civil`, `unix_from_civil`, `civil_from_unix`, `day_index`, `PinnedClock`): PC `SystemTime` + `TRINO_UNIX_TIME`, Web `Date.now()` + `?unix=`, 3DS `osGetTime`, N64 Joybus RTC (`[n64] rtc`) | `clock.rs` unit tests (300 years of days), `platform-pc/tests/clock_rumble_keys.rs`, the `clock rumble input` step's `clock=` on every target |
+| `Platform::rumble` / `rumble_state` / `rumble_support`, `HostedRumble`, `AccessSettings::rumble` (0..=100 %, packed in spare bits, old saves 100 %): PC gilrs force feedback, Web `vibrationActuator`, N64 Rumble Pak duty cycle (`[n64] pak`), 3DS `Unsupported` | `rumble.rs` unit tests, `rumble_is_scaled_by_the_setting_and_reaches_the_pads`, the access pack tests, the step (50 % read back, nothing where unsupported) |
+| `Platform::rebind_key` (PC, Web), the Web's rebinding by press with `localStorage` `trino-input:<save>`, `trino_core::ActionMap<N>` (swaps, `pressed_key`/`pressed_button`, `2 + 4N`-byte save block), `Key::label` | `core/tests/actions.rs` (4 tests), `rebind_key_binds_at_once_and_refuses_fixed_keys`, the Web's `keys_rebind_by_press_or_at_once_and_round_trip_as_text`, the step's save-block bytes on every target |
+| Key taps shorter than a frame read down once (PC, Web) | `a_tap_shorter_than_a_frame_still_reads_down_once`, `a_tap_between_two_frames_reads_down_once` |
+| `Platform::save_image` (`RgbaImage`, `image_name_ok`): PC PNG in `<save folder>/images/`, Web download, consoles `Unsupported` | `save_image_writes_a_png_beside_the_save`, the step's `image=` |
+
+Not done: rumble on the 3DS (no motor) and per-pad force feedback curves (envelopes,
+periodic effects); the N64 clock only where the cartridge provides one; images on the
+consoles (nowhere a player could take a file from).
+
 ## Done — positional voices with a budget (2026-11-24, branch `feat/audio-pitch-voices-music`, Bongo-Kart #179 voice half, ADR 0044 §2)
 
 | Item | Evidence |

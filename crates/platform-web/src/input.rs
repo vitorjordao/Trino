@@ -13,9 +13,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use trino_core::{
-    DeviceKind, GamepadStatus, Input, InputState, PadFamily, PlayersInput, PointerButton, Seats,
-    Vec2,
+    Button, DeviceKind, GamepadStatus, Input, InputState, PadFamily, PlayersInput, PointerButton,
+    Rumble, RumbleSupport, Seats, Vec2,
 };
+
+use crate::platform::KeyRequest;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, KeyboardEvent, MouseEvent, TouchEvent, WheelEvent};
@@ -323,6 +325,137 @@ impl WebInput {
         };
         out
     }
+}
+
+/// Rumble and key bindings (Bongo-Kart #180, #183).
+impl WebInput {
+    /// Apply a rebind the game asked for to the keyboard.
+    pub(crate) fn apply_key_request(&mut self, r: KeyRequest) {
+        let mut s = self.shared.borrow_mut();
+        match r {
+            KeyRequest::Capture(b) => s.keyboard.capture(Some(b)),
+            KeyRequest::Bind(b, code) => {
+                s.keyboard.bind(b, code);
+            }
+            KeyRequest::Cancel => s.keyboard.capture(None),
+            KeyRequest::Reset => s.keyboard.reset(),
+        }
+    }
+
+    /// The keyboard's labels and the button a rebind waits for.
+    pub(crate) fn key_bindings(&self) -> ([Option<&'static str>; 16], Option<Button>) {
+        let s = self.shared.borrow();
+        (s.keyboard.bindings.labels(), s.keyboard.capturing())
+    }
+
+    /// The bindings as text when they changed since the last call.
+    pub(crate) fn take_bindings_change(&mut self) -> Option<String> {
+        let mut s = self.shared.borrow_mut();
+        s.keyboard
+            .take_changed()
+            .then(|| s.keyboard.bindings.to_text())
+    }
+
+    /// Bindings stored by an earlier visit.
+    pub(crate) fn load_bindings(&mut self, text: &str) {
+        self.shared.borrow_mut().keyboard.bindings = crate::keys::WebBindings::from_text(text);
+    }
+
+    /// The connected pads seated at `player` (`Gamepad.index` is the
+    /// device's slot).
+    fn player_pads(&self, player: u8) -> Vec<web_sys::Gamepad> {
+        let Some(list) = web_sys::window().and_then(|w| w.navigator().get_gamepads().ok()) else {
+            return Vec::new();
+        };
+        list.iter()
+            .filter_map(|p| p.dyn_into::<web_sys::Gamepad>().ok())
+            .filter(|p| p.connected())
+            .filter(|p| {
+                self.seats.devices().iter().any(|d| {
+                    d.kind == DeviceKind::Gamepad
+                        && d.slot as u32 == p.index()
+                        && d.seat.unwrap_or(0) == player
+                })
+            })
+            .collect()
+    }
+
+    /// Whether player `player` has a pad with a `vibrationActuator` (Chrome,
+    /// Edge, Safari; Firefox has none in the standard API).
+    pub(crate) fn rumble_support(&self, player: u8) -> RumbleSupport {
+        let has_api = web_sys::window().is_some_and(|w| {
+            js_sys::Reflect::has(&w.navigator(), &"getGamepads".into()).unwrap_or(false)
+        });
+        if !has_api {
+            return RumbleSupport::Unsupported;
+        }
+        if self
+            .player_pads(player)
+            .iter()
+            .any(|p| actuator(p).is_some())
+        {
+            RumbleSupport::Ready
+        } else {
+            RumbleSupport::Disconnected
+        }
+    }
+
+    /// Play (or stop) player `player`'s pads' motors: `dual-rumble` with the
+    /// strong motor at `low` and the weak one at `high`. Returns how many
+    /// pads took it.
+    pub(crate) fn rumble(&self, player: u8, r: Rumble, ms: u32) -> usize {
+        let mut n = 0;
+        for pad in self.player_pads(player) {
+            if let Some(a) = actuator(&pad) {
+                play_rumble(&a, r, ms);
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+/// A pad's `vibrationActuator`, where the browser has one.
+fn actuator(pad: &web_sys::Gamepad) -> Option<js_sys::Object> {
+    let a = js_sys::Reflect::get(pad, &"vibrationActuator".into()).ok()?;
+    if a.is_undefined() || a.is_null() {
+        return None;
+    }
+    a.dyn_into::<js_sys::Object>().ok()
+}
+
+fn play_rumble(a: &js_sys::Object, r: Rumble, ms: u32) {
+    let method = |name: &str| {
+        js_sys::Reflect::get(a, &name.into())
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    };
+    let promise = if r.is_off() || ms == 0 {
+        method("reset").map(|f| f.call0(a))
+    } else {
+        let params = js_sys::Object::new();
+        let set = |k: &str, v: f64| {
+            let _ = js_sys::Reflect::set(&params, &k.into(), &v.into());
+        };
+        set("startDelay", 0.0);
+        set("duration", ms as f64);
+        set("strongMagnitude", r.low.clamp(0.0, 1.0) as f64);
+        set("weakMagnitude", r.high.clamp(0.0, 1.0) as f64);
+        method("playEffect").map(|f| f.call2(a, &"dual-rumble".into(), &params))
+    };
+    // A pad that refuses rejects the promise: swallow it (nothing to do).
+    if let Some(Ok(p)) = promise
+        && let Ok(p) = p.dyn_into::<js_sys::Promise>()
+    {
+        IGNORE.with(|f| {
+            let _ = p.catch(f);
+        });
+    }
+}
+
+thread_local! {
+    /// One no-op rejection handler for every rumble promise.
+    static IGNORE: Closure<dyn FnMut(JsValue)> = Closure::new(|_: JsValue| {});
 }
 
 impl Input for WebInput {

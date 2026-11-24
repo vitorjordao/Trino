@@ -104,6 +104,14 @@ pub fn engine_checks(
         DynamicProbe::Skipped => platform.log("TRINO_STEP:dynamic mesh skipped (no read_pixel)\n"),
         DynamicProbe::NoneHere => platform.log("TRINO_STEP:dynamic mesh none on this target\n"),
     }
+    platform.log("TRINO_STEP:render target\n");
+    platform.log(match render_target(renderer)? {
+        TargetProbe::Probed => {
+            "TRINO_STEP:render target probed its picture on a sprite and a quad\n"
+        }
+        TargetProbe::Skipped => "TRINO_STEP:render target skipped (no read_pixel)\n",
+        TargetProbe::NoneHere => "TRINO_STEP:render target none on this target\n",
+    });
     platform.log("TRINO_STEP:mipmaps\n");
     platform.log(match mipmaps(renderer)? {
         MipProbe::Probed => "TRINO_STEP:mipmaps probed the far checker at its mean light\n",
@@ -2962,6 +2970,197 @@ pub fn dynamic_mesh(renderer: &mut dyn Renderer) -> Result<DynamicProbe, &'stati
         return Err("dynamic mesh: last frame's quad still shows");
     }
     Ok(DynamicProbe::Probed)
+}
+
+/// What the `render target` step saw.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TargetProbe {
+    /// The target's picture showed on the screen, through a sprite and a
+    /// textured quad, and stayed there a frame it wasn't drawn.
+    Probed,
+    /// It drew (the counters say so); no `read_pixel` here (the
+    /// browsers).
+    Skipped,
+    /// The target draws into no texture (`Caps::max_target_texels` 0) and
+    /// `begin_target` said so.
+    NoneHere,
+}
+
+/// The step's 64×32 target.
+pub const SELFTEST_TARGET: trino_core::RenderTarget =
+    trino_core::RenderTarget::new("targets/selftest", 64, 32);
+
+/// Render targets ([`Renderer::begin_target`], Bongo-Kart #184). Where the
+/// target draws them (the PC, the Web): a 64×32 target cleared blue gets a
+/// red rectangle on its left and a green 3D quad, projected to its size, on
+/// its right; the screen then shows it as a sprite at twice its size and on
+/// a textured quad. The probes read each color in both, then again in a
+/// frame that doesn't draw the target (it keeps its picture), and an
+/// oversized target is refused. The consoles and the PC's console profiles
+/// draw none (`Caps::max_target_texels` 0): `begin_target` must refuse.
+#[inline(never)]
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+pub fn render_target(renderer: &mut dyn Renderer) -> Result<TargetProbe, &'static str> {
+    if renderer.caps().max_target_texels == 0 {
+        renderer.begin_frame(Color::BLACK);
+        let taken = renderer.begin_target(&SELFTEST_TARGET, Color::BLACK);
+        renderer.end_target();
+        renderer.end_frame();
+        return if taken {
+            Err("render target: a target without targets took one")
+        } else {
+            Ok(TargetProbe::NoneHere)
+        };
+    }
+    #[cfg(not(any(target_os = "none", target_os = "horizon")))]
+    return render_target_probe(renderer);
+    #[cfg(any(target_os = "none", target_os = "horizon"))]
+    Err("render target: a console draws targets but has no probe yet")
+}
+
+#[cfg(not(any(target_os = "none", target_os = "horizon")))]
+fn render_target_probe(renderer: &mut dyn Renderer) -> Result<TargetProbe, &'static str> {
+    use trino_core::{DynVertex, DynamicMesh, Mat34};
+    let caps = *renderer.caps();
+    let t = SELFTEST_TARGET;
+    let (tw, th) = (t.width as f32, t.height as f32);
+    let camera = Camera3 {
+        eye: Vec3::new(0.0, 0.0, -2.0),
+        target: Vec3::ZERO,
+        fov_y: 60.0 * core::f32::consts::PI / 180.0,
+    };
+    let view = camera.view();
+    let half = camera.fov_y * 0.5;
+    let cot = cos(half) / sin(half);
+    // Where a point at z = 0 lands on a `w × h` picture.
+    let project = |x: f32, y: f32, w: f32, h: f32| {
+        let v = view.transform_point(Vec3::new(x, y, 0.0));
+        let focal = cot * h * 0.5;
+        (w * 0.5 + v.x * focal / v.z, h * 0.5 - v.y * focal / v.z)
+    };
+    let n = Vec3::new(0.0, 0.0, -1.0);
+    // The quad from x0..x1, y -0.5..0.5, UVs over the whole texture.
+    let quad = |x0: f32, x1: f32, c: Color| {
+        [
+            (x0, 0.5, 0.0, 0.0),
+            (x1, 0.5, 1.0, 0.0),
+            (x1, -0.5, 1.0, 1.0),
+            (x0, -0.5, 0.0, 1.0),
+        ]
+        .map(|(x, y, u, v)| DynVertex {
+            uv: Vec2::new(u, v),
+            ..DynVertex::new(Vec3::new(x, y, 0.0), n, c)
+        })
+    };
+    let tris = [0u16, 1, 2, 0, 2, 3];
+    let unlit = ModelParams {
+        shading: Shading::Unlit,
+        double_sided: true,
+        ..ModelParams::DEFAULT
+    };
+    let (red, green, blue) = (
+        Color::rgb(230, 30, 30),
+        Color::rgb(30, 230, 30),
+        Color::rgb(30, 30, 230),
+    );
+    let (sw, sh) = (caps.screen_width as f32, caps.screen_height as f32);
+    let at = Vec2::new(8.0, 8.0);
+    let screen_quad = (0.2f32, 1.0f32);
+    // Probes in target pixels: the red rectangle, the green quad, the blue
+    // clear.
+    let green_at = project(0.6, 0.0, tw, th);
+    let inside = [(10.0, 16.0), green_at, (tw - 4.0, 3.0)];
+    let want = [red, green, blue];
+    let mut seen = [[Color::BLACK; 3]; 3];
+    let mut stats = [trino_core::FrameStats::default(); 2];
+    let mut read = true;
+    for (pass, stat) in stats.iter_mut().enumerate() {
+        // Several identical frames: the picture of the last one is read.
+        for _ in 0..3 {
+            renderer.begin_frame(Color::BLACK);
+            if pass == 0 {
+                if renderer.begin_target(&t.sized(4096, 4096), blue) {
+                    return Err("render target: an oversized target was taken");
+                }
+                if !renderer.begin_target(&t, blue) {
+                    return Err("render target: begin_target refused a target that fits");
+                }
+                renderer.set_camera(&camera);
+                renderer.set_light(&DEFAULT_LIGHT);
+                renderer.fill_rect(
+                    Rect {
+                        pos: Vec2::ZERO,
+                        size: Vec2::new(24.0, th),
+                    },
+                    red,
+                );
+                let q = quad(0.2, 1.0, green);
+                renderer.draw_mesh(&DynamicMesh::new(&q, &tris), &Mat34::IDENTITY, &unlit);
+                renderer.end_target();
+            }
+            renderer.set_camera(&camera);
+            renderer.set_light(&DEFAULT_LIGHT);
+            let q = quad(screen_quad.0, screen_quad.1, Color::WHITE);
+            renderer.draw_mesh(
+                &DynamicMesh::new(&q, &tris).textured(t.sprite),
+                &Mat34::IDENTITY,
+                &unlit,
+            );
+            renderer.draw_sprite(
+                t.sprite,
+                at,
+                &SpriteParams {
+                    scale: Vec2::new(2.0, 2.0),
+                    ..SpriteParams::DEFAULT
+                },
+            );
+            renderer.end_frame();
+        }
+        *stat = renderer.stats();
+        for (k, &(x, y)) in inside.iter().enumerate() {
+            // The sprite at twice the size, and the quad's UV (x/w, y/h).
+            let sprite = (at.x + 2.0 * x, at.y + 2.0 * y);
+            let (u, v) = (x / tw, y / th);
+            let quad_at = project(
+                screen_quad.0 + (screen_quad.1 - screen_quad.0) * u,
+                0.5 - v,
+                sw,
+                sh,
+            );
+            let probe = |p: (f32, f32)| (p.0 as u32, p.1 as u32);
+            for (row, p) in [(pass, sprite), (2, quad_at)] {
+                if row == 2 && pass == 1 {
+                    continue;
+                }
+                let (px, py) = probe(p);
+                match renderer.read_pixel(px, py) {
+                    Some(c) => seen[row][k] = c,
+                    None => read = false,
+                }
+            }
+        }
+    }
+    let counts = stats.map(|s| (s.targets, s.targets_rejected));
+    if counts != [(1, 1), (0, 0)] {
+        return Err("render target: not one target and one refusal, then none");
+    }
+    if !read {
+        return Ok(TargetProbe::Skipped);
+    }
+    let is = |c: Color, want: Color| {
+        let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 48;
+        close(c.r, want.r) && close(c.g, want.g) && close(c.b, want.b)
+    };
+    if !seen[0].iter().zip(&want).all(|(c, w)| is(*c, *w)) {
+        return Err("render target: the sprite doesn't show the target's picture");
+    }
+    if !seen[2].iter().zip(&want).all(|(c, w)| is(*c, *w)) {
+        return Err("render target: the textured quad doesn't show the target's picture");
+    }
+    if !seen[1].iter().zip(&want).all(|(c, w)| is(*c, *w)) {
+        return Err("render target: the target lost its picture in a frame that didn't draw it");
+    }
+    Ok(TargetProbe::Probed)
 }
 
 /// A 32×32 one-texel black and white checker with `mipmaps = true`

@@ -118,6 +118,17 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   stream at submit), rewrite the GPU copy with the blob or drop it, and prove the call
   byte for byte against a baked model with the same vertices on both PC paths
   (`crates/platform-pc/tests/dynamic_mesh.rs`), with a mutation that skips the GPU rewrite.
+- **A pass into another texture** (render targets, ADR 0046) is the PC renderer's second
+  screen at another size. `draw_commands(Dest::Target(id))` picks the views and globals.
+  The T&L reads `current_screen_size()`, and its context cache keys on that size. Its
+  texture sits in `self.sprites` under a sprite handle, so every texture slot samples it,
+  and a resize invalidates `tex3d`'s cached bind group. Keep such a pass first in the
+  frame: the screen's own pass is split only where its passes need it. Leave out what
+  would leak into the screen: shadow casters join the screen's map. What reads a copy of
+  the screen's pass drops a tier: the per-pixel water's foam, so a target's water is
+  per vertex on the CPU path. Prove it byte for byte
+  against a screen of the same size on both T&L paths, with a mutation that drops its
+  commands (`crates/platform-pc/tests/render_target.rs`).
 - **A tiered surface (water, ADR 0015) keeps the geometry in the core** and lets each
   tier add what its hardware can: the PC per pixel, the 3DS a vertex program
   (`gpu_water` builds its uniforms and `crates/core/tests/gpu_water.rs` emulates the

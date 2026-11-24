@@ -208,6 +208,34 @@ fn the_dynamic_mesh_step_draws_on_the_native_profile_only() {
     }
 }
 
+/// The `render target` step (Bongo-Kart #184): the native profile shows
+/// the target's picture through a sprite and a textured quad on both T&L
+/// paths and keeps it a frame it isn't drawn; the console profiles refuse
+/// it, as the consoles do.
+#[test]
+fn the_render_target_step_draws_on_the_native_profile_only() {
+    use castle64::selftest::{TargetProbe, render_target};
+    let save_dir = tempfile::tempdir().unwrap();
+    for profile in [SimProfile::Native, SimProfile::N64, SimProfile::N3ds] {
+        let Some((mut renderer, _)) = pc_target(profile, save_dir.path()) else {
+            return;
+        };
+        if profile != SimProfile::Native {
+            assert_eq!(render_target(&mut renderer), Ok(TargetProbe::NoneHere));
+            assert_eq!(trino_core::Renderer::stats(&renderer).targets_rejected, 1);
+            continue;
+        }
+        for gpu in [true, false] {
+            renderer.set_hw_tnl(gpu);
+            assert_eq!(
+                render_target(&mut renderer),
+                Ok(TargetProbe::Probed),
+                "GPU path {gpu}"
+            );
+        }
+    }
+}
+
 /// The `mipmaps` step (Bongo-Kart #178): the native profile reads the far
 /// checker's mean light on both T&L paths, and level 0 would alias (the
 /// step fails with the chain off); the console profiles keep level 0.

@@ -66,6 +66,7 @@ pub mod services;
 pub mod shadow;
 pub mod snapshot;
 pub mod stereo;
+pub mod target;
 pub mod text;
 pub mod threads;
 pub mod tilemap;
@@ -162,6 +163,7 @@ pub use stereo::{
     Eye, LayerDepth, StereoFrame, StereoGovernor, StereoMono, StereoPolicy, StereoSettings,
     StereoStats,
 };
+pub use target::RenderTarget;
 pub use text::{BitmapFont, GlyphIndex, TextBuf};
 pub use threads::ThreadSetting;
 pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};

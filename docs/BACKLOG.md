@@ -225,6 +225,16 @@ shipping a 3D game first**, then by cost:
   blob that lives until the batch is drawn (the RSP and the 3DS GPU path read meshes after
   the call), a vertex cap per tier, the `dynamic mesh` self-test step probing on ares and
   Azahar, and the N64's I-cache, code-size and heap checks.
+- **Render targets on the consoles** (M, ADR 0046 §5). `Renderer::begin_target` draws on
+  the PC and the Web; the N64 and the 3DS take the trait's default (refused) and
+  `Caps::max_target_texels` is 0 there. The N64: `rdpq_attach` to an RDRAM surface that
+  fits TMEM (32×32 RGBA16, 64×32 CI8), the RSP's projection retargeted to it, the frame's
+  draws after it; the 3DS: a citro3d target over a texture
+  (`C3D_RenderTargetCreateFromTex`). The `render target` step would probe both, and the
+  N64's heap and I-cache checks apply.
+- **Render targets with the screen's passes** (S–M, ADR 0046 §3). A target is one plain
+  pass: no MSAA, post stack, AO or shadows. A big monitor close to the camera may want
+  MSAA (a resolve per target) or the shadow map (a map per target view).
 - **Dynamic meshes, cheaper GPU stream** (S, ADR 0042). The GPU path's stream is three
   vertices per triangle (flat shading reads a face normal per vertex); a 64 × 64 sheet
   uploads 1.4 MB a frame. An indexed stream for Gouraud draws, or writing straight into the
@@ -327,6 +337,18 @@ shipping a 3D game first**, then by cost:
   time) and bless `tests/perf/` on purpose. Host benches stay as regression guards only.
 
 ---
+
+## Done — render targets: a small scene drawn into a texture (2026-11-24, branch `feat/render-targets`, Bongo-Kart #184, ADR 0046)
+
+| Item | Evidence |
+|---|---|
+| `trino_core::target::RenderTarget` (`new`, `texels`, `fits`, `sized`), `Renderer::begin_target` (default: refused) / `end_target`, `Caps::{max_target_texels, max_targets}`, `FrameStats::{targets, targets_rejected}` | `target.rs` unit test, `renderer_defaults.rs` |
+| `PcRenderer::begin_target` / `end_target` / `read_target` (PC and Web): the second screen's pass at the target's size into an `Rgba8Unorm` texture under the target's sprite handle; targets before the screen's first draw (strict mode says so) | `crates/platform-pc/tests/render_target.rs` (5): byte for byte a screen of its size on both T&L paths, sampled as a sprite and on a textured mesh, kept, resized, refusals counted, console profiles refuse |
+| castle64's `render target` self-test step | `engine_checks`: probed on the native profile on both paths, refused on the console profiles; the browsers run it, ares and Azahar are refused |
+| The cost, measured on the Radeon | `xtask/tests/target_bench.rs` (ignored), ADR 0046 §4 |
+
+Not done (ADR 0046 §5): targets on the consoles, and the screen's MSAA, post stack, AO and
+shadows inside a target (P2 above).
 
 ## Done — wall clock, rumble, remapping, images (2026-11-24, branch `feat/platform-clock-rumble-rebind`, Bongo-Kart #180, #182, #183, ADR 0045)
 

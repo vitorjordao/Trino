@@ -69,6 +69,7 @@ pub mod trace;
 pub mod ui;
 pub mod version;
 pub mod vis;
+pub mod voices;
 pub mod vorbis;
 pub mod water;
 
@@ -81,9 +82,10 @@ pub use ao::{AmbientOcclusion, AoQuality, AoTier};
 pub use asset::asset_id;
 
 pub use audio::{
-    Ambience, Audio, AudioStats, Bus, BusMixer, BusSet, BusSettings, DuckRule, Listener,
-    MAX_DUCK_RULES, MixerConfig, MusicId, SoundBlob, SoundCodec, SoundId, SoundParams, SoundSource,
-    VoiceId, spatialize,
+    Ambience, Audio, AudioFeatures, AudioStats, Bus, BusFilter, BusMixer, BusSet, BusSettings,
+    DuckRule, Listener, MAX_DUCK_RULES, MAX_MUSIC_LAYERS, MixerConfig, MusicId, PITCH_MAX,
+    PITCH_MIN, SoundBlob, SoundCodec, SoundId, SoundParams, SoundSource, VoiceId, clamp_pitch,
+    spatialize,
 };
 pub use caps::{Caps, CapsError, Family, HwTier, TexelFormat};
 pub use collide::{MoveResult, move_and_collide};
@@ -158,4 +160,5 @@ pub use tilemap::{TILE_SIZE, Tilemap, TilemapError};
 pub use ui::{Insets, Slots, Ui, UiCore, UiEnv, UiEvent, UiEvents, UiScreen, UiStats};
 pub use version::BuildInfo;
 pub use vis::{CellGroups, Cells, MAX_CELLS, NO_CELL, Portal, VisVolume};
+pub use voices::{Doppler, PoolStats, PoolVoice, SoundEmitter, VoicePool};
 pub use water::{MAX_RIPPLES, Ripple, RippleBuffer, Water, WaterState, WaterTier};

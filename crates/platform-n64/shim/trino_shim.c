@@ -1118,6 +1118,24 @@ int32_t trino_ch_playing(uint32_t channel)
     return mixer_ch_playing((int)channel) ? 1 : 0;
 }
 
+// A channel's pitch (65536 = 1.0, Bongo-Kart #175): its waveform's own rate
+// times it. Send it after every wav64_play: libdragon resets the rate only
+// for another waveform, a replay keeps the last one. A channel's default
+// limit is the output rate, so the rate stops at 44.1 kHz: 2x reaches it
+// from a 22.05 kHz sound (the bake's `sample_rate = { n64 = 22050 }`).
+void trino_ch_freq(uint32_t channel, uint32_t rate_q16)
+{
+    if (channel >= 16 || !trino_ch_wave[channel])
+        return;
+    wav64_t* w = (wav64_t*)trino_ch_wave[channel];
+    float f = w->wave.frequency * (rate_q16 / 65536.0f);
+    if (f > 44100.0f)
+        f = 44100.0f;
+    if (f < 1000.0f)
+        f = 1000.0f;
+    mixer_ch_set_freq((int)channel, f);
+}
+
 // Bit n set = channel n plays (one call per frame instead of 16).
 uint32_t trino_audio_playing_mask(void)
 {

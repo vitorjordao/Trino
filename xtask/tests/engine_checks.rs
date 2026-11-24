@@ -659,6 +659,51 @@ fn audio_codecs_pass_on_pc() {
     assert!((music - 0.8).abs() < 1e-3, "the step restores the buses");
 }
 
+/// Step `audio control` (Bongo-Kart #175, #177, #179) on the PC backend,
+/// offline at 1/60 s a frame: every feature the PC reports is checked, and
+/// the three pitches last 0.225, 0.45 and 0.9 s (to a frame).
+#[test]
+fn audio_control_passes_on_pc() {
+    use trino_platform_pc::PcAudio;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let baked = tempfile::tempdir().unwrap();
+    trino_asset_pipeline::bake_all(
+        &root.join("assets"),
+        trino_asset_pipeline::Platform::Pc,
+        baked.path(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let assets = trino_asset_pipeline::load_dir(baked.path(), None).unwrap();
+    let mut audio = PcAudio::new_offline(48_000);
+    for s in assets.sounds {
+        audio
+            .upload_sound_blob(trino_core::SoundId(s.id), &s.blob)
+            .unwrap();
+    }
+    for m in assets.music {
+        audio
+            .upload_music_blob(trino_core::MusicId(m.id), &m.blob)
+            .unwrap();
+    }
+    assert_eq!(
+        trino_core::Audio::audio_features(&audio),
+        trino_core::AudioFeatures::ALL
+    );
+    let mut buf = vec![0.0f32; 800 * 2];
+    let mut now = 0u32;
+    let took = castle64::selftest::audio_control(&mut audio, |a| {
+        a.render(&mut buf);
+        now += 16_667;
+        now
+    })
+    .unwrap_or_else(|e| panic!("{e}"));
+    for (got, want) in took.into_iter().zip([225_000u32, 450_000, 900_000]) {
+        assert!(got.abs_diff(want) <= 17_000, "{took:?}");
+    }
+    assert!(!trino_core::Audio::music_paused(&audio));
+    assert_eq!(trino_core::Audio::music_position(&audio), None, "stopped");
+}
+
 /// The `ui layout` step (issue #58) on the native profile at 1080p, 4K and
 /// 21:9: whole-pixel scaling, the stack centered, the same probes.
 #[test]

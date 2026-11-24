@@ -2252,6 +2252,345 @@ pub fn audio_codecs<A: trino_core::Audio>(
     Ok(step.streamed)
 }
 
+/// `audio control`'s pitched sound (22.05 kHz: 2× stays within the N64's
+/// 44.1 kHz channel limit) and its pitches, fastest first.
+pub const AUDIO_PITCH_SOUND: trino_core::SoundId =
+    trino_core::SoundId::from_path("sounds/water_splash");
+const AUDIO_PITCHES: [f32; 3] = [2.0, 1.0, 0.5];
+/// Frames a music check waits (a quarter of a second at 60 fps).
+const AUDIO_SETTLE: u32 = 15;
+/// A paused stream's chunk in flight lands within these frames.
+const AUDIO_PAUSE_FILL: u32 = 5;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ControlPhase {
+    Start,
+    Pitch(u8),
+    Play,
+    Paused,
+    Resumed,
+    Crossfade,
+    Layers,
+    Done,
+}
+
+/// An `Option<f32>` from the backend as a plain float (`none` when absent),
+/// out of line: no N64 float op ever reads an unset payload (Pitfalls).
+#[inline(never)]
+fn plain(v: Option<f32>, none: f32) -> f32 {
+    match v {
+        Some(x) => x,
+        None => none,
+    }
+}
+
+/// Step `audio control` (Bongo-Kart #175, #177, #179; ADR 0044) as a state
+/// machine, one call per frame like [`AudioCodecs`]. What the backend says
+/// it does ([`trino_core::Audio::audio_features`]) is held to what it does:
+/// - a bus filter reads back only where it exists;
+/// - a [`trino_core::VoicePool`] over the backend's voices keeps its budget:
+///   a lower priority is refused, a higher one takes the lowest's slot, a
+///   loop out of range goes virtual;
+/// - one sound at 2×, 1× and 0.5× lasts in that order, each at least 1.5×
+///   the last;
+/// - paused music stops pulling stream samples (and holds its position),
+///   then goes on; a synced crossfade keeps the position; a layer fades in.
+pub struct AudioControl {
+    phase: ControlPhase,
+    frames: u32,
+    features: trino_core::AudioFeatures,
+    voice: Option<trino_core::VoiceId>,
+    started: u32,
+    /// Position and stream samples when a music check began.
+    held: f32,
+    streamed: u32,
+    /// How long each pitch played (µs), for the runners' logs.
+    pub took: [u32; 3],
+}
+
+impl Default for AudioControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AudioControl {
+    pub fn new() -> Self {
+        AudioControl {
+            phase: ControlPhase::Start,
+            frames: 0,
+            features: trino_core::AudioFeatures::NONE,
+            voice: None,
+            started: 0,
+            held: 0.0,
+            streamed: 0,
+            took: [0; 3],
+        }
+    }
+
+    /// Advance by one frame at `now_us` (any microsecond clock; it may
+    /// wrap). True once the step passed.
+    #[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+    pub fn step(
+        &mut self,
+        audio: &mut dyn trino_core::Audio,
+        now_us: u32,
+    ) -> Result<bool, &'static str> {
+        self.frames += 1;
+        let f = self.features;
+        match self.phase {
+            ControlPhase::Start => {
+                self.features = audio.audio_features();
+                bus_filter_reads_back(audio, self.features.bus_filter)?;
+                voice_pool_holds_its_budget(audio)?;
+                if self.features.pitch {
+                    self.play_pitch(audio, 0, now_us)?;
+                } else {
+                    self.music(audio)?;
+                }
+            }
+            ControlPhase::Pitch(i) => {
+                let v = self.voice.ok_or("audio control: lost the pitched voice")?;
+                if !audio.voice_playing(v) {
+                    self.took[i as usize] = now_us.wrapping_sub(self.started);
+                    if (i as usize) + 1 < AUDIO_PITCHES.len() {
+                        self.play_pitch(audio, i as usize + 1, now_us)?;
+                    } else {
+                        // Each about twice the last (the backends detect an
+                        // end up to a frame late).
+                        let [fast, normal, slow] = self.took;
+                        if !(normal >= fast + fast / 2 && slow >= normal + normal / 2) {
+                            return Err("audio control: pitch didn't scale the sound's length");
+                        }
+                        self.music(audio)?;
+                    }
+                } else if self.frames > 4 * AUDIO_SOUND_TIMEOUT {
+                    return Err("audio control: a pitched sound never finished");
+                }
+            }
+            ControlPhase::Play => {
+                if self.frames >= AUDIO_SETTLE {
+                    audio.pause_music();
+                    if !audio.music_paused() {
+                        return Err("audio control: the music didn't pause");
+                    }
+                    self.held = plain(audio.music_position(), -1.0);
+                    self.enter(ControlPhase::Paused);
+                }
+            }
+            ControlPhase::Paused => {
+                if self.frames == AUDIO_PAUSE_FILL {
+                    self.streamed = audio.audio_stats().streamed_frames;
+                }
+                if self.frames >= AUDIO_PAUSE_FILL + AUDIO_SETTLE {
+                    if audio.audio_stats().streamed_frames != self.streamed {
+                        return Err("audio control: paused music kept pulling stream samples");
+                    }
+                    let at = plain(audio.music_position(), -1.0);
+                    if f.music_position && !(at >= 0.0 && (at - self.held).abs() < 0.02) {
+                        return Err("audio control: paused music moved");
+                    }
+                    audio.resume_music();
+                    if audio.music_paused() {
+                        return Err("audio control: the music didn't resume");
+                    }
+                    self.enter(ControlPhase::Resumed);
+                }
+            }
+            ControlPhase::Resumed => {
+                if self.frames >= AUDIO_SETTLE {
+                    if audio.audio_stats().streamed_frames == self.streamed {
+                        return Err("audio control: resumed music pulled no stream samples");
+                    }
+                    let at = plain(audio.music_position(), -1.0);
+                    if f.music_position && at <= self.held + 0.1 {
+                        return Err("audio control: resumed music didn't go on");
+                    }
+                    if f.crossfade {
+                        // To itself, in sync: the position carries over.
+                        audio.crossfade_music(AUDIO_STREAM, true, 100, true);
+                        let after = plain(audio.music_position(), -1.0);
+                        if f.music_position && (after - at).abs() >= 0.2 {
+                            return Err("audio control: a synced crossfade lost the position");
+                        }
+                        self.held = after;
+                        self.enter(ControlPhase::Crossfade);
+                    } else {
+                        self.layers(audio)?;
+                    }
+                }
+            }
+            ControlPhase::Crossfade => {
+                if self.frames >= AUDIO_SETTLE {
+                    let at = plain(audio.music_position(), -1.0);
+                    if f.music_position && at <= self.held + 0.1 {
+                        return Err("audio control: the crossfaded track doesn't play");
+                    }
+                    self.layers(audio)?;
+                }
+            }
+            ControlPhase::Layers => {
+                if self.frames >= AUDIO_SETTLE {
+                    if plain(audio.music_layer(1), -1.0) < 0.99 {
+                        return Err("audio control: a music layer didn't fade in");
+                    }
+                    audio.stop_music();
+                    self.enter(ControlPhase::Done);
+                }
+            }
+            ControlPhase::Done => {}
+        }
+        Ok(self.phase == ControlPhase::Done)
+    }
+
+    fn enter(&mut self, phase: ControlPhase) {
+        self.phase = phase;
+        self.frames = 0;
+    }
+
+    fn play_pitch(
+        &mut self,
+        audio: &mut dyn trino_core::Audio,
+        i: usize,
+        now_us: u32,
+    ) -> Result<(), &'static str> {
+        let params = trino_core::SoundParams {
+            pitch: AUDIO_PITCHES[i],
+            ..trino_core::SoundParams::DEFAULT
+        };
+        let v = audio
+            .play_voice(AUDIO_PITCH_SOUND, &params, false)
+            .ok_or("audio control: no voice for the pitched sound")?;
+        self.voice = Some(v);
+        self.started = now_us;
+        self.enter(ControlPhase::Pitch(i as u8));
+        Ok(())
+    }
+
+    /// The music checks where the backend pauses; else pausing must be
+    /// harmless and the step ends.
+    fn music(&mut self, audio: &mut dyn trino_core::Audio) -> Result<(), &'static str> {
+        if self.features.music_pause {
+            audio.play_music(AUDIO_STREAM, true);
+            self.enter(ControlPhase::Play);
+        } else {
+            audio.pause_music();
+            if audio.music_paused() {
+                return Err("audio control: music paused on a backend without pause");
+            }
+            audio.resume_music();
+            self.enter(ControlPhase::Done);
+        }
+        Ok(())
+    }
+
+    /// Two layers where the backend has them: the first at full, the
+    /// second silent until faded in.
+    fn layers(&mut self, audio: &mut dyn trino_core::Audio) -> Result<(), &'static str> {
+        if self.features.music_layers < 2 {
+            audio.stop_music();
+            self.enter(ControlPhase::Done);
+            return Ok(());
+        }
+        audio.play_music_layers(&[AUDIO_STREAM, AUDIO_OPUS], true);
+        let (a, b) = (
+            plain(audio.music_layer(0), -1.0),
+            plain(audio.music_layer(1), -1.0),
+        );
+        if a != 1.0 || b != 0.0 {
+            return Err("audio control: music layers don't start at 1 and 0");
+        }
+        audio.set_music_layer(1, 1.0, 100);
+        self.enter(ControlPhase::Layers);
+        Ok(())
+    }
+}
+
+/// A bus filter reads back where the backend filters, and is never kept
+/// where it doesn't. Bits compared, no float op (an unset payload).
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn bus_filter_reads_back(
+    audio: &mut dyn trino_core::Audio,
+    filters: bool,
+) -> Result<(), &'static str> {
+    use trino_core::{Bus, BusFilter};
+    audio.set_bus_filter(Bus::Sfx, Some(BusFilter::LowPass { cutoff_hz: 800.0 }));
+    let ok = match audio.bus_filter(Bus::Sfx) {
+        Some(BusFilter::LowPass { cutoff_hz }) => {
+            filters && cutoff_hz.to_bits() == 800f32.to_bits()
+        }
+        None => !filters,
+    };
+    audio.set_bus_filter(Bus::Sfx, None);
+    if !ok || audio.bus_filter(Bus::Sfx).is_some() {
+        return Err("audio control: a bus filter doesn't read back as the backend says");
+    }
+    Ok(())
+}
+
+/// A [`trino_core::VoicePool`] of two over the backend's voices, each a
+/// different sound (the N64 plays a sound on one channel at a time). Two:
+/// each voice channel the N64 plays on keeps a sample buffer, heap the base
+/// console's self-test is short of.
+#[cfg_attr(any(target_os = "none", target_os = "horizon"), optimize(size))]
+fn voice_pool_holds_its_budget(audio: &mut dyn trino_core::Audio) -> Result<(), &'static str> {
+    use trino_core::{Listener, SoundEmitter, SoundId, Vec3, VoicePool};
+    const RIVER: SoundId = SoundId::from_path("sounds/river_flow");
+    const BEEP: SoundId = SoundId::from_path("sounds/beep");
+    const COIN: SoundId = SoundId::from_path("sounds/coin");
+    let mut pool = VoicePool::<2>::new();
+    pool.set_listener(
+        Listener {
+            pos: Vec3::ZERO,
+            right: Vec3::new(1.0, 0.0, 0.0),
+        },
+        Vec3::ZERO,
+    );
+    let at = |sound, x: f32, priority, looped| SoundEmitter {
+        looped,
+        priority,
+        volume: 0.3,
+        ..SoundEmitter::new(sound, Vec3::new(x, 0.0, 0.0), 10.0)
+    };
+    let water = pool.play_voice_at(audio, &at(WATER, 1.0, 1, true));
+    let river = pool.play_voice_at(audio, &at(RIVER, -1.0, 2, true));
+    let (Some(water), Some(river)) = (water, river) else {
+        pool.stop_all(audio);
+        return Err("audio control: the voice pool got no voices");
+    };
+    let refused = pool
+        .play_voice_at(audio, &at(BEEP, 0.5, 0, false))
+        .is_none();
+    let took = pool
+        .play_voice_at(audio, &at(COIN, 0.5, 9, false))
+        .is_some();
+    pool.move_voice(river, Vec3::new(50.0, 0.0, 0.0), Vec3::ZERO);
+    pool.update(audio);
+    let s = pool.stats();
+    let parked = pool.is_playing(river) && !pool.is_audible(river);
+    let ok = refused && took && !pool.is_playing(water) && parked;
+    pool.stop_all(audio);
+    if !ok || s.stolen != 1 || s.refused != 1 || s.virtual_voices != 1 || pool.stats().audible != 0
+    {
+        return Err("audio control: the voice pool broke its budget or priorities");
+    }
+    Ok(())
+}
+
+/// [`AudioControl`] to the end: `frame` lets one frame of audio play and
+/// returns a microsecond clock. How long each pitch played (µs).
+pub fn audio_control<A: trino_core::Audio>(
+    audio: &mut A,
+    mut frame: impl FnMut(&mut A) -> u32,
+) -> Result<[u32; 3], &'static str> {
+    let mut step = AudioControl::new();
+    let mut now = frame(audio);
+    while !step.step(audio, now)? {
+        now = frame(audio);
+    }
+    Ok(step.took)
+}
+
 /// A smooth-skinned strip (`[models.selftest_strip]`, `skinning = "smooth"`)
 /// draws through the two-joint path: its triangle reaches the rasterizer.
 pub fn smooth_skin(renderer: &mut dyn Renderer) -> Result<(), &'static str> {

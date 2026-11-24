@@ -75,7 +75,9 @@ in matching pairs and keep the restriction. Never call libdragon directly from R
   shows it; free bytes don't. #67 added ~45 KB of code and the micro scenes' 900-triangle
   batch no longer fit. Levers, in the order they paid off:
   - the draw memo is the biggest boot allocation: 1 024 slots × 304 B on the Pak,
-    768 on the base tier (`memo_slots`, −78 KB, no measurable frame cost);
+    768 on the base tier (`memo_slots`, −78 KB, no measurable frame cost), then 640
+    (#139's LRU stamp), then 576 (Bongo-Kart's audio, ADR 0044: 144 sets of four ways
+    still hold a 100-draw frame);
   - size a big batch once and exactly before the frame that needs it
     (`N64Renderer::reserve_batch`), never through `Vec` doubling, which holds the old
     block while asking for one twice its size;

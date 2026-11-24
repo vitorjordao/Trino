@@ -553,6 +553,31 @@ mod n64 {
         trino_core::Renderer::end_frame(renderer);
     }
 
+    /// Step `audio control` (Bongo-Kart #175, #177, #179): pitch scales a
+    /// sound's length, a voice pool keeps its budget over the four voice
+    /// channels, and what the N64 leaves to the defaults reads back so.
+    #[inline(never)]
+    fn audio_control(renderer: &mut N64Renderer, audio: &mut N64Audio) {
+        runtime::log("TRINO_STEP:audio control\n");
+        let run = castle64::selftest::audio_control(audio, |a| {
+            audio_frame(renderer, a);
+            runtime::now_us()
+        });
+        match run {
+            Ok(t) => runtime::log(&format!(
+                "TRINO_STEP:audio control ok: pitch 2x {} us, 1x {} us, 0.5x {} us\n",
+                t[0], t[1], t[2]
+            )),
+            Err(e) => {
+                runtime::log(&format!("TRINO_TEST_FAIL:{e}\n"));
+                loop {
+                    trino_core::Renderer::begin_frame(renderer, trino_core::Color::BLACK);
+                    trino_core::Renderer::end_frame(renderer);
+                }
+            }
+        }
+    }
+
     /// Step `audio codecs` (issue #53): each codec plays and finishes, the
     /// stream delivers with no underrun, a duck rule ramps (castle64's
     /// `AudioCodecs`), then the counters as `TRINO_AUDIO:`.
@@ -978,6 +1003,10 @@ mod n64 {
                         // 10) The cross-platform replay (issue #67): also a
                         // group load, so after every big allocation (#110).
                         replay_step(game, renderer, audio, platform);
+                        // 11) Audio control (Bongo-Kart #175, #177, #179):
+                        // last, since the voice channels it plays on keep
+                        // their sample buffers.
+                        audio_control(renderer, audio);
                         runtime::log("TRINO_TEST_PASS\n");
                     }
                 }

@@ -127,6 +127,23 @@ impl StreamSource {
         }
     }
 
+    /// Its length in samples at `out_rate` (`None` when the header doesn't
+    /// say).
+    pub fn output_frames(&self, out_rate: u32) -> Option<u64> {
+        let (frames, rate) = match self {
+            StreamSource::Vorbis { bytes, frames } => {
+                let rate =
+                    lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(&bytes[..]))
+                        .ok()?
+                        .ident_hdr
+                        .audio_sample_rate;
+                (*frames as u64, rate)
+            }
+            StreamSource::Pcm { rate, data } => (data.len() as u64, *rate),
+        };
+        (rate > 0).then(|| frames * out_rate as u64 / rate as u64)
+    }
+
     fn open(&self) -> Result<Box<dyn Decode>, String> {
         Ok(match self {
             StreamSource::Vorbis { bytes, frames } => {
@@ -148,6 +165,29 @@ trait Decode: Send {
     fn next(&mut self, out: &mut Vec<f32>) -> bool;
     /// Back to the start (loops); false if that failed.
     fn rewind(&mut self) -> bool;
+    /// Go to sample `frame` and append the samples from there to the end of
+    /// the block it falls in (a synced crossfade, Bongo-Kart #177); false
+    /// past the end or on a damaged stream.
+    fn seek(&mut self, frame: usize, out: &mut Vec<f32>) -> bool;
+}
+
+/// How far before a seek's target lewton's page seek lands: it seeks with a
+/// page's granularity and the first packet after it only primes the
+/// decoder, so the target must lie past both.
+const SEEK_MARGIN: u64 = 8192;
+
+/// Mono samples of a decoded packet.
+fn mono(p: &InterleavedSamples<f32>, out: &mut Vec<f32>) {
+    if p.channel_count <= 1 {
+        out.extend_from_slice(&p.samples);
+    } else {
+        let c = p.channel_count;
+        out.extend(
+            p.samples
+                .chunks(c)
+                .map(|f| f.iter().sum::<f32>() / c as f32),
+        );
+    }
 }
 
 struct VorbisDecode {
@@ -191,16 +231,7 @@ impl Decode for VorbisDecode {
             {
                 Ok(Some(p)) if p.samples.is_empty() => continue,
                 Ok(Some(p)) => {
-                    if p.channel_count <= 1 {
-                        out.extend_from_slice(&p.samples);
-                    } else {
-                        let c = p.channel_count;
-                        out.extend(
-                            p.samples
-                                .chunks(c)
-                                .map(|f| f.iter().sum::<f32>() / c as f32),
-                        );
-                    }
+                    mono(&p, out);
                     let n = (out.len() - start).min(self.left);
                     out.truncate(start + n);
                     self.left -= n;
@@ -219,6 +250,72 @@ impl Decode for VorbisDecode {
                 true
             }
             Err(_) => false,
+        }
+    }
+
+    fn seek(&mut self, frame: usize, out: &mut Vec<f32>) -> bool {
+        if frame >= self.frames || !self.rewind() {
+            return false;
+        }
+        // A page seek lands at most a page early. Near the start it may land
+        // on the header pages (decoding fails), near the end in the last
+        // page (its padded packet hides where its samples start): then a
+        // page further back, else from the top.
+        let mut back = (frame as u64).saturating_sub(SEEK_MARGIN);
+        for _ in 0..2 {
+            if back == 0 {
+                break;
+            }
+            if self.reader.seek_absgp_pg(back).is_ok() && self.drop_to(None, frame, out) {
+                return true;
+            }
+            back = back.saturating_sub(1 << 16);
+            if !self.rewind() {
+                return false;
+            }
+        }
+        self.rewind() && self.drop_to(Some(0), frame, out)
+    }
+}
+
+impl VorbisDecode {
+    /// Decode and drop up to sample `frame`, then append the rest of its
+    /// packet. `known` is the position now when it is known (the stream's
+    /// start); after a page seek it is learned once a packet ends a page
+    /// (lewton's last granule: where that packet's samples end).
+    fn drop_to(&mut self, mut known: Option<usize>, frame: usize, out: &mut Vec<f32>) -> bool {
+        let mut buf = Vec::new();
+        loop {
+            let p = match self
+                .reader
+                .read_dec_packet_generic::<InterleavedSamples<f32>>()
+            {
+                Ok(Some(p)) => p,
+                Ok(None) | Err(_) => return false,
+            };
+            mono(&p, &mut buf);
+            let end = match known {
+                Some(at) => at + buf.len(),
+                None => match self.reader.get_last_absgp() {
+                    // The stream's last packet: untrimmed, it can't place
+                    // its samples.
+                    Some(g) if g as usize >= self.frames => return false,
+                    Some(g) => g as usize,
+                    None => continue,
+                },
+            };
+            if end > frame {
+                // A seek that landed past the target starts where it can
+                // (within a packet), never earlier than asked.
+                let start = end.saturating_sub(buf.len());
+                let from = frame.saturating_sub(start).min(buf.len());
+                let to = buf.len().min(self.frames.saturating_sub(start));
+                out.extend_from_slice(&buf[from..to.max(from)]);
+                self.left = self.frames.saturating_sub(start + to.max(from));
+                return true;
+            }
+            known = Some(end);
+            buf.clear();
         }
     }
 }
@@ -245,6 +342,14 @@ impl Decode for PcmDecode {
     fn rewind(&mut self) -> bool {
         self.at = 0;
         true
+    }
+
+    fn seek(&mut self, frame: usize, out: &mut Vec<f32>) -> bool {
+        if frame >= self.data.len() {
+            return false;
+        }
+        self.at = frame;
+        self.next(out)
     }
 }
 
@@ -324,6 +429,31 @@ impl Job {
             block: Vec::new(),
             ending: false,
         };
+        Ok((job, ring))
+    }
+
+    /// [`Job::start`] from output sample `skip` on (a synced crossfade):
+    /// the decoder seeks there (a page seek, then a few packets decoded and
+    /// dropped), so the ring's first sample is the one asked for. Past the
+    /// end, or where the seek fails, it starts from the top.
+    pub fn start_at(
+        source: &StreamSource,
+        out_rate: u32,
+        looped: bool,
+        capacity: usize,
+        skip: u64,
+    ) -> Result<(Job, Arc<Ring>), String> {
+        let (mut job, ring) = Job::start(source, out_rate, looped, capacity)?;
+        if skip > 0 {
+            let rate = job.dec.rate().max(1) as u64;
+            let frame = (skip * rate / out_rate.max(1) as u64) as usize;
+            let mut block = Vec::new();
+            if job.dec.seek(frame, &mut block) {
+                job.rs.run(&block, &mut job.pending);
+            } else {
+                job.dec.rewind();
+            }
+        }
         Ok((job, ring))
     }
 
@@ -470,6 +600,101 @@ mod tests {
         // The voice let go: the job ends.
         ring.close();
         assert!(!job.fill());
+    }
+
+    /// A Vorbis `TSN2` payload of `secs` seconds of a two-partial melody at
+    /// 16 kHz, and its frame count.
+    fn vorbis(secs: u32) -> (Arc<[u8]>, usize) {
+        use trino_asset_pipeline::audio::{AudioSettings, Codec, Master};
+        let rate = 16_000u32;
+        let n = (rate * secs) as usize;
+        let samples = (0..n)
+            .map(|i| {
+                let f = 220.0 * 2f32.powf(((i / 4000) % 12) as f32 / 12.0);
+                let t = i as f32 / rate as f32;
+                0.3 * (t * f * std::f32::consts::TAU).sin()
+                    + 0.1 * (t * 3.0 * f * std::f32::consts::TAU).sin()
+            })
+            .collect();
+        let settings = AudioSettings {
+            codec: Codec::Vorbis,
+            auto: false,
+            quality: 4.0,
+            sample_rate: None,
+            stream: true,
+            looped: false,
+            bus: trino_core::Bus::Music,
+        };
+        let master = Master { rate, samples };
+        let enc = trino_asset_pipeline::audio::encode(
+            trino_asset_pipeline::Platform::Pc,
+            &settings,
+            &master,
+            1,
+        )
+        .unwrap();
+        let blob = enc.blob.unwrap();
+        let b = trino_core::SoundBlob::parse(&blob).unwrap();
+        (b.payload.into(), b.frames as usize)
+    }
+
+    /// Every sample of a job, filled to its end.
+    fn drain(mut job: Job, ring: &Ring, limit: usize) -> Vec<f32> {
+        let (mut got, mut out) = (Vec::new(), vec![0.0f32; 4096]);
+        loop {
+            let more = job.fill();
+            let n = ring.pop(&mut out);
+            got.extend_from_slice(&out[..n]);
+            if (!more && ring.is_empty()) || got.len() >= limit {
+                return got;
+            }
+        }
+    }
+
+    /// A synced crossfade starts a stream mid-way (Bongo-Kart #177): the
+    /// page seek plus the packets decoded and dropped land on the sample
+    /// asked for, so the job plays exactly what the whole decode plays from
+    /// there (no offset, no priming glitch).
+    #[test]
+    fn a_vorbis_job_started_mid_way_plays_the_whole_decodes_samples_from_there() {
+        let (bytes, frames) = vorbis(12);
+        let src = StreamSource::Vorbis { bytes, frames };
+        assert_eq!(src.output_frames(16_000), Some(frames as u64));
+        assert_eq!(src.output_frames(48_000), Some(frames as u64 * 3));
+        let (job, ring) = Job::start(&src, 16_000, false, 1 << 20).unwrap();
+        let whole = drain(job, &ring, usize::MAX);
+        assert_eq!(whole.len(), frames);
+        for skip in [1usize, 777, 8_192, 8_193, 50_000, 123_457, frames - 300] {
+            let (job, ring) = Job::start_at(&src, 16_000, false, 1 << 16, skip as u64).unwrap();
+            let got = drain(job, &ring, 4096);
+            let want = &whole[skip..(skip + 4096).min(frames)];
+            assert_eq!(
+                got.len().min(want.len()),
+                want.len(),
+                "skip {skip}: cut short"
+            );
+            let worst = got
+                .iter()
+                .zip(want)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 1e-5, "skip {skip}: off by {worst}");
+        }
+        // Past the end: from the top.
+        let (job, ring) = Job::start_at(&src, 16_000, false, 1 << 16, frames as u64 + 5).unwrap();
+        let got = drain(job, &ring, 256);
+        assert_eq!(got[..256], whole[..256]);
+    }
+
+    #[test]
+    fn a_pcm_job_started_mid_way_starts_there() {
+        let data: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        let src = StreamSource::Pcm {
+            rate: 100,
+            data: Arc::new(data.clone()),
+        };
+        let (job, ring) = Job::start_at(&src, 100, false, 2048, 640).unwrap();
+        assert_eq!(drain(job, &ring, usize::MAX), data[640..]);
     }
 
     /// The worker thread keeps a ring topped up as the output drains it,

@@ -82,9 +82,11 @@ struct BenchRun {
     before: (f32, u32),
 }
 
-/// Step `audio codecs`, frame by frame.
+/// Steps `audio codecs` then `audio control`, frame by frame.
 struct AudioRun {
     step: castle64::selftest::AudioCodecs,
+    /// `audio control`, once the codecs passed.
+    control: Option<castle64::selftest::AudioControl>,
     /// When it started waiting for the context to run (page clock, µs).
     waiting_since: Option<u64>,
     /// Frames in a row that came on time while waiting to start.
@@ -101,6 +103,7 @@ impl AudioRun {
     fn new() -> Self {
         AudioRun {
             step: castle64::selftest::AudioCodecs::new(),
+            control: None,
             waiting_since: None,
             smooth: 0,
             frames: 0,
@@ -668,6 +671,23 @@ fn audio_frame(a: &mut AudioRun, host: &mut WebHost, now_us: u64) -> Result<bool
             host.audio.current_time()
         )
     };
+    if let Some(c) = &mut a.control {
+        let (done, t) = (c.step(&mut host.audio, now_us as u32), c.took);
+        return match done {
+            Ok(false) => Ok(false),
+            Ok(true) => {
+                js::log(&format!(
+                    "TRINO_STEP:audio control ok: pitch 2x {} us, 1x {} us, 0.5x {} us ({})",
+                    t[0],
+                    t[1],
+                    t[2],
+                    timing(a, host)
+                ));
+                Ok(true)
+            }
+            Err(e) => Err(format!("{e} ({})", timing(a, host))),
+        };
+    }
     match a.step.step(&mut host.audio) {
         Ok(false) => Ok(false),
         Ok(true) => {
@@ -683,7 +703,9 @@ fn audio_frame(a: &mut AudioRun, host: &mut WebHost, now_us: u64) -> Result<bool
                 s.resident_bytes,
                 s.underruns
             ));
-            Ok(true)
+            host.platform.log("TRINO_STEP:audio control\n");
+            a.control = Some(castle64::selftest::AudioControl::new());
+            Ok(false)
         }
         Err(e) => {
             js::log(&host.audio_line());

@@ -21,6 +21,12 @@
 //! one-shots and stingers play once), as on the PC — the asset's `loop`
 //! only trims its length for a seamless loop.
 //!
+//! **Pitch** (Bongo-Kart #175): a voice's or one-shot's
+//! [`SoundParams::pitch`] sets its channel's rate (`mixer_ch_set_freq`),
+//! at most the output's 44.1 kHz — a 22.05 kHz sound reaches 2×, a 44.1 kHz
+//! one can only go down. Music pause, position, crossfades, layers and bus
+//! filters are the trait's defaults ([`Audio::audio_features`]).
+//!
 //! libdragon streams a wav64 from one file cursor, so **a sound plays on
 //! one channel at a time**: re-triggering a sound that is still playing
 //! restarts it (two overlapping copies of the same wav64 corrupt the
@@ -30,7 +36,8 @@ use alloc::collections::BTreeMap;
 use core::ffi::c_void;
 
 use trino_core::{
-    Audio, AudioStats, Bus, BusMixer, BusSet, DuckRule, MusicId, SoundId, SoundParams, VoiceId,
+    Audio, AudioFeatures, AudioStats, Bus, BusMixer, BusSet, DuckRule, MusicId, SoundId,
+    SoundParams, VoiceId,
 };
 
 use crate::{ffi, runtime};
@@ -48,6 +55,8 @@ const DUCK: f32 = 0.3;
 fn q16(v: f32) -> u32 {
     (v.clamp(0.0, 2.0) * 65536.0) as u32
 }
+
+const Q16_ONE: u32 = 65536;
 
 #[derive(Clone, Copy)]
 struct Clip {
@@ -97,6 +106,8 @@ pub struct N64Audio {
     channels: [Channel; CHANNELS],
     /// Volumes last sent per channel (`u32::MAX`: none yet).
     sent: [(u32, u32); CHANNELS],
+    /// Each channel's pitch, q16 (`u32::MAX` after a play: unknown).
+    rates: [u32; CHANNELS],
     buses: BusMixer,
     /// Channels playing at the last poll.
     playing: u32,
@@ -117,6 +128,7 @@ impl N64Audio {
                 bus: Bus::Sfx,
             }; CHANNELS],
             sent: [(u32::MAX, u32::MAX); CHANNELS],
+            rates: [Q16_ONE; CHANNELS],
             buses: BusMixer::new(),
             playing: 0,
             last_poll_us: None,
@@ -223,6 +235,9 @@ impl N64Audio {
     fn start(&mut self, wav: *mut c_void, ch: u32, looped: bool, gains: (f32, f32), bus: Bus) {
         self.channels[ch as usize] = Channel { gains, bus };
         unsafe { ffi::trino_wav_play(wav, ch, looped as u32) }
+        // Unknown: libdragon resets the rate only for another waveform (a
+        // replay keeps the last one's), so the next `set_rate` always sends.
+        self.rates[ch as usize] = u32::MAX;
         self.playing |= 1 << ch;
         self.send(ch);
         if ch == STINGER_CHANNEL {
@@ -233,6 +248,16 @@ impl N64Audio {
     fn stop(&mut self, ch: u32) {
         unsafe { ffi::trino_channel_stop(ch) }
         self.playing &= !(1 << ch);
+    }
+
+    /// Channel `ch`'s pitch, sent when it changed.
+    #[inline(never)]
+    fn set_rate(&mut self, ch: u32, rate: f32) {
+        let q = q16(trino_core::clamp_pitch(rate));
+        if self.rates[ch as usize] != q {
+            self.rates[ch as usize] = q;
+            unsafe { ffi::trino_ch_freq(ch, q) }
+        }
     }
 
     /// Stop `sound` wherever it still plays, then record it on `channel`.
@@ -278,6 +303,7 @@ impl Audio for N64Audio {
             self.claim(sound.0, channel);
             let bus = params.bus.unwrap_or(clip.bus);
             self.start(clip.wav, channel, false, params.gains(), bus);
+            self.set_rate(channel, params.pitch);
         }
     }
 
@@ -295,6 +321,7 @@ impl Audio for N64Audio {
         self.generations[slot] = self.generations[slot].wrapping_add(1);
         let bus = params.bus.unwrap_or(clip.bus);
         self.start(clip.wav, ch, looped, params.gains(), bus);
+        self.set_rate(ch, params.pitch);
         Some(VoiceId(ch | (self.generations[slot] as u32) << 8))
     }
 
@@ -306,6 +333,20 @@ impl Audio for N64Audio {
                 c.bus = bus;
             }
             self.send(ch);
+            self.set_rate(ch, params.pitch);
+        }
+    }
+
+    fn set_voice_pitch(&mut self, voice: VoiceId, pitch: f32) {
+        if let Some(ch) = self.voice(voice) {
+            self.set_rate(ch, pitch);
+        }
+    }
+
+    fn audio_features(&self) -> AudioFeatures {
+        AudioFeatures {
+            pitch: true,
+            ..AudioFeatures::NONE
         }
     }
 

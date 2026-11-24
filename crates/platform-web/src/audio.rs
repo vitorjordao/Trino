@@ -37,6 +37,20 @@
 //! unhandled rejection. While suspended the context's clock stands still:
 //! streams fill their lookahead and wait.
 //!
+//! **Pitch, music control, bus filters** (Bongo-Kart #175, #177): a sound's
+//! pitch is its source's `playbackRate` (streamed sounds ignore it, as on
+//! the PC). A music track gets a level gain ahead of its volume: layers and
+//! crossfades ramp it on the context's clock (`linearRampToValueAtTime`),
+//! and the backend keeps the same ramp to answer [`Audio::music_layer`].
+//! Pausing stops the sources but keeps what they play: a buffer's
+//! `AudioBuffer` and position, a stream's scheduled chunks (their buffers
+//! and how much of the first had played), so resuming schedules them again
+//! and nothing is decoded twice. All the layers resume at one context time,
+//! in step. A synced crossfade starts the new track where the old one is: a
+//! buffer at that offset, a stream after a decoder seek. A bus filter is a
+//! `BiquadFilterNode` spliced between the bus gain and the master (or after
+//! the master), and taken out again for `None`.
+//!
 //! **No Web Audio** (some embedded WebKit builds): the backend runs silent,
 //! like the PC without an output device, and keeps the API's meaning —
 //! voices, stingers and their ends follow the page's clock — so a game and
@@ -47,13 +61,14 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use trino_core::{
-    Audio, AudioStats, Bus, BusMixer, BusSet, BusSettings, DuckRule, MusicId, SoundBlob,
-    SoundCodec, SoundId, SoundParams, VoiceId,
+    Audio, AudioFeatures, AudioStats, Bus, BusFilter, BusMixer, BusSet, BusSettings, DuckRule,
+    MAX_MUSIC_LAYERS, MusicId, SoundBlob, SoundCodec, SoundId, SoundParams, VoiceId,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{
-    AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, GainNode, StereoPannerNode,
+    AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, AudioNode,
+    BiquadFilterNode, BiquadFilterType, GainNode, StereoPannerNode,
 };
 
 use crate::sound::{self, StreamDecoder};
@@ -126,16 +141,84 @@ struct Streaming {
     /// The decoder is through (nothing more to schedule).
     done: bool,
     scratch: Vec<f32>,
+    /// Samples before the first chunk in `chunks`: where the stream started
+    /// (a seek) plus every chunk that played.
+    base: u64,
+    /// Paused: the chunks' buffers to schedule again, and how much of the
+    /// first had played.
+    held: Vec<(AudioBuffer, usize)>,
+    held_offset: usize,
+    paused: bool,
 }
 
 impl Streaming {
+    /// Samples into the stream at context time `now` (a loop counts on:
+    /// the caller wraps it).
+    fn position(&self, now: f64) -> u64 {
+        self.base
+            + if self.paused {
+                self.held_offset as u64
+            } else {
+                self.playing(now) as u64
+            }
+    }
+
+    /// Stop the scheduled chunks, keeping their buffers.
+    fn pause(&mut self, now: f64) {
+        self.held_offset = self.playing(now);
+        self.held.clear();
+        for c in self.chunks.drain(..) {
+            let _ = scheduled(&c.source).stop();
+            let _ = c.source.disconnect();
+            if let Some(b) = c.source.buffer() {
+                self.held.push((b, c.frames));
+            }
+        }
+        self.paused = true;
+    }
+
+    /// Schedule the kept chunks again from context time `when`.
+    fn resume(&mut self, ctx: &AudioContext, out: &AudioNode, when: f64) {
+        let rate = self.dec.rate() as f64;
+        let mut t = when;
+        for (k, (buf, frames)) in self.held.drain(..).enumerate() {
+            let skip = if k == 0 {
+                self.held_offset.min(frames)
+            } else {
+                0
+            };
+            let Ok(source) = ctx.create_buffer_source() else {
+                continue;
+            };
+            source.set_buffer(Some(&buf));
+            if source.connect_with_audio_node(out).is_err()
+                || source
+                    .start_with_when_and_grain_offset(t, skip as f64 / rate)
+                    .is_err()
+            {
+                continue;
+            }
+            self.chunks.push_back(Chunk {
+                source,
+                start: t - skip as f64 / rate,
+                frames,
+            });
+            t += (frames - skip) as f64 / rate;
+        }
+        self.held_offset = 0;
+        self.next_start = t;
+        self.paused = false;
+    }
+
     fn seconds(&self, frames: usize) -> f64 {
         frames as f64 / self.dec.rate() as f64
     }
 
     /// Decoded samples in memory (scheduled chunks, the decoder's carry).
     fn held(&self) -> usize {
-        self.chunks.iter().map(|c| c.frames).sum::<usize>() + self.dec.held()
+        self.chunks.iter().map(|c| c.frames).sum::<usize>()
+            + self.held.iter().map(|(_, f)| f).sum::<usize>()
+            + self.dec.held()
     }
 
     /// Of the chunk playing at `now`, the samples already played.
@@ -150,7 +233,39 @@ impl Streaming {
             let _ = scheduled(&c.source).stop();
             let _ = c.source.disconnect();
         }
+        self.held.clear();
         self.done = true;
+    }
+}
+
+/// A music track's level: a linear ramp on the clock it plays by (the
+/// context's, or the page's when silent), mirrored on its level gain.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Level {
+    from: f32,
+    to: f32,
+    t0: f64,
+    t1: f64,
+}
+
+impl Level {
+    const fn flat(v: f32) -> Level {
+        Level {
+            from: v,
+            to: v,
+            t0: 0.0,
+            t1: 0.0,
+        }
+    }
+
+    fn at(&self, t: f64) -> f32 {
+        if t >= self.t1 || self.t1 <= self.t0 {
+            self.to
+        } else if t <= self.t0 {
+            self.from
+        } else {
+            self.from + (self.to - self.from) * ((t - self.t0) / (self.t1 - self.t0)) as f32
+        }
     }
 }
 
@@ -170,16 +285,34 @@ struct Playback {
     bus: Bus,
     /// Its gain and panner (none when running silent).
     nodes: Option<(GainNode, StereoPannerNode)>,
+    /// Music: the level gain ahead of `nodes` (layers, crossfades).
+    level_node: Option<GainNode>,
     /// The game's volume for it (the track ducks under a stinger).
     volume: f32,
+    /// Its pitch (a buffer's `playbackRate`; 1 for streams).
+    rate: f32,
     play: Play,
     ended: Rc<Cell<bool>>,
     /// Silent playbacks: when it ends (seconds, page clock); `None` loops.
     until: Option<f64>,
+    looped: bool,
+    /// Its length in seconds (at pitch 1).
+    length: f64,
+    /// Music: its layer and level.
+    layer: u8,
+    level: Level,
+    /// Buffers and silent playbacks: seconds into the track at clock time
+    /// `since`; paused, `since` is `None` and `offset` holds.
+    offset: f64,
+    since: Option<f64>,
+    paused: bool,
 }
 
 impl Playback {
     fn ended(&self) -> bool {
+        if self.paused {
+            return false;
+        }
         if self.ended.get() || self.until.is_some_and(|t| now() >= t) {
             return true;
         }
@@ -188,16 +321,121 @@ impl Playback {
 
     fn stop(&mut self) {
         self.ended.set(true);
+        self.paused = false;
         match &mut self.play {
             Play::Buffer { source, .. } => {
-                let _ = scheduled(source).stop();
                 scheduled(source).set_onended(None);
+                let _ = scheduled(source).stop();
             }
             Play::Stream(s) => s.stop(),
             Play::Silent => {}
         }
         if let Some((_, pan)) = &self.nodes {
             let _ = pan.disconnect();
+        }
+    }
+
+    /// Where its sources connect: the level gain, else the volume gain.
+    fn input(&self) -> Option<&GainNode> {
+        self.level_node
+            .as_ref()
+            .or(self.nodes.as_ref().map(|(g, _)| g))
+    }
+
+    /// Seconds into the track at clock time `t` (a loop wraps).
+    fn position(&self, t: f64) -> f64 {
+        let at = match &self.play {
+            Play::Stream(s) => s.position(t) as f64 / s.dec.rate().max(1) as f64,
+            _ => self.offset + self.since.map_or(0.0, |s| (t - s).max(0.0)) * self.rate as f64,
+        };
+        if self.length <= 0.0 {
+            0.0
+        } else if self.looped {
+            at % self.length
+        } else {
+            at.min(self.length)
+        }
+    }
+
+    /// Ramp the level to `to` over `secs` from clock time `t`.
+    fn ramp(&mut self, t: f64, to: f32, secs: f64) {
+        let from = self.level.at(t);
+        self.level = Level {
+            from,
+            to,
+            t0: t,
+            t1: t + secs.max(0.0),
+        };
+        if let Some(n) = &self.level_node {
+            let g = n.gain();
+            let _ = g.cancel_scheduled_values(t);
+            if secs > 0.0 {
+                let _ = g.set_value_at_time(from, t);
+                let _ = g.linear_ramp_to_value_at_time(to, t + secs);
+            } else {
+                g.set_value(to);
+            }
+        }
+    }
+
+    /// Hold the track where it is at clock time `t`.
+    fn pause(&mut self, t: f64) {
+        if self.paused {
+            return;
+        }
+        let at = self.position(t);
+        match &mut self.play {
+            Play::Stream(s) => s.pause(t),
+            Play::Buffer { source, .. } => {
+                self.offset = at;
+                self.since = None;
+                scheduled(source).set_onended(None);
+                let _ = scheduled(source).stop();
+            }
+            Play::Silent => {
+                self.offset = at;
+                self.since = None;
+                self.until = None;
+            }
+        }
+        self.paused = true;
+    }
+
+    /// Go on from where [`Playback::pause`] held it, at clock time `when`.
+    fn resume(&mut self, ctx: Option<&AudioContext>, when: f64) {
+        if !self.paused {
+            return;
+        }
+        self.paused = false;
+        let input = self.input().cloned();
+        match (&mut self.play, ctx, input) {
+            (Play::Stream(s), Some(ctx), Some(input)) => s.resume(ctx, &input, when),
+            (Play::Buffer { source, _on_ended }, Some(ctx), Some(input)) => {
+                let Ok(fresh) = ctx.create_buffer_source() else {
+                    return;
+                };
+                fresh.set_buffer(source.buffer().as_ref());
+                fresh.set_loop(self.looped);
+                fresh.playback_rate().set_value(self.rate);
+                let flag = self.ended.clone();
+                let on_ended = Closure::<dyn FnMut()>::new(move || flag.set(true));
+                scheduled(&fresh).set_onended(Some(on_ended.as_ref().unchecked_ref()));
+                if fresh.connect_with_audio_node(&input).is_ok()
+                    && fresh
+                        .start_with_when_and_grain_offset(when, self.offset)
+                        .is_ok()
+                {
+                    *source = fresh;
+                    *_on_ended = on_ended;
+                }
+                self.since = Some(when);
+            }
+            _ => {
+                self.since = Some(when);
+                if !self.looped {
+                    self.until = Some(now() + (self.length - self.offset).max(0.0));
+                }
+            }
         }
     }
 }
@@ -231,8 +469,15 @@ pub struct WebAudio {
     /// Fire-and-forget one-shots, until they end.
     shots: Vec<Playback>,
     next_voice: u32,
-    track: Option<Playback>,
+    /// The music: one track, or up to [`MAX_MUSIC_LAYERS`] layers.
+    tracks: Vec<Playback>,
+    /// A crossfade's old tracks, fading out until their clock time.
+    leaving: Vec<(Playback, f64)>,
     stinger: Option<Playback>,
+    /// A bus's filter node (the master's after the master gain) and the
+    /// settings the game asked for (kept when silent).
+    filters: Vec<Option<BiquadFilterNode>>,
+    filter_set: [Option<BusFilter>; Bus::COUNT],
     counters: StreamCounters,
     /// The page clock at the last [`WebAudio::poll`].
     last_poll: Option<f64>,
@@ -284,8 +529,11 @@ impl WebAudio {
             voices: HashMap::new(),
             shots: Vec::new(),
             next_voice: 0,
-            track: None,
+            tracks: Vec::new(),
+            leaving: Vec::new(),
             stinger: None,
+            filters: (0..Bus::COUNT).map(|_| None).collect(),
+            filter_set: [None; Bus::COUNT],
             counters: StreamCounters::default(),
             last_poll: None,
         }
@@ -443,6 +691,11 @@ impl WebAudio {
         self.buses.settings()
     }
 
+    /// The clock playbacks run by: the context's, or the page's when silent.
+    fn clock(&self) -> f64 {
+        self.ctx.as_ref().map_or_else(now, |c| c.current_time())
+    }
+
     /// Start a loaded clip (`music` picks the registry) on `bus` with
     /// `params`: its graph, or a silent playback that ends by the clock.
     fn start(
@@ -454,20 +707,55 @@ impl WebAudio {
         params: &SoundParams,
         looped: bool,
     ) -> Option<Playback> {
+        self.start_at(music, id, kind, bus, params, looped, Start::NOW)
+    }
+
+    /// [`WebAudio::start`] at a context time, from an offset, with a level
+    /// gain (music).
+    #[allow(clippy::too_many_arguments)]
+    fn start_at(
+        &mut self,
+        music: bool,
+        id: u32,
+        kind: Kind,
+        bus: Bus,
+        params: &SoundParams,
+        looped: bool,
+        how: Start,
+    ) -> Option<Playback> {
+        let clock = self.clock();
         let clip = if music {
             self.music.get(&id)?
         } else {
             self.sounds.get(&id)?
         };
+        let streamed = matches!(clip.data, ClipData::Stream { .. });
+        let rate = if streamed { 1.0 } else { params.rate() };
+        let length = clip.seconds();
+        let offset = if length > 0.0 && looped {
+            how.offset % length
+        } else {
+            how.offset.min(length)
+        };
         let ended = Rc::new(Cell::new(false));
+        let when = how.when.unwrap_or(clock);
         let silent = Playback {
             kind,
             bus,
             nodes: None,
+            level_node: None,
             volume: params.volume,
+            rate,
             play: Play::Silent,
             ended: ended.clone(),
-            until: (!looped).then(|| now() + clip.seconds()),
+            until: (!looped).then(|| now() + (length - offset) / rate as f64),
+            looped,
+            length,
+            layer: 0,
+            level: Level::flat(how.level),
+            offset,
+            since: Some(when),
+            paused: false,
         };
         let (Some(ctx), Some(Some(bus_node))) = (&self.ctx, self.bus_nodes.get(bus.index())) else {
             return Some(silent);
@@ -480,46 +768,69 @@ impl WebAudio {
         gain.connect_with_audio_node(&pan).ok()?;
         pan.connect_with_audio_node(bus_node).ok()?;
         set_params(&gain, &pan, params);
+        let level_node = if how.level_node {
+            let n = ctx.create_gain().ok()?;
+            n.gain().set_value(how.level);
+            n.connect_with_audio_node(&gain).ok()?;
+            Some(n)
+        } else {
+            None
+        };
+        let input: &GainNode = level_node.as_ref().unwrap_or(&gain);
         let play = match &clip.data {
             ClipData::Buffer(None) => return Some(silent),
             ClipData::Buffer(Some(buffer)) => {
                 let source = ctx.create_buffer_source().ok()?;
                 source.set_buffer(Some(buffer));
                 source.set_loop(looped);
-                source.connect_with_audio_node(&gain).ok()?;
+                source.playback_rate().set_value(rate);
+                source.connect_with_audio_node(input).ok()?;
                 let flag = ended.clone();
                 let on_ended = Closure::<dyn FnMut()>::new(move || flag.set(true));
                 scheduled(&source).set_onended(Some(on_ended.as_ref().unchecked_ref()));
-                scheduled(&source).start().ok()?;
+                if how.when.is_none() && offset == 0.0 {
+                    scheduled(&source).start().ok()?;
+                } else {
+                    source.start_with_when_and_grain_offset(when, offset).ok()?;
+                }
                 Play::Buffer {
                     source,
                     _on_ended: on_ended,
                 }
             }
             ClipData::Stream { codec, bytes } => {
-                let dec = StreamDecoder::open(*codec, clip.rate, clip.frames as u32, bytes.clone())
-                    .ok()?;
+                let mut dec =
+                    StreamDecoder::open(*codec, clip.rate, clip.frames as u32, bytes.clone())
+                        .ok()?;
+                let frame = (offset * dec.rate() as f64) as usize;
+                let base = if frame > 0 && dec.seek(frame) {
+                    frame as u64
+                } else {
+                    0
+                };
                 let mut s = Box::new(Streaming {
                     dec,
                     looped,
-                    next_start: ctx.current_time() + START_DELAY,
+                    next_start: how.when.unwrap_or(ctx.current_time() + START_DELAY),
                     chunks: VecDeque::new(),
                     done: false,
                     scratch: Vec::with_capacity(CHUNK_FRAMES),
+                    base,
+                    held: Vec::new(),
+                    held_offset: 0,
+                    paused: false,
                 });
                 // Fill the lookahead now: the first chunks are due at once.
-                pump(ctx, &gain, &mut s, &mut self.counters);
+                pump(ctx, input, &mut s, &mut self.counters);
                 Play::Stream(s)
             }
         };
         Some(Playback {
-            kind,
-            bus,
             nodes: Some((gain, pan)),
-            volume: params.volume,
+            level_node,
             play,
-            ended,
             until: None,
+            ..silent
         })
     }
 
@@ -536,19 +847,28 @@ impl WebAudio {
                 .voices
                 .values_mut()
                 .chain(self.shots.iter_mut())
-                .chain(self.track.iter_mut())
+                .chain(self.tracks.iter_mut())
+                .chain(self.leaving.iter_mut().map(|(p, _)| p))
                 .chain(self.stinger.iter_mut());
             for p in all {
-                if let (Play::Stream(s), Some((gain, _))) = (&mut p.play, &p.nodes) {
-                    pump(ctx, gain, s, counters);
+                let input = p.input().cloned();
+                if let (Play::Stream(s), Some(input)) = (&mut p.play, input) {
+                    pump(ctx, &input, s, counters);
                 }
             }
         }
         self.voices.retain(|_, v| !v.ended());
         self.shots.retain(|v| !v.ended());
-        if self.track.as_ref().is_some_and(Playback::ended) {
-            self.track = None;
-        }
+        self.tracks.retain(|t| !t.ended());
+        let clock = self.clock();
+        self.leaving.retain_mut(|(p, until)| {
+            if clock >= *until || p.ended() {
+                p.stop();
+                false
+            } else {
+                true
+            }
+        });
         if self.stinger.as_ref().is_some_and(Playback::ended) {
             self.stinger = None;
             self.apply_track_duck();
@@ -562,7 +882,8 @@ impl WebAudio {
         self.voices
             .values()
             .chain(self.shots.iter())
-            .chain(self.track.iter())
+            .chain(self.tracks.iter())
+            .chain(self.leaving.iter().map(|(p, _)| p))
             .chain(self.stinger.iter())
             .filter(|p| !p.ended())
     }
@@ -603,16 +924,72 @@ impl WebAudio {
         }
     }
 
-    /// The track at its volume, ducked while a stinger plays.
+    /// The music at its volume, ducked while a stinger plays.
     fn apply_track_duck(&self) {
         let duck = if self.stinger.is_some() { DUCK } else { 1.0 };
-        if let Some(Playback {
-            nodes: Some((gain, _)),
-            volume,
-            ..
-        }) = &self.track
-        {
-            gain.gain().set_value(volume.max(0.0) * duck);
+        let all = self
+            .tracks
+            .iter()
+            .chain(self.leaving.iter().map(|(p, _)| p));
+        for p in all {
+            if let Some((gain, _)) = &p.nodes {
+                gain.gain().set_value(p.volume.max(0.0) * duck);
+            }
+        }
+    }
+
+    /// Stop the music (every layer and any track still fading out).
+    fn stop_tracks(&mut self) {
+        for t in self.tracks.iter_mut() {
+            t.stop();
+        }
+        for (t, _) in self.leaving.iter_mut() {
+            t.stop();
+        }
+        self.tracks.clear();
+        self.leaving.clear();
+    }
+
+    /// Start music `id` as layer `layer` at `level`, from `offset` seconds,
+    /// at context time `when`.
+    fn start_track(
+        &mut self,
+        id: MusicId,
+        looped: bool,
+        layer: u8,
+        level: f32,
+        offset: f64,
+        when: Option<f64>,
+    ) -> Option<Playback> {
+        let bus = self.music.get(&id.0)?.bus;
+        let how = Start {
+            offset,
+            when,
+            level,
+            level_node: true,
+        };
+        let mut p = self.start_at(
+            true,
+            id.0,
+            Kind::Music,
+            bus,
+            &SoundParams::DEFAULT,
+            looped,
+            how,
+        )?;
+        p.layer = layer;
+        Some(p)
+    }
+
+    /// The node a bus's filter goes after, and what it feeds.
+    fn filter_ends(&self, bus: Bus) -> Option<(AudioNode, AudioNode)> {
+        let ctx = self.ctx.as_ref()?;
+        if bus == Bus::Master {
+            let m = self.master.as_ref()?;
+            Some((m.clone().into(), ctx.destination().into()))
+        } else {
+            let n = self.bus_nodes.get(bus.index())?.as_ref()?;
+            Some((n.clone().into(), self.master.as_ref()?.clone().into()))
         }
     }
 
@@ -623,13 +1000,17 @@ impl WebAudio {
 
 /// Schedule `s`'s chunks into `out` up to [`LOOKAHEAD`] past the context's
 /// time, and retire the chunks that played.
-fn pump(ctx: &AudioContext, out: &GainNode, s: &mut Streaming, counters: &mut StreamCounters) {
+fn pump(ctx: &AudioContext, out: &AudioNode, s: &mut Streaming, counters: &mut StreamCounters) {
+    if s.paused {
+        return;
+    }
     let now = ctx.current_time();
     while let Some(c) = s.chunks.front() {
         if c.start + s.seconds(c.frames) > now {
             break;
         }
         counters.played += c.frames as u64;
+        s.base += c.frames as u64;
         s.chunks.pop_front();
     }
     while !s.done && s.next_start - now < LOOKAHEAD {
@@ -654,7 +1035,7 @@ fn pump(ctx: &AudioContext, out: &GainNode, s: &mut Streaming, counters: &mut St
 
 /// One chunk of `s.scratch`, started where the stream is due (or just
 /// after now, when that is already past: an underrun).
-fn schedule(ctx: &AudioContext, out: &GainNode, s: &Streaming, now: f64) -> Option<Chunk> {
+fn schedule(ctx: &AudioContext, out: &AudioNode, s: &Streaming, now: f64) -> Option<Chunk> {
     let frames = s.scratch.len();
     let buf = ctx
         .create_buffer(1, frames as u32, s.dec.rate() as f32)
@@ -680,6 +1061,42 @@ impl Default for WebAudio {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// How [`WebAudio::start_at`] starts a playback.
+#[derive(Clone, Copy)]
+struct Start {
+    /// Seconds into the clip.
+    offset: f64,
+    /// Context time (`None`: now).
+    when: Option<f64>,
+    /// The level gain's value, and whether it has one (music).
+    level: f32,
+    level_node: bool,
+}
+
+impl Start {
+    const NOW: Start = Start {
+        offset: 0.0,
+        when: None,
+        level: 1.0,
+        level_node: false,
+    };
+}
+
+/// A new pitch on a playback: its source's rate, or a silent one's end.
+fn set_rate(p: &mut Playback, rate: f32) {
+    if matches!(p.play, Play::Stream(_)) || p.rate == rate {
+        return;
+    }
+    if let Play::Buffer { source, .. } = &p.play {
+        source.playback_rate().set_value(rate);
+    }
+    if let Some(until) = p.until {
+        let t = now();
+        p.until = Some(t + (until - t).max(0.0) * p.rate as f64 / rate as f64);
+    }
+    p.rate = rate;
 }
 
 /// Volume and pan on a playback's nodes (constant-sum like the PC's
@@ -715,18 +1132,14 @@ impl Audio for WebAudio {
 
     fn play_music(&mut self, music: MusicId, looped: bool) {
         self.stop_music();
-        let Some(bus) = self.music.get(&music.0).map(|c| c.bus) else {
-            return;
-        };
-        let params = SoundParams::DEFAULT;
-        self.track = self.start(true, music.0, Kind::Music, bus, &params, looped);
+        if let Some(t) = self.start_track(music, looped, 0, 1.0, 0.0, None) {
+            self.tracks.push(t);
+        }
         self.apply_track_duck();
     }
 
     fn stop_music(&mut self) {
-        if let Some(mut t) = self.track.take() {
-            t.stop();
-        }
+        self.stop_tracks();
     }
 
     fn set_master_volume(&mut self, volume: f32) {
@@ -757,6 +1170,13 @@ impl Audio for WebAudio {
             if let Some((gain, pan)) = &p.nodes {
                 set_params(gain, pan, params);
             }
+            set_rate(p, params.rate());
+        }
+    }
+
+    fn set_voice_pitch(&mut self, voice: VoiceId, pitch: f32) {
+        if let Some(p) = self.voices.get_mut(&voice.0) {
+            set_rate(p, trino_core::clamp_pitch(pitch));
         }
     }
 
@@ -824,6 +1244,151 @@ impl Audio for WebAudio {
         self.buses.duck(bus)
     }
 
+    fn audio_features(&self) -> AudioFeatures {
+        AudioFeatures::ALL
+    }
+
+    fn pause_music(&mut self) {
+        let t = self.clock();
+        // A crossfade's old track has nothing to come back to.
+        for (p, _) in self.leaving.iter_mut() {
+            p.stop();
+        }
+        self.leaving.clear();
+        for p in self.tracks.iter_mut() {
+            p.pause(t);
+        }
+    }
+
+    fn resume_music(&mut self) {
+        // Every layer from one context time: they stay in step.
+        let when = self.clock() + if self.ctx.is_some() { START_DELAY } else { 0.0 };
+        for p in self.tracks.iter_mut() {
+            p.resume(self.ctx.as_ref(), when);
+        }
+    }
+
+    fn music_paused(&self) -> bool {
+        self.tracks.first().is_some_and(|p| p.paused)
+    }
+
+    fn music_position(&self) -> Option<f32> {
+        let t = self.clock();
+        self.tracks
+            .iter()
+            .min_by_key(|p| p.layer)
+            .map(|p| p.position(t) as f32)
+    }
+
+    fn crossfade_music(&mut self, music: MusicId, looped: bool, fade_ms: u32, sync: bool) {
+        if !self.music.contains_key(&music.0) {
+            return;
+        }
+        let clock = self.clock();
+        let delay = if self.ctx.is_some() { START_DELAY } else { 0.0 };
+        let when = clock + delay;
+        // In sync: where the old track will be when the new one starts.
+        let offset = if sync {
+            self.music_position().map_or(0.0, |p| p as f64 + delay)
+        } else {
+            0.0
+        };
+        let paused = self.music_paused();
+        let fade = fade_ms as f64 / 1000.0;
+        for mut t in std::mem::take(&mut self.tracks) {
+            if fade <= 0.0 || t.paused {
+                t.stop();
+            } else {
+                t.ramp(when, 0.0, fade);
+                self.leaving.push((t, when + fade));
+            }
+        }
+        let level = if fade > 0.0 { 0.0 } else { 1.0 };
+        if let Some(mut t) = self.start_track(music, looped, 0, level, offset, Some(when)) {
+            if fade > 0.0 {
+                t.ramp(when, 1.0, fade);
+            }
+            if paused {
+                t.pause(when);
+            }
+            self.tracks.push(t);
+        }
+        self.apply_track_duck();
+    }
+
+    fn play_music_layers(&mut self, layers: &[MusicId], looped: bool) {
+        self.stop_music();
+        let delay = if self.ctx.is_some() { START_DELAY } else { 0.0 };
+        let when = self.clock() + delay;
+        for (i, &id) in layers.iter().take(MAX_MUSIC_LAYERS).enumerate() {
+            let level = if i == 0 { 1.0 } else { 0.0 };
+            if let Some(t) = self.start_track(id, looped, i as u8, level, 0.0, Some(when)) {
+                self.tracks.push(t);
+            }
+        }
+        self.apply_track_duck();
+    }
+
+    fn set_music_layer(&mut self, layer: usize, gain: f32, fade_ms: u32) {
+        let t = self.clock();
+        let gain = if gain.is_nan() {
+            0.0
+        } else {
+            gain.clamp(0.0, 1.0)
+        };
+        for p in self.tracks.iter_mut().filter(|p| p.layer as usize == layer) {
+            p.ramp(t, gain, fade_ms as f64 / 1000.0);
+        }
+    }
+
+    fn music_layer(&self, layer: usize) -> Option<f32> {
+        let t = self.clock();
+        self.tracks
+            .iter()
+            .find(|p| p.layer as usize == layer)
+            .map(|p| p.level.at(t))
+    }
+
+    fn set_bus_filter(&mut self, bus: Bus, filter: Option<BusFilter>) {
+        self.filter_set[bus.index()] = filter;
+        let Some((from, to)) = self.filter_ends(bus) else {
+            return;
+        };
+        let at = self.clock();
+        let slot = bus.index();
+        match (filter, self.filters[slot].take()) {
+            (Some(f), Some(node)) => {
+                let _ = node
+                    .frequency()
+                    .set_target_at_time(f.cutoff(), at, GAIN_GLIDE);
+                self.filters[slot] = Some(node);
+            }
+            (Some(f), None) => {
+                let Some(ctx) = &self.ctx else { return };
+                let Ok(node) = ctx.create_biquad_filter() else {
+                    return;
+                };
+                node.set_type(BiquadFilterType::Lowpass);
+                node.q().set_value(core::f32::consts::FRAC_1_SQRT_2);
+                node.frequency().set_value(f.cutoff());
+                let _ = from.disconnect();
+                let _ = from.connect_with_audio_node(&node);
+                let _ = node.connect_with_audio_node(&to);
+                self.filters[slot] = Some(node);
+            }
+            (None, Some(node)) => {
+                let _ = from.disconnect();
+                let _ = node.disconnect();
+                let _ = from.connect_with_audio_node(&to);
+            }
+            (None, None) => {}
+        }
+    }
+
+    fn bus_filter(&self, bus: Bus) -> Option<BusFilter> {
+        self.filter_set[bus.index()]
+    }
+
     fn audio_stats(&self) -> AudioStats {
         let resident: usize = self
             .sounds
@@ -838,7 +1403,11 @@ impl Audio for WebAudio {
             if let Play::Stream(s) = &p.play {
                 streams += 1;
                 held += s.held();
-                playing += s.playing(at) as u64;
+                playing += if s.paused {
+                    s.held_offset
+                } else {
+                    s.playing(at)
+                } as u64;
             }
         }
         AudioStats {

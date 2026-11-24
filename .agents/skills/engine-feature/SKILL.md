@@ -328,6 +328,16 @@ A feature is done only when **PC, N64 and 3DS** all run it and an emulator has s
   which the base console's heap paid: `memory allocation of 10168 bytes failed` at the
   micro scenes (2026-11-23). Measure a new step with `mips64-elf-nm -S --size-sort -C
   target/n64/trino.elf | grep selftest`.
+- **A feature only some backends have gets a capability report, and the step holds each
+  backend to it** (`Audio::audio_features`, ADR 0044): the `audio control` step checks a
+  bus filter reads back exactly where `bus_filter` is true and is absent elsewhere, and
+  skips nothing silently. A step that reads an `Option<f32>` from a backend whose
+  default returns `None` goes through an out-of-line `plain(v, sentinel)` before any float
+  math or compare (the N64's uninitialized-payload trap); compare float payloads by
+  `to_bits()` when you must.
+- A step that times something on every target takes a clock (`now_us: u32`, wrapping) per
+  frame and compares ratios with slack, not exact lengths: the browsers' frames are
+  uneven and the N64 detects an end a frame late.
 - A step that probes pixels must still run its logic where `read_screen_pixel` is
   `None` (the browsers): return `Ok(false)` ("probe skipped") after the non-pixel checks
   instead of skipping the whole step (`ui_layout` taps the touch screen either way).

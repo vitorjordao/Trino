@@ -95,6 +95,7 @@ they read just as well for people. Each one is the most detailed source for its 
 | [0043](adr/0043-bongo-kart-render-study.md) | What Bongo Kart's study asked of the renderer: mipmap chains on the PC and the Web, additive blending, a two-color ambient with rim light, a mix of two grading LUTs |
 | [0044](adr/0044-bongo-kart-audio-study.md) | What Bongo Kart's study asked of the audio: per-voice pitch, positional voices with a budget and doppler (`VoicePool`), music pause/position/crossfades/layers, bus low-pass filters |
 | [0045](adr/0045-bongo-kart-platform-study.md) | What Bongo Kart's study asked of the platform: a wall clock (`unix_seconds`, the N64 RTC), rumble with a 0–100 % setting and no placebo (`rumble_support`), `rebind_key` and the Web's rebinding, `ActionMap` for a game's own actions, key taps shorter than a frame, `save_image` |
+| [0046](adr/0046-render-targets.md) | Render targets: a small scene drawn into a texture (`Renderer::begin_target` / `end_target`) a sprite or a model samples — mirrors, monitors, stadium screens; the PC and the Web, targets before the screen's first draw, one plain pass; the consoles later |
 
 ## Plans and history
 

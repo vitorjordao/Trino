@@ -210,6 +210,12 @@ pub struct FrameStats {
     /// failed [`crate::DynamicMesh::check`] (a NaN, an index out of range,
     /// too many vertices), or the frame had too many of them.
     pub dynamic_rejected: u32,
+    /// Render targets drawn this frame ([`Renderer::begin_target`] …
+    /// [`Renderer::end_target`]); their draws count in the fields above.
+    pub targets: u32,
+    /// [`Renderer::begin_target`] calls refused (see its docs), on the
+    /// backends that draw targets.
+    pub targets_rejected: u32,
 }
 
 /// How a 3D surface reacts to light. Evaluated per vertex by the engine's
@@ -852,6 +858,26 @@ pub trait Renderer {
     }
 
     fn end_frame(&mut self);
+
+    /// Send the next draws (2D and 3D) into `target`'s texture, cleared to
+    /// `clear` (its alpha ignored), until [`end_target`](Self::end_target):
+    /// `true` when they go there ([`crate::target`]). `false` means skip
+    /// them and fall back: the target draws into no texture
+    /// ([`Caps::max_target_texels`] 0: the consoles for now, where this
+    /// default answers), `target` doesn't
+    /// [`fit`](crate::RenderTarget::fits), the frame drew
+    /// [`Caps::max_targets`] already, another target is open, or the frame
+    /// drew on the screen already (targets come first; PC strict mode
+    /// panics). 3D in a target projects to its size: set its camera first,
+    /// and the screen's again after `end_target`.
+    fn begin_target(&mut self, _target: &crate::target::RenderTarget, _clear: Color) -> bool {
+        false
+    }
+
+    /// Render the draws since [`begin_target`](Self::begin_target) into its
+    /// texture: later draws that sample the target's sprite show them. A
+    /// no-op without an open target; `end_frame` ends one left open.
+    fn end_target(&mut self) {}
 
     /// Draw `sprite` as a camera-facing quad at world position `pos` (its
     /// center) — z-tested and fogged like the 3D around it, batched with

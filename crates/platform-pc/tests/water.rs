@@ -758,3 +758,49 @@ fn far_water_does_not_shimmer() {
 
 /// The far band's mean neighbour step `far_water_does_not_shimmer` allows.
 const FAR_STEP: f64 = 2.0;
+
+/// Water in a render target (ADR 0046 §3) is the per-vertex tier on the
+/// native profile: the target's pass takes no depth copy for the per-pixel
+/// foam, so the GPU path's (per-pixel) water leaves it to the CPU path, and
+/// both T&L settings draw the same bytes.
+#[test]
+fn water_in_a_render_target_is_the_per_vertex_tier_on_both_paths() {
+    let _gpu = gpu();
+    let Some(mut r) = headless(SimProfile::Native) else {
+        return;
+    };
+    setup(&mut r);
+    let target = trino_core::RenderTarget::new("targets/pond", 160, 90);
+    let sky = Color::rgb(130, 170, 220);
+    let mut pictures = Vec::new();
+    for gpu_path in [true, false] {
+        r.set_hw_tnl(gpu_path);
+        r.begin_frame(Color::BLACK);
+        assert!(r.begin_target(&target, sky));
+        r.set_camera(&CAMERA);
+        r.set_light(&SUN);
+        r.set_water(1.5, &[RIPPLE]);
+        r.draw_model(
+            SHEET,
+            &Transform3::default(),
+            Material::VertexLit,
+            &water_params(),
+        );
+        r.end_target();
+        r.end_frame();
+        let stats = r.stats();
+        assert_eq!(stats.tnl.pc_gpu_draws, 0, "GPU path {gpu_path}: {stats:?}");
+        assert!(stats.tris > 0, "{stats:?}");
+        pictures.push(r.read_target(&target).unwrap());
+    }
+    assert_eq!(pictures[0], pictures[1]);
+    // The water is there: most of the middle isn't the clear color.
+    let middle = &pictures[0][(45 * 160 * 4)..(46 * 160 * 4)];
+    let water = middle
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| [p[0], p[1], p[2]] != [sky.r, sky.g, sky.b])
+        .count();
+    assert!(water > 80, "{water} of 160 pixels show water");
+}

@@ -77,6 +77,11 @@ fn provided_renderer_methods_are_harmless_defaults() {
         &Mat34::IDENTITY,
         &ModelParams::DEFAULT,
     );
+    // Render targets (#184): the consoles' answer (none) is the default,
+    // and ending none is harmless.
+    let mirror = trino_core::RenderTarget::new("targets/mirror", 64, 32);
+    assert!(!dyn_r.begin_target(&mirror, Color::BLACK));
+    dyn_r.end_target();
     dyn_r.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::WHITE);
     dyn_r.draw_text(FontId(3), Vec2::ZERO, "hello", &TextParams::DEFAULT);
     assert_eq!(dyn_r.measure_text(FontId(3), "hello", 2.0), Vec2::ZERO);

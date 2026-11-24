@@ -648,6 +648,11 @@ pub struct PcRenderer {
     screen: u8,
     main_cmds: u32,
     main_tris: u32,
+    /// Render targets by sprite id (Bongo-Kart #184), kept across frames:
+    /// a target keeps its picture until it is drawn again.
+    targets: HashMap<u32, TargetTex>,
+    /// The target draws go to now, and its clear color.
+    target: Option<(u32, Color)>,
     /// The GPU T&L path (issue #51): on for the native profile unless
     /// `TRINO_PC_TNL=cpu` or [`PcRenderer::set_hw_tnl`] turned it off; its
     /// pipelines and resident meshes, built on the first GPU draw.
@@ -1136,6 +1141,25 @@ fn create_tex3d_bind_group(
             },
         ],
     })
+}
+
+/// Where a pass draws: the main picture, the 3DS profile's touch screen,
+/// or a render target (Bongo-Kart #184, `trino_core::target`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Dest {
+    Main,
+    Second,
+    Target(u32),
+}
+
+/// A render target's texture (also a sprite: `sprites` holds its bind
+/// group), depth buffer and globals.
+struct TargetTex {
+    size: (u32, u32),
+    tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    globals_bg: wgpu::BindGroup,
 }
 
 /// The second screen's own target, globals and blit source.
@@ -2671,6 +2695,8 @@ impl PcRenderer {
             screen: 0,
             main_cmds: 0,
             main_tris: 0,
+            targets: HashMap::new(),
+            target: None,
             bc: device_bc,
             adapter_name,
             hw_tnl: hw_tnl_from_env(),
@@ -3839,7 +3865,7 @@ impl PcRenderer {
             self.flush_model_batch();
             cmds += self.commands.len() as u32;
             tris += (self.tri_verts.len() / 3) as u32;
-            self.draw_commands(false);
+            self.draw_commands(Dest::Main);
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -4260,6 +4286,89 @@ impl PcRenderer {
 
     /// Whether the device makes a `width`×`height` texture (each side 1 to
     /// `max_texture_dimension_2d`); logs why not.
+    /// Anything drawn on the screen this frame (a target must come first)?
+    fn screen_drawn(&self) -> bool {
+        !self.commands.is_empty()
+            || !self.tri_verts.is_empty()
+            || !self.pending_tris.is_empty()
+            || !self.cpu_jobs.is_empty()
+            || !self.pending_shadow.is_empty()
+            || self.gpu.as_ref().is_some_and(|g| g.has_pending())
+    }
+
+    /// `target`'s texture, depth and globals at its size (made, or made
+    /// again when the size changed), and its sprite entry.
+    fn ensure_target(&mut self, target: &trino_core::RenderTarget) {
+        let id = target.sprite.0;
+        let size = (u32::from(target.width), u32::from(target.height));
+        if self.targets.get(&id).is_some_and(|t| t.size == size) {
+            return;
+        }
+        let (tex, view, depth_view, _) = create_targets(&self.device, size);
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("trino-target-globals"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue
+            .write_buffer(&buf, 0, &globals_bytes(size.0, size.1, false));
+        let globals_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trino-target-globals-bg"),
+            layout: &self.globals_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trino-target-sprite-bg"),
+            layout: &self.sprite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        self.tex3d
+            .retain(|k, _| k.id != id && k.detail.is_none_or(|d| d.sprite.0 != id));
+        self.sprites.insert(
+            id,
+            SpriteEntry {
+                bind_group,
+                view: view.clone(),
+                mip_view: None,
+                size,
+                bytes: u64::from(size.0) * u64::from(size.1) * 4,
+                compressed: false,
+                alpha: false,
+                cutout: false,
+            },
+        );
+        self.targets.insert(
+            id,
+            TargetTex {
+                size,
+                tex,
+                view,
+                depth_view,
+                globals_bg,
+            },
+        );
+    }
+
+    /// **Test hook:** `target`'s last picture (RGBA8, rows from the top),
+    /// or `None` before it was drawn or where the GPU can't read back.
+    pub fn read_target(&self, target: &trino_core::RenderTarget) -> Option<Vec<u8>> {
+        let t = self.targets.get(&target.sprite.0)?;
+        self.try_read_texture(&t.tex, t.size)
+    }
+
     fn sprite_size_ok(&self, id: SpriteId, width: u32, height: u32) -> bool {
         let max = self.device.limits().max_texture_dimension_2d;
         let ok = (1..=max).contains(&width) && (1..=max).contains(&height);
@@ -5026,7 +5135,8 @@ impl PcRenderer {
     /// bucket. Every profile draws them like its console.
     fn cast_shadow(&mut self, model: ModelId, matrix: &Mat34, params: &ModelParams) {
         use trino_core::shadow::{self as sh, ShadowPlan};
-        if self.shadows.tier() == ShadowTier::None {
+        // A target draws no shadows: its casters would join the screen's.
+        if self.shadows.tier() == ShadowTier::None || self.target.is_some() {
             return;
         }
         let plan = self.shadows.plan(params.shadow);
@@ -5339,15 +5449,14 @@ impl PcRenderer {
 
     /// The size of the screen draws go to now: what the T&L projects to.
     fn current_screen_size(&self) -> Vec2 {
-        let (w, h) = match (&self.second, self.screen) {
-            (Some(sc), 1) => sc.size,
+        let (w, h) = match (&self.second, self.screen, self.target) {
+            (_, _, Some((id, _))) => self.targets.get(&id).map_or(self.internal_size, |t| t.size),
+            (Some(sc), 1, _) => sc.size,
             _ => self.internal_size,
         };
         Vec2::new(w as f32, h as f32)
     }
 
-    /// Render the recorded commands into the main target, or (`second`)
-    /// into the second screen's, and submit.
     /// The multisampled color's format: HDR while the post stack draws.
     fn msaa_format(&self) -> wgpu::TextureFormat {
         if self.post_targets && self.hdr_ok {
@@ -5419,8 +5528,13 @@ impl PcRenderer {
         }
     }
 
-    fn draw_commands(&mut self, second: bool) {
+    /// Render the recorded commands into `dest` (the main target, the
+    /// second screen's or a render target's) and submit.
+    fn draw_commands(&mut self, dest: Dest) {
         trino_core::zone!("encode");
+        // Anything but the main picture: no post, AO, shadow map, scaling,
+        // MSAA or per-pixel water.
+        let second = dest != Dest::Main;
         let _pipes = pipes::scope(&self.pipe_entry);
         self.ensure_shadow_pipes();
         // The post stack (issue #64): this frame's settings, then its scene
@@ -5596,7 +5710,15 @@ impl PcRenderer {
                 v as f64 / 255.0
             }
         };
-        let clear = if second {
+        let clear = if let (Dest::Target(_), Some((_, c))) = (dest, self.target) {
+            // A target is opaque: its clear's alpha is ignored.
+            wgpu::Color {
+                r: c.r as f64 / 255.0,
+                g: c.g as f64 / 255.0,
+                b: c.b as f64 / 255.0,
+                a: 1.0,
+            }
+        } else if second {
             // The touch screen's own background.
             wgpu::Color {
                 r: 16.0 / 255.0,
@@ -5708,7 +5830,7 @@ impl PcRenderer {
             let (before, after) = first_part.split_at(at);
             let hold = if ms { MsPass::Hold } else { MsPass::Off };
             let (draws, switches) =
-                self.record_segments(&mut encoder, second, scene_pass, before, load, hold);
+                self.record_segments(&mut encoder, dest, scene_pass, before, load, hold);
             self.times.draw_calls += draws;
             self.times.pipeline_switches += switches;
             let (scene_depth_tex, scene_depth_view) = match (&self.scene, scene_pass) {
@@ -5746,7 +5868,7 @@ impl PcRenderer {
             MsPass::Off
         };
         let (draws, switches) =
-            self.record_segments(&mut encoder, second, scene_pass, first_part, load, end);
+            self.record_segments(&mut encoder, dest, scene_pass, first_part, load, end);
         self.times.draw_calls += draws;
         self.times.pipeline_switches += switches;
         if let (Some(z), Some(_), Some(_)) = (&mut zones, map, split) {
@@ -5946,7 +6068,7 @@ impl PcRenderer {
             };
             let (draws, switches) = self.record_segments(
                 &mut encoder,
-                second,
+                dest,
                 false,
                 rest,
                 (wgpu::LoadOp::Load, depth_load),
@@ -6023,8 +6145,9 @@ impl PcRenderer {
                 );
         }
         // The color-vision simulation view, last: what the frame looks like
-        // to the viewer it simulates.
-        if self.cvd_view != trino_core::CvdMode::Off {
+        // to the viewer it simulates (a target is seen through the screen
+        // that shows it).
+        if self.cvd_view != trino_core::CvdMode::Off && !matches!(dest, Dest::Target(_)) {
             if let Some(z) = &mut zones {
                 z.mark(&mut encoder, "cvd view");
             }
@@ -6074,15 +6197,20 @@ impl PcRenderer {
     fn record_segments(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        second: bool,
+        dest: Dest,
         scene: bool,
         segments: &[Segment],
         (color_load, depth_load): (wgpu::LoadOp<wgpu::Color>, wgpu::LoadOp<f32>),
         ms: MsPass,
     ) -> (u32, u32) {
-        let (color_view, depth_view, globals_bg) = match (&self.second, second, &self.scene) {
-            (Some(sc), true, _) => (&sc.view, &sc.depth_view, &sc.globals_bg),
-            (_, false, Some(t)) if scene => (&t.color_view, &t.depth_view, &self.globals_bg),
+        let second = dest != Dest::Main;
+        let (color_view, depth_view, globals_bg) = match (dest, &self.second, &self.scene) {
+            (Dest::Target(id), _, _) => match self.targets.get(&id) {
+                Some(t) => (&t.view, &t.depth_view, &t.globals_bg),
+                None => return (0, 0),
+            },
+            (Dest::Second, Some(sc), _) => (&sc.view, &sc.depth_view, &sc.globals_bg),
+            (Dest::Main, _, Some(t)) if scene => (&t.color_view, &t.depth_view, &self.globals_bg),
             _ => (&self.offscreen_view, &self.depth_view, &self.globals_bg),
         };
         // Multisampled: draw into the MSAA targets, resolve the color into
@@ -6399,11 +6527,11 @@ impl PcRenderer {
     /// cleared even when nothing was drawn on it), then show it.
     fn flush(&mut self) {
         if self.screen == 1 {
-            self.draw_commands(true);
+            self.draw_commands(Dest::Second);
         } else {
-            self.draw_commands(false);
+            self.draw_commands(Dest::Main);
             if self.second.is_some() {
-                self.draw_commands(true);
+                self.draw_commands(Dest::Second);
             }
         }
         self.present();
@@ -6667,6 +6795,7 @@ impl Renderer for PcRenderer {
         self.screen = 0;
         self.main_cmds = 0;
         self.main_tris = 0;
+        self.target = None;
         self.commands.clear();
         self.tri_verts.clear();
         self.pending_tris.clear();
@@ -6699,6 +6828,45 @@ impl Renderer for PcRenderer {
             gpu.begin_frame();
         }
         trino_core::trace::frame_mark(self.flash_frames as u32);
+    }
+
+    fn begin_target(&mut self, target: &trino_core::RenderTarget, clear: Color) -> bool {
+        let refused = !target.fits(&self.caps)
+            || self.frame_stats.targets >= u32::from(self.caps.max_targets)
+            || self.target.is_some()
+            || self.screen != 0
+            || self.stereo.recording;
+        if refused || self.screen_drawn() {
+            if !refused && self.strict {
+                panic!(
+                    "strict mode: begin_target({:?}) after a draw on the screen: draw a \
+                     frame's render targets first, right after begin_frame (Bongo-Kart \
+                     #184, trino_core::target)",
+                    target.sprite
+                );
+            }
+            self.frame_stats.targets_rejected += 1;
+            return false;
+        }
+        self.ensure_target(target);
+        self.target = Some((target.sprite.0, clear));
+        true
+    }
+
+    fn end_target(&mut self) {
+        let Some((id, _)) = self.target else {
+            return;
+        };
+        self.flush_model_batch();
+        let (cmds, tris) = (
+            self.commands.len() as u32,
+            (self.tri_verts.len() / 3) as u32,
+        );
+        self.draw_commands(Dest::Target(id));
+        self.main_cmds += cmds;
+        self.main_tris += tris;
+        self.target = None;
+        self.frame_stats.targets += 1;
     }
 
     fn draw_sprite(&mut self, sprite: SpriteId, pos: Vec2, params: &SpriteParams) {
@@ -7059,7 +7227,12 @@ impl Renderer for PcRenderer {
                 light: self.light,
             });
             let gloss = params.gloss as f32 / 255.0;
-            let per_pixel = self.caps.water_tier == WaterTier::PerPixel;
+            // A render target draws water at the per-vertex tier (ADR 0046
+            // §3): its pass takes no depth copy for the per-pixel foam, and
+            // the GPU path's water is per pixel only, so the CPU path takes
+            // it (counted as `Disabled`).
+            let in_target = self.target.is_some();
+            let per_pixel = self.caps.water_tier == WaterTier::PerPixel && !in_target;
             if native && trino_core::render3d::pc_offscreen(&ctx, &mesh, matrix) {
                 // Wholly outside the view, as for any draw.
                 self.pc_gpu_off[PcGpuReject::Offscreen.index()] += 1;
@@ -7067,7 +7240,7 @@ impl Renderer for PcRenderer {
                     .cpu(model.0, 1, 1, 0, PcGpuReject::Offscreen);
                 return;
             }
-            let decided = if native {
+            let decided = if native && !in_target {
                 pc_gpu_decide((&ctx, &mesh, matrix, params), false, self.gpu_tnl_active())
             } else {
                 Err(PcGpuReject::Disabled)
@@ -7616,6 +7789,7 @@ impl Renderer for PcRenderer {
     }
 
     fn set_screen(&mut self, screen: u8) {
+        self.end_target();
         // Main screen first, then the second (once per frame).
         if screen == 1 && self.screen == 0 && self.second.is_some() {
             if self.stereo.recording {
@@ -7626,8 +7800,10 @@ impl Renderer for PcRenderer {
                     self.commands.len() as u32,
                     (self.tri_verts.len() / 3) as u32,
                 );
-                self.draw_commands(false);
-                (self.main_cmds, self.main_tris) = (cmds, tris);
+                self.draw_commands(Dest::Main);
+                // The frame's targets are counted already.
+                self.main_cmds += cmds;
+                self.main_tris += tris;
             }
             self.screen = 1;
         }
@@ -7712,6 +7888,7 @@ impl Renderer for PcRenderer {
     }
 
     fn end_frame(&mut self) {
+        self.end_target();
         // A stereo frame still on the top screen: both eyes now, then only
         // the second screen is left to render.
         let top_done = self.stereo.recording;

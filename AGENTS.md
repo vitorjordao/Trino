@@ -599,6 +599,21 @@ since #122.
     download on the Web, `Unsupported` on the consoles.
   - Tests: `crates/core/tests/actions.rs`, `crates/platform-pc/tests/clock_rumble_keys.rs`,
     the Web's `keys.rs` tests, the `clock rumble input` step.
+- **Render targets (2026-11-24, ADR 0046, Bongo-Kart #184):** a small scene drawn into a
+  texture that a sprite or a model then samples (mirrors, monitors, stadium screens).
+  - **API:** `RenderTarget::new("targets/mirror", w, h)` names it, and its `sprite` handle
+    goes in any texture slot. `Renderer::begin_target(&t, clear) -> bool` and
+    `end_target()` frame its draws, 2D and 3D, projected to its size (set its camera).
+    `false` means fall back: no targets on the platform (`Caps::max_target_texels` 0:
+    consoles and the PC's console profiles), too big, past `Caps::max_targets` (4) a
+    frame, one already open, or after the screen's first draw. Targets come first;
+    strict mode panics on that one. Refusals count in `FrameStats::targets_rejected`.
+  - **PC/Web:** the second screen's pass at the target's size into an `Rgba8Unorm`
+    texture (`Dest::Target`): both T&L paths, sprites, text, fog, lit, translucent and
+    additive draws, and water at the per-vertex tier (no depth copy: the CPU path takes
+    it). No MSAA, post, AO or shadows. The picture persists until it is drawn again. `PcRenderer::read_target` reads it back for tests.
+  - **Tests:** `crates/platform-pc/tests/render_target.rs` (byte for byte a screen of its
+    size), the `render target` step; cost in `xtask/tests/target_bench.rs`.
 - **Texture formats (2026-10-17, ADR 0017, GitHub #52 phases 1–4):** a hardware format
   per platform, chosen by measurement.
   - **3DS:** `ETC1`, `ETC1A4`, `RGBA4`, `RGBA5551`, `LA8`, `L8`, `A8`, `RGB565`, `RGBA8`
@@ -2477,6 +2492,13 @@ cargo test --workspace
   sphere fails the band or the near plane is now checked vertex by vertex
   (`rsp_hull_check`), so a ground slab stays on the RSP. A mesh whose vertices do cross
   still leaves it: split the ground (coarse tiles far, fine near).
+- **A shader that reads a copy of the screen's pass has none in a render target**
+  (ADR 0046 §3). The per-pixel water's foam reads the scene's depth copy, taken
+  mid-pass on the screen only. Inside a target it read the screen's stale copy at the
+  wrong size: wrong foam, and no error. A draw that needs such a copy drops a tier in a
+  target, as water does (the CPU path's per-vertex water). It also leaves the GPU path,
+  whose water is per pixel only. Check a new pass-reading effect with a draw inside a
+  target on both T&L paths.
 - **4× MSAA on the PC is opt-in and lazy** (`PcRenderer::set_msaa`, the native profile
   only; `trino-runner-pc` turns it on, `TRINO_MSAA=0` off). Its pipelines are built on
   the first `set_msaa(true)`: building them in every `PcRenderer::new` made parallel

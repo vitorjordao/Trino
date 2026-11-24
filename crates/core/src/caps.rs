@@ -228,6 +228,13 @@ pub struct Caps {
     /// linear memory) and the PC's console profiles, which sample level 0
     /// so they draw what the consoles draw.
     pub mipmaps: bool,
+    /// Most pixels one [`crate::RenderTarget`] has (Bongo-Kart #184,
+    /// [`crate::target`]); 0 = the target draws into no texture. 1024 ×
+    /// 1024 on the PC and the Web; 0 on the consoles for now and on the
+    /// PC's console profiles, which draw what the consoles draw.
+    pub max_target_texels: u32,
+    /// Most targets one frame draws (each is a render pass of its own).
+    pub max_targets: u8,
 }
 
 /// How a texture's texels sit in texture memory: the N64 formats the
@@ -358,6 +365,8 @@ impl Caps {
         capsule_bodies: false,
         max_dynamic_vertices: 0,
         mipmaps: false,
+        max_target_texels: 0,
+        max_targets: 0,
     };
 
     /// An N64 with the Expansion Pak: [`Caps::N64`] with 8 MiB of RDRAM.
@@ -418,6 +427,8 @@ impl Caps {
         capsule_bodies: false,
         max_dynamic_vertices: 0,
         mipmaps: false,
+        max_target_texels: 0,
+        max_targets: 0,
     };
 
     /// A New Nintendo 3DS (or New 2DS XL) with the speedup on: 804 MHz, the
@@ -477,6 +488,8 @@ impl Caps {
         capsule_bodies: false,
         max_dynamic_vertices: 65_536,
         mipmaps: true,
+        max_target_texels: 1 << 20,
+        max_targets: 4,
     };
 
     /// A web browser (WebGPU, or WebGL2 where there is none; issue #47):
@@ -526,6 +539,8 @@ impl Caps {
         capsule_bodies: false,
         max_dynamic_vertices: 65_536,
         mipmaps: true,
+        max_target_texels: 1 << 20,
+        max_targets: 4,
     };
 
     /// The same console's table for `tier`: [`Caps::N64`] ↔
